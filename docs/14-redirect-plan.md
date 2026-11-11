@@ -754,7 +754,8 @@ not need it. The demo gate (task 5) depends on both.
 
 ### 6.1 Where this stands (2026-11-11)
 
-Steps 1–5 are **done**. Steps 6–7 are **the critical path**.
+Steps 1–7 are **done**. The replay has run on 1m and the pre-registered
+decision rule has been applied.
 
 | Step | State |
 |---|---|
@@ -762,14 +763,36 @@ Steps 1–5 are **done**. Steps 6–7 are **the critical path**.
 | 3 — cohort export | done: `cohort/v1/`, 1,972 rows, SHA-256 pinned in the manifest |
 | 4 — replay | done: `src/rade/replay/`, 69 tests, AC-1..AC-20 satisfied |
 | 5 — reconciliation | done: `docs/evidence/legacy-reconciliation.md`; three defects found and fixed |
-| **6 — 1m fetch** | **not started — the decisive step** |
-| 7 — 1m replay | pending step 6 |
+| 6 — 1m fetch | **done**: 564,213 bars, 42/42 chunks, 11 holes under 55 min in 19 months |
+| 7 — 1m replay | **done**: train → val → holdout, all four arms |
 | 8 — observer | not started; task 1 is read-only and unblocked |
-| 10 — demo gate | **BLOCKED** pending explicit authorisation of the stop-modification probe |
+| 10 — demo gate | **BLOCKED — and now not recommended to open at all** (§6.2) |
 
-**The 30m replay is a sensitivity, not the answer.** Its pessimistic and
-optimistic bounds are 0.43 R apart on the same data
-(`docs/15-replay-results.md` §1). The 1m fetch is what collapses that.
+### 6.2 Outcome of the 1m replay
+
+`docs/16-replay-results-1m.md` is the authoritative result. Three findings:
+
+1. **The 30m conclusion is retracted.** The runner's +0.024 R edge at 30m
+   becomes −0.003 R at 1m, with CIs including zero on every split. It was an
+   artefact of bar width: 31% of setups were stopped out on their fill bar at
+   30m, versus 4.3% at 1m.
+2. **The exit policy is not the binding constraint.** Four policies differ by
+   0.0085 R per setup on the whole cohort — less than the entry spread
+   (0.0306 R) and less than the split-to-split noise (±0.05 R).
+3. **Every arm is negative on validation** (A −0.0739, B −0.0721, C −0.0624,
+   CB −0.0598). Policy B does not beat A; arm C beats A but not B, so the
+   pre-registered rule adopts neither.
+
+Per §4.5 step 2 — *"If the baseline does not hold on validation, report the
+negative and stop"* — **the decision is to report the negative and stop.**
+
+**No policy is approved, so the demo gate (task 5) does not open.** The demo
+stop-modification order remains BLOCKED, and there is now no approved policy to
+place it for.
+
+What remains open is **selection**, not exit: whether any pre-specified rule
+identifies a subset of these setups with positive expectancy. That is a
+different study on the same frozen cohort and the same 1m data.
 
 ---
 
@@ -797,11 +820,16 @@ optimistic bounds are 0.43 R apart on the same data
    mitigation is that the A→B conclusion is identical on train, validation and
    the holdout, and under both ambiguity bounds
    (`docs/15-replay-results.md` §6).
-5. **What the 30m data does and does not establish.** It does *not* establish
-   that this trader's setups are unprofitable — the pessimistic and optimistic
-   bounds are 0.43 R apart. It also does not establish that they are
-   profitable. It establishes that **the exit policy is not the binding
-   constraint**: the runner's effect (+0.02 R on the full cohort) is an order
-   of magnitude smaller than the ambiguity band. The open question is
-   whether the *entries* carry an edge, and that question is unanswerable at
-   30-minute resolution.
+5. **What the data now establishes.** With 1m bars the ambiguity band is 0.05 R
+   (down from 0.43 R at 30m), so the measurement is resolvable. It establishes
+   that **copying the published setups mechanically does not pay for its
+   costs** on the validation period, under any of four exit policies, and that
+   **the exit policy is not the binding constraint**. It does **not** establish
+   that the trader is unprofitable — the replay cannot see his discretionary
+   filtering, his actual fills, or the setups he never posted. The open
+   question is **selection**: whether any pre-specified rule identifies a
+   subset of these setups with positive expectancy. That is a different study
+   on the same frozen cohort and the same 1m data.
+6. **The demo gate should not open.** With no approved policy there is nothing
+   to demo. The stop-modification probe remains blocked for that reason, not
+   only for want of authorisation.

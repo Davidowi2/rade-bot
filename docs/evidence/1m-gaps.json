@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-11-11T19:19:56.550693+00:00",
+  "closure_threshold_min": 55.0,
+  "verification": {
+    "n": 564213,
+    "first": "2025-04-01 00:00:00+00:00",
+    "last": "2026-11-03 00:00:00+00:00",
+    "step_min": 1.0,
+    "expected_bars_if_continuous": 836640,
+    "intraday_gaps": 11,
+    "intraday_gaps_le_1m": 563788,
+    "holes_under_55min": 11,
+    "largest_hole_min": 26.0,
+    "hole_start_minutes_top": [
+      [
+        "12:47",
+        1
+      ],
+      [
+        "12:36",
+        1
+      ],
+      [
+        "18:45",
+        1
+      ],
+      [
+        "12:49",
+        1
+      ],
+      [
+        "16:22",
+        1
+      ],
+      [
+        "01:03",
+        1
+      ],
+      [
+        "23:20",
+        1
+      ],
+      [
+        "13:58",
+        1
+      ]
+    ],
+    "closures_55min_to_2h": 320,
+    "closures_over_2h": 93,
+    "largest_closure_h": 73.05
+  }
+}

@@ -1,7 +1,23 @@
 # Paired exit-policy replay — 30-minute results
 
-**Status:** complete for 30m. The 1-minute run is the next step and is the
-decisive one.
+> ## ⚠️ SUPERSEDED BY THE 1-MINUTE RESULT
+>
+> **Read [`docs/16-replay-results-1m.md`](16-replay-results-1m.md) instead.**
+>
+> This document is kept as the **sensitivity analysis** the plan requires
+> (AC-14), not as the result. The 1m replay, run on 564,213 fetched bars,
+> **reverses its central conclusion**: the A→B advantage reported here
+> (+0.0239 R, CIs excluding zero on all three splits) becomes −0.0032 R with
+> CIs including zero at 1m.
+>
+> The reason is stated correctly in §1 below and is worth keeping: at 30m the
+> pessimistic and optimistic bounds are 0.43 R apart, so 30m cannot resolve
+> this strategy's expectancy at all. At 1m that band shrinks to 0.05 R.
+>
+> **Do not quote any number from this document as a result.** Quote it only as
+> evidence for why 30-minute bars are the wrong instrument.
+
+**Status:** complete for 30m — superseded, retained as sensitivity.
 **Date:** 2026-11-11
 **Spec:** `docs/14-redirect-plan.md` §3–§4
 **Reconciliation:** `docs/evidence/legacy-reconciliation.md`

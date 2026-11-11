@@ -11,16 +11,20 @@ and trades like them — slowly, directionally, over days — not scalping.
 > `data/entry_quality_summary.md`, `data/s0_verification_note.md`).
 >
 > **Work in progress on `feature/paired-exit-replay`.** A paired exit-policy
-> replay has been built and reconciled against the archived S0 baseline:
+> replay has been built, reconciled against the archived S0 baseline, and run
+> on 1-minute data:
 >
-> - [`docs/15-replay-results.md`](docs/15-replay-results.md) — the 30m results
+> - [`docs/16-replay-results-1m.md`](docs/16-replay-results-1m.md) — **the authoritative result**
+> - [`docs/15-replay-results.md`](docs/15-replay-results.md) — the 30m sensitivity (superseded)
 > - [`docs/evidence/legacy-reconciliation.md`](docs/evidence/legacy-reconciliation.md) — why the archived baseline and the replay disagreed, and how it was settled
 > - [`docs/14-redirect-plan.md`](docs/14-redirect-plan.md) — the frozen spec
 >
-> The headline: at **30-minute** resolution the pessimistic and optimistic
-> bounds sit **0.43 R per setup apart** on the same data, so 30m cannot
-> resolve this strategy's expectancy at all. The **1-minute** fetch is the
-> decisive next step.
+> **The headline:** on 564,213 fetched 1-minute bars, all four exit policies
+> are **negative on the validation split** (−0.060 to −0.074 R per setup), and
+> they differ from each other by only 0.0085 R — less than the entry spread.
+> The runner's apparent edge at 30 minutes reverses sign at 1 minute, so the
+> 30m result is retracted. **The exit policy is not the binding constraint**;
+> the open question is whether *selection* carries an edge.
 >
 > The project is moving toward a separate observer/recovery service. This repo
 > is preserved as the research archive — see
@@ -50,17 +54,21 @@ python -m pytest tests/ -q -o pythonpath=src
 
 ## Run (paired exit replay)
 ```bash
+# fetch the 1m series (~7 min, 42 read-only requests) and verify it
+python scripts/fetch_1m_bars.py --start 2025-04-01 --end 2026-11-03
+python scripts/verify_1m_gaps.py
+
 # the reconciliation against the archived S0 baseline
 python scripts/diagnose_legacy_divergence.py
 
 # the replay, per split
-python scripts/run_paired_replay.py --resolution 30m --split train --out data/replay_30m_train.json
-python scripts/run_paired_replay.py --resolution 30m --split val   --out data/replay_30m_val.json
-python scripts/run_paired_replay.py --resolution 30m --split test  --out data/replay_30m_test.json
+python scripts/run_paired_replay.py --resolution 1m --split train --out data/replay_1m_train.json
+python scripts/run_paired_replay.py --resolution 1m --split val   --out data/replay_1m_val.json
+python scripts/run_paired_replay.py --resolution 1m --split test  --out data/replay_1m_test.json
 
-# the optimistic bound (AC-7) and the legacy-matched configuration
-python scripts/run_paired_replay.py --resolution 30m --split all --optimistic
-python scripts/run_paired_replay.py --resolution 30m --split all --policies A --no-breakeven --pre-ladder-cap 15
+# the optimistic bound (AC-7), and the 30m sensitivity
+python scripts/run_paired_replay.py --resolution 1m --split val --policies A --optimistic
+python scripts/run_paired_replay.py --resolution 30m --split all --policies A,B
 ```
 
 ## Quick links (docs)
