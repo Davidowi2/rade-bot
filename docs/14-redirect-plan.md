@@ -1,12 +1,11 @@
 # 14 — Redirect plan: exit-policy freeze + observer/recovery foundation
 
-Status: **draft for lead approval.** Nothing here is built yet.
-
+Status: **lead decisions incorporated. Ready to build on approval.**
 Date: 2026-11-11
-Supersedes: nothing. Extends `docs/12-phase2-design.md` (which was written for
-the original in-process architecture) and answers the narrow planning question
-raised at handoff: *the exact Policy B trailing rule, and whether TP2 moves the
-stop to TP1*.
+
+Answers the narrow planning question raised at handoff: *the exact Policy B
+trailing rule, and whether TP2 moves the stop to TP1*. Both are now settled
+(§2.2, §2.3). Extends `docs/12-phase2-design.md`.
 
 ---
 
@@ -20,17 +19,12 @@ Frozen as the **Phase 2 research archive**:
 | Git branch | `preserve/phase2-frozen` → same commit |
 | Artifact archive | `archive/2026-11-11-rade-phase2-frozen/` (gitignored — contains a live Telegram session) |
 
-`main` now carries only the freeze metadata (README status + `.gitignore`).
-The research asset — the frozen labelled cohort and the purged splits — is the
-thing worth keeping, and it is preserved in both the archive folder and git.
-
-New work happens on branches off the freeze tag, never on `main`.
+`main` carries only the freeze metadata (README status + `.gitignore`). New
+work happens on branches off the freeze tag, never on `main`.
 
 ---
 
-## 1. Repo topology
-
-The redirect splits the work into two repos with one explicit contract.
+## 1. Repo topology — **decided: new sibling repo**
 
 ```
 rade-bot/            (this repo, frozen)
@@ -51,7 +45,7 @@ cohort/v1/labeled_setups.csv   +  cohort/v1/MANIFEST.json
 
 `MANIFEST.json` carries the cohort definition, the split ids, the SHA256 of
 every file, the assumption set, and the git commit it was produced from. The
-observer repo pins a cohort version; it never regenerates the cohort. If the
+observer pins a cohort version; it never regenerates the cohort. If the
 research repo re-derives a cohort, that is a new `v2` with a new manifest, and
 the observer's pinned version is deliberately left alone.
 
@@ -63,7 +57,7 @@ keeps the coupling auditable without the coupling.
 
 ---
 
-## 2. The narrow decision: exit policies
+## 2. The exit-policy decision
 
 ### 2.1 Two policies, one variable
 
@@ -80,35 +74,42 @@ exhausted.
 | Stop after TP2 | **no change** | **no change** |
 | Final TP leg (FTL) | close the **entire remaining** position | close **half** the remaining, trail the other half |
 
-### 2.2 Decision: Policy B trailing rule — **1R**
+### 2.2 Decision: Policy B trailing rule — **1R behind the favourable peak**
 
-**Definition.** For a setup with initial risk `R = |entry − SL|`:
+**Definition.** For a setup with initial risk `R = |entry − published stop|`:
 
 ```
-peak        = best price reached in the trade's favour since fill
-stop_buy    = max(BE_cost_adj, peak − 1R)      # evaluated on every 30m bar close
-stop_sell   = min(BE_cost_adj, peak + 1R)
-BE_cost_adj = entry ± (spread + slippage)      # entry + 0.50 for buys
+peak          = best favourable price reached since fill
+               long  -> highest price traded (bar high)
+               short -> lowest price traded  (bar low)
+
+trail_stop    = peak − 1R   (long)      peak + 1R   (short)
+
+effective_stop = max( ratcheted_stop, trail_stop )      (long)
+                 min( ratcheted_stop, trail_stop )      (short)
 ```
 
-The trailing stop is only **activated** once the final TP level has been
-touched (the runner exists from that moment).
+The trailing stop is **activated** when the final TP level is touched — the
+runner exists from that moment. Before then the stop sits at cost-adjusted
+breakeven.
 
-Properties:
+Properties, each of which matters:
 
-- **Monotone.** The stop never moves backwards. `peak` only advances, so the
-  stop only advances.
-- **Bounded by breakeven.** The `max()`/`min()` floor means the runner can
-  never lose money, no matter where `peak` is.
-- **Cost-adjusted floor, not raw entry.** Breakeven at `entry + 0.50` is
-  *actually* breakeven after the observed $0.25 spread and $0.25 slippage.
-  A raw-entry stop would quietly bleed ~$0.50/unit.
-- **No lookahead.** `peak` comes from the high/low of the bar being evaluated.
-  The stop is checked against the *same* bar's range using the stop value in
-  force at the *start* of that bar. No future bar is read.
-- **Zero free parameters** beyond the single multiplier `1.0`.
+- **The stop may tighten, but never move backward.** The ratchet is explicit:
+  a newly computed trail stop replaces the old one *only* if it is tighter.
+- **Best favourable price, not a mid.** For a long the peak is the highest
+  price actually traded; for a short the lowest. The trail is measured against
+  what was achievable, not a theoretical price.
+- **Cost-adjusted breakeven floor.** `BE = entry ± (spread + slippage)` =
+  `entry ± 0.50`. A raw-entry stop would quietly bleed ~$0.50/unit after
+  costs. The floor is what makes the runner incapable of turning a trade into
+  a loss.
+- **Zero free parameters** beyond the multiplier `1.0`.
+- **Ambiguity is marked, never assumed favourable.** When a stop and a target
+  are touched inside the same bar, the stop wins (pessimistic). This is the
+  repo's existing convention and it is preserved at every resolution.
 
-**Why 1R and not ATR.** Measured on this repo's own data:
+**1R, not ATR.** Measured on this repo's own data:
 
 | Quantity | Value |
 |---|---|
@@ -118,18 +119,17 @@ Properties:
 | Trader's own risk distance (entry→SL, median) | **$9.00** |
 | Trader's risk ÷ ATR1H | **0.575** |
 
-The trader's own stop distance is 0.575 × ATR1H. A trail of `0.575 × ATR1H`
-(≈ $9.00) and a trail of `1R` (≈ $9.00, by construction) are the *same number*.
+The trader's own stop distance is 0.575 × ATR1H. A trail of `1R` is *the same
+number as* `0.575 × ATR1H` — it is his own geometry, expressed back to him.
 Expressing it as 1R is better because it needs no timeframe choice, no ATR
-plumbing, no feed-dependent constant, and it is automatically correct for
-outliers (this cohort's mean risk is $44.48 because of a few absurd stops —
-median $9 is the honest statistic, and R-normalisation handles both).
+plumbing and no feed-dependent constant, and because it stays correct for
+outliers (this cohort's *mean* risk is $44.48 because of a few absurd stops —
+the median $9 is the honest statistic, and R-normalisation handles both).
 
-**Sensitivity arms, selected on train only.** `1R` is the primary
-pre-registered rule. Alongside it we run, on the train split only:
-`0.5R`, `1.5R`, `0.5 × ATR1H`, `1.0 × ATR1H`. The winner of that sweep is
-confirmed on val, then test is touched once. The winner is reported; it does
-not silently replace the primary.
+**1R is a baseline, not a claim of optimality.** It is pre-registered as the
+primary rule. A variant comparison (0.5R / 1R / 1.5R) may be run, but
+**selection happens on the validation split**, never on train — see §3.2. The
+holdout is then touched once for the final evaluation.
 
 ### 2.3 Decision: does TP2 move the stop to TP1? — **No**
 
@@ -141,12 +141,13 @@ Reasons:
    the tail; applied to one arm it stops being a single-variable A/B.
 2. **Breakeven already covers the intent.** The stated purpose of a TP2 stop
    move is capital protection. TP1 → cost-adjusted breakeven already does
-   that, and does it better (TP1 is often closer than TP2, but the BE floor
-   is the number that actually matters — the trade stops risking capital
-   after the first leg).
+   that, and does it better — breakeven is the number that actually matters,
+   because TP1 is often closer than TP2 and the trade should stop risking
+   capital after the first leg.
 3. **It stays testable.** It becomes a **third arm (C)**: both policies with
-   TP2 → stop-at-TP1. Run on train. Promote to the live rule only if arm C
-   beats both A and B on train *and* val. No change to the A/B comparison.
+   TP2 → stop-at-TP1. If it is ever adopted it must beat both A and B on
+   **validation**, with the holdout reserved for one final evaluation. No
+   change to the A/B comparison.
 
 So the frozen stop ladder, **identical for both policies**:
 
@@ -154,13 +155,13 @@ So the frozen stop ladder, **identical for both policies**:
 on TP1 fill  ->  stop := cost-adjusted breakeven
 on TP2 fill  ->  stop := unchanged (still breakeven)
 on FTL fill  ->  ARM A: close everything
-                ARM B: close half the remaining, trail the rest from here
+                ARM B: close half the remaining, trail the other half from here
 ```
 
 ### 2.4 Three gaps in the original handoff framing
 
-These were found while grounding the decision in the data. Each has a
-resolution that is folded into the frozen spec below.
+Found while grounding the decision in the data. Each has a resolution folded
+into the frozen spec.
 
 **Gap 1 — "TP3" is undefined for 38.6% of the cohort.**
 
@@ -170,14 +171,14 @@ The ladder length varies. Of the 1,855 cohort setups with ≥2 TPs:
 |---|---|---|---|---|---|---|---|
 | setups | 83 | 678 | **1,032** | 148 | 24 | 1 | 6 |
 
-Only 1,032 have exactly three. "Close at TP3" is simply not defined for the
-678 two-TP setups (and the 83 one-TP setups).
+Only 1,032 have exactly three. "Close at TP3" is not defined for the 678
+two-TP setups (or the 83 one-TP setups).
 
 **Resolution — generalise to FTL (final TP in the ladder).** FTL reduces to
 "TP3" for the modal case and is defined for every setup with ≥2 TPs. The
 policy statement becomes *"when the ladder is exhausted, close everything vs.
-keep a runner"*, which is what the question actually means. The TP3-restricted
-subset is reported as a sensitivity.
+keep a runner"*, which is what the question actually means. The
+TP3-restricted subset is reported as a sensitivity.
 
 **Related landmine.** `setup_extractor.py` preserves raw message order for TPs,
 and `backtest/engine.py` consumes `take_profits` **verbatim** — while
@@ -191,9 +192,9 @@ engine than in the label. **The replay must normalise the ladder itself**
 **Gap 2 — sizing is not currently paired.**
 
 `engine.py` sizes each setup off *current* equity (`risk_pct × equity / risk_price`),
-and equity changes as the backtest runs. Arms A and B therefore take **different
-position sizes on later setups**, which would contaminate the comparison with a
-sizing effect.
+and equity changes as the backtest runs. Arms A and B would therefore take
+**different position sizes on later setups**, contaminating the comparison
+with a sizing effect.
 
 **Resolution — freeze sizing.** Every setup in both arms is sized off a
 **constant reference equity** (the initial $100,000), at 0.5% risk. Both arms
@@ -205,26 +206,67 @@ the results is the exit.
 A ends when the ladder ends. B keeps running. Comparing an unbounded arm to a
 bounded one is not a fair comparison.
 
-**Resolution — bound the runner.** The runner is closed at the earliest of:
-the trailing stop, **48h from fill**, or the end of available data. 48h is
+**Resolution — bound the runner.** The runner closes at the earliest of: the
+trailing stop, **48h from fill**, or the end of available data. 48h is
 generous (max observed hold in this cohort is 9.5h; p99 is 4.5h) and it
 truncates only **2 test-split setups** against the 2026-11-03 data end. The
 pre-ladder phase gets a **24h hard cap** — provably non-binding (max observed
-9.5h, only 6 setups reached even the old 15h cap). Unlike the old 15h cap,
+9.5h; only 6 setups reached even the old 15h cap). Unlike the old 15h cap,
 the 24h cap is not presented as this trader's real hold limit; it is a
 simulation guard chosen because it demonstrably does not bind.
 
-**Window-end handling.** Any position still open when the data ends is closed
-at the final bar's close with `exit_reason = window_end`, and the count is
+**Window-end handling.** Any position still open when data ends is closed at
+the final bar's close with `exit_reason = window_end`, and the count is
 reported per arm. It is never silently dropped.
 
 ---
 
-## 3. The frozen replay protocol
+## 3. Data resolution — 1-minute primary, 30-minute as sensitivity
 
-Written down **before** running, so the test set can be touched once.
+The replay must resolve stop/target ordering at the finest available
+granularity, and ambiguity must be **marked**, never resolved favourably.
+TradeLocker has been probed live today (demo account, read-only):
 
-### 3.1 Cohort
+| Probe | Result |
+|---|---|
+| 1m resolution available | **Yes** — 1,379 rows for a 24h window (23h trading + 1h break) |
+| 1m bar step | 1 minute, no gaps within the probed windows |
+| Request speed | ~2.5–5s per request |
+| Row cap | **Enforced at 30,000** — a 30-day 1m request raises `ValueError: No. of requested rows (44640) larger than max allowed (30000)` |
+| 14-day chunk | Works — 13,772 rows, ~4.4s |
+| Instrument | XAUUSD id `1808`, server PLEXY, demo `https://demo.tradelocker.com` |
+
+**Fetch plan.** 2025-04-01 → 2026-11-03 in **14-day chunks** (≈42 requests,
+≈4 minutes, max ~13.8k rows per request). Chunk windows do not align exactly
+to the API's returned span, so chunks are **upserted on `ts`** and the merged
+series is **verified for gaps > 1 minute** before use. Any setup whose
+evaluation window contains an unresolved gap is excluded and counted.
+
+**What changes on 1m, and what does not.**
+
+- **Cohort membership does not change.** Inclusion (parsed, valid, non-recap,
+  filled) is a property of the message and the market, not of bar resolution.
+  The cohort stays the one frozen in `cohort/v1`.
+- **Fills and exits are re-derived on 1m inside the replay.** The fill anchor
+  becomes precise, and the 17.3% intra-bar ambiguity measured on 30m should
+  fall sharply. The fall is itself a reported number — it quantifies how much
+  of the archived S0 ambiguity was a 30m artefact.
+- **30m stays as a reported sensitivity**, so the replay remains comparable
+  with the archived S0 numbers in `data/s0_report.csv`. If 1m and 30m agree
+  materially, the archived results stand; if they disagree, the 1m result is
+  the one that counts and the discrepancy gets reported.
+
+**Feature rows are not recomputed.** Features are D1/1H-context features at
+post time; resolution does not change them, and the archived `features.csv`
+stays valid for the cohort.
+
+---
+
+## 4. The frozen replay protocol
+
+Written down **before** running, so the holdout can be touched once.
+
+### 4.1 Cohort
 
 ```
 2,382  labelled setups (all)
@@ -241,42 +283,56 @@ Written down **before** running, so the test set can be touched once.
 **The paired statistic lives on the FTL-reaching subset** (train 631, val 296,
 test 308) — those are the only setups where the two arms can differ.
 
-### 3.2 Splits — reuse, do not rebuild
+### 4.2 Splits — reuse, do not rebuild; and the selection rule
 
 The existing purged split is reused verbatim (`data/split_{train,val,test}_ids.json`):
 
-| Split | ids | filled & non-recap | date range |
-|---|---|---|---|
-| train | 1,198 | 1,173 | 2025-04-09 → 2026-05-05 |
-| val | 388 | 383 | 2026-05-07 → 2026-08-21 |
-| test | 404 | 387 | 2026-08-25 → 2026-11-02 |
+| Split | ids | filled & non-recap | date range | role |
+|---|---|---|---|---|
+| train | 1,198 | 1,173 | 2025-04-09 → 2026-05-05 | **development** |
+| val | 388 | 383 | 2026-05-07 → 2026-08-21 | **selection** |
+| test | 404 | 387 | 2026-08-25 → 2026-11-02 | **holdout — one final evaluation** |
 
 The 39h purge (24h fill window + 15h hold) is already baked in. Gaps between
 splits: 2 days train→val, 4 days val→test — both exceed the purge.
 
-- **train** = selection (policy parameters, trail multiplier sweep)
-- **val** = confirmation
-- **test** = holdout, touched **once**, after both A and B are frozen
+**The selection rule, stated precisely** (this is the correction to the
+original draft, which proposed sweeping on train):
 
-### 3.3 Frozen common assumptions
+- **Train is for development only.** Build, debug, sanity-check, and fix
+  mechanical bugs on train. Nothing is *chosen* on train, because choosing on
+  train is selecting in-sample.
+- **Validation is where selection happens.** The 1R baseline is the
+  pre-registered primary. If the 0.5R / 1R / 1.5R comparison is run, the
+  winner is selected on **validation**. Arm C (TP2 → TP1) is likewise adopted
+  only if it beats both A and B on **validation**.
+- **The holdout is reserved for one final evaluation** of whatever was frozen
+  after validation. It is touched once, after the policy is frozen, and
+  nothing is tuned afterwards.
+
+### 4.3 Frozen common assumptions
 
 | Item | Value | Note |
 |---|---|---|
+| Bar resolution | **1 minute** primary; 30m as reported sensitivity | §3 |
 | Entry | limit touch at the stated price | unchanged from S0 |
 | Fill window | 24h from `posted_at` | unchanged from S0 |
-| TP ladder | normalised: drop wrong-side, sort nearest-first | **new** — see Gap 1 |
-| Sizing | 0.5% of **constant** $100,000 reference equity | **new** — see Gap 2 |
+| TP ladder | normalised: drop wrong-side, sort nearest-first | **new** — Gap 1 |
+| Sizing | 0.5% of **constant** $100,000 reference equity | **new** — Gap 2 |
 | Spread | $0.25 charged on entry | observed |
 | Slippage | $0.25 on market exits (SL, timeout, forced) | observed base case |
 | Limit exits (TP fills) | free | existing `CostModel` |
 | Commission | none | absent from the whole repo |
-| Ambiguity (stop and target in same bar) | **pessimistic — stop wins** | repo convention, optimistic bound also reported |
+| Ambiguity (stop and target in the same bar) | **stop wins — marked, never favourable** | repo convention, at every resolution |
+| Stop after TP1 | → cost-adjusted breakeven (`entry ± 0.50`) | identical in both arms |
+| Stop after TP2 | no change | identical in both arms |
+| Trail rule | 1R behind favourable peak, ratcheted, never backward | §2.2 |
+| Runner size at FTL | half the remaining tranche trails; half closes | §2.1 |
 | Max hold, pre-ladder | 24h hard cap | provably non-binding |
 | Max hold, runner | 48h hard cap | only 2 test setups affected |
-| Runner size at FTL | half the remaining tranche trails | |
 | Seed | 42, deterministic | |
 
-### 3.4 Metrics — per setup, not per leg
+### 4.4 Metrics — per setup, not per leg
 
 The current `metrics.py` reports **per-leg** figures, and the S0 verification
 note already flagged that "56 trades" was really ~14 setups × ~4 legs. All
@@ -287,30 +343,40 @@ paired reporting is **per setup**:
 - max drawdown on the per-setup equity curve
 - average/median hold time, per arm
 - exit-reason mix (`tp1`, `tp2`, `ftl`, `trail_stop`, `sl`, `time_cap`, `window_end`)
-- ambiguous-bar counts and the optimistic-bound delta
+- ambiguous-bar counts, and the optimistic-bound delta
 - **paired difference** (A vs B) on the FTL-reaching subset, with CI
 
-### 3.5 Decision rule (pre-registered)
+For context on the noise floor: per-setup R on the archived label set has
+sd ≈ 0.85–1.00 and SE of the mean ≈ 0.03 (train) to 0.04 (val/test). A
+*paired* design has far lower variance than that, because the arms are
+identical on most setups.
 
-1. Train: sweep the trail multiplier. Select the best. Confirm arm C (TP2 →
-   TP1) only if it beats both A and B.
-2. Val: confirm the selected configuration. If it does not hold on val, the
-   policy is **not** promoted — report the negative and stop.
-3. Test: touched **once** to report the final paired numbers. No tuning after.
-4. If B wins on the retrospective cohort, that cohort is now **selection
+### 4.5 Decision rule (pre-registered)
+
+1. **Train**: build and debug. No selection.
+2. **Validation**: confirm the pre-registered 1R baseline. If the variant
+   comparison is run, select on validation. Adopt arm C only if it beats both
+   A and B on validation. If the baseline does not hold on validation, report
+   the negative and stop.
+3. **Freeze** the policy.
+4. **Holdout**: touched **once** to report the final paired numbers. No tuning
+   after.
+5. If B wins on the retrospective cohort, that cohort is now **selection
    data** — it must be confirmed by a prospective demo period before any live
    mirroring. This mirrors the constraint already recorded in ADR-0003.
-5. Any result is publishable, including "no difference" and "B is worse".
-   A negative result stops the project before money is spent, which is the
+6. Any result is publishable, including "no difference" and "B is worse". A
+   negative result stops the project before money is spent, which is the
    stated purpose of Phase 2.
 
 ---
 
-## 4. The observer/recovery foundation (new repo)
+## 5. The observer/recovery foundation (new repo)
 
-Tasks 1–3 of the handoff, scoped.
+Tasks 1–3 of the handoff, scoped. **Full deployment on the free tier** — the
+complete stack and runbook, with the reliability caveats stated honestly
+rather than engineered around.
 
-### 4.1 Task 1 — feasibility probe (no live orders)
+### 5.1 Task 1 — feasibility probe (no live orders)
 
 | Probe | Method | Pass criterion |
 |---|---|---|
@@ -321,6 +387,7 @@ Tasks 1–3 of the handoff, scoped.
 | TradeLocker positions | read-only position list | 200, matches broker UI |
 | TradeLocker fills / realised P&L | read-only fills endpoint | reconciles to account history CSV |
 | **TradeLocker stop modification** | **one demo order**, size 0.01, modify SL, verify, close | SL visible in the position fetch, change confirmed by the broker |
+| **1m history at scale** | chunked fetch, 14-day windows | no gaps > 1m in the merged series |
 | Render → Supabase | write + read from the hosted service | round trip, latency measured |
 
 **Boundary.** The stop-modification probe is the only step that places an
@@ -332,10 +399,10 @@ Note the local prototype already exists: `scripts/shadow_collect.py` and
 `scripts/shadow_process.py` implement most of the Telegram half, and
 `docs/06-shadow-study-spec.md` is a **frozen research spec** for exactly this
 observation. The hosted service is that spec, made durable. The spec's rules
-carry over unchanged — including the rule that limits touch *more than 50
-positions back* will not be detected, which the runbook must state.
+carry over unchanged — including the rule that edits to messages more than 50
+positions back will not be detected, which the runbook must state.
 
-### 4.2 Task 2 — Supabase schema + RLS
+### 5.2 Task 2 — Supabase schema + RLS
 
 Tables (all `timestamptz`, UTC):
 
@@ -353,8 +420,8 @@ Tables (all `timestamptz`, UTC):
 
 **RLS plan.**
 
-- Service role (Render) is the only writer. It holds the service key; the key
-  never leaves Render's environment.
+- The service role (Render) is the only writer. It holds the service key; the
+  key never leaves Render's environment.
 - Vercel holds **no** Supabase secret in v1. If the dashboard needs data, it
   reads through a Render-side read-only endpoint, or Supabase is given a
   separate read-only role scoped to specific views.
@@ -364,7 +431,7 @@ Tables (all `timestamptz`, UTC):
   retried rather than dropped, and the bot never posts into a group without an
   explicit human action.
 
-### 4.3 Task 3 — observer-only implementation
+### 5.3 Task 3 — observer-only implementation
 
 - Write the raw event to Supabase **first**, parse **second**. If parsing
   crashes, the message is still in the table and can be re-parsed later.
@@ -376,16 +443,16 @@ Tables (all `timestamptz`, UTC):
 - Measure `posted_at → received_at` and store it on the message row. Latency
   is a first-class metric, not a log line.
 - **Health endpoint** (`/health`) checks three things and returns 503 if any
-  fails: listener freshness (`last_message_id` advancing, or recent poll
+  fails: listener freshness (`last_message_id` advancing, or a recent poll
   heartbeat), broker reachability, and a real DB round trip. A bare HTTP 200
   is not a health check.
 - BotFather notifications for: listener staleness, broker errors, DB errors,
   and a daily summary. Separate bot from the source-channel listener.
 
-### 4.4 Reliability honesty
+### 5.4 Reliability honesty — free tier, stated plainly
 
-Free tiers can support a demo trial with recovery safeguards. They cannot
-promise uninterrupted operation. Specifically:
+Full deployment on free tiers. The runbook must say exactly what is and is
+not guaranteed:
 
 - Render free services idle after 15 minutes of inactivity. UptimeRobot
   pinging `/health` every 5 minutes prevents idling but **not** restarts.
@@ -393,47 +460,40 @@ promise uninterrupted operation. Specifically:
   filesystem — no durable local state, so **all state must live in Supabase**.
 - Supabase Free pauses after a week of low activity and has **no** automated
   backups.
-- The runbook must therefore include: daily export, and an explicit statement
-  of what is guaranteed and what is best-effort.
+- The runbook must therefore include daily export, and an explicit statement
+  of what is best-effort.
 
-If the reliability target is real, the answer is a paid Render worker and a
-Supabase plan that does not pause. That decision is a budget question, not a
-technical one, and it should be made before the demo period, not during it.
+A paid Render worker plus a non-pausing Supabase plan removes these caveats,
+but that is a budget decision to revisit after the demo trial, not a
+prerequisite for it.
 
 ---
 
-## 5. Sequencing
+## 6. Sequencing
 
 ```
  1. APPROVE THIS PLAN
- 2. Freeze the replay spec (this doc) -> commit -> implement on
-    branch feature/paired-exit-replay off rade-phase2-frozen
- 3. In parallel: create rade-observer, do task 1 (feasibility probe)
- 4. Task 2 (schema + RLS) -> task 3 (observer implementation)
- 5. Paired replay reports train -> val -> test (once)
- 6. Policy frozen; demo gate (task 5) only after TradeLocker stop
-    modification is proven and the policy is approved
- 7. Prospective demo period confirms the chosen policy
+ 2. Fetch 1m bars for the cohort period (14-day chunks, gap-verified)
+ 3. Implement the paired replay on branch feature/paired-exit-replay
+    off rade-phase2-frozen
+ 4. In parallel: create rade-observer, run task 1 (feasibility probe)
+ 5. Task 2 (schema + RLS) -> task 3 (observer implementation)
+ 6. Replay reports train -> val (selection) -> freeze -> test (once)
+ 7. Demo gate (task 5) only after TradeLocker stop modification is proven
+    and the policy is approved
+ 8. Prospective demo period confirms the chosen policy
 ```
 
-Tasks 2 and 3 in the handoff's numbering are the schema and the observer
-implementation; the paired replay (task 4) is independent of the observer and
-does not need it. The demo gate (task 5) depends on both.
+The paired replay (handoff task 4) is independent of the observer and does
+not need it. The demo gate (task 5) depends on both.
 
 ---
 
-## 6. Open items for the lead
+## 7. Remaining open item
 
-1. **Repo topology** — sibling repo `rade-observer` (recommended) vs. a branch
-   in this repo.
-2. **Trail distance** — `1R` (recommended, zero parameters, matches the
-   trader's own geometry) vs. `0.575 × ATR1H` (same number, more plumbing) vs.
-   a wider `1.5R`.
-3. **Runner size at FTL** — half the final tranche trails (recommended) vs.
-   all of it.
-4. **Paid tiers** — is the reliability target worth a paid Render worker and
-   a non-pausing Supabase plan, or is free-tier-with-runbook acceptable for
-   the demo trial?
-5. **Cohort version** — should `rade-observer` pin `cohort/v1` as-is, or
-   should the exit-policy replay's cohort become `v2` first and the observer
-   start from `v2`?
+- **Cohort version** — should `rade-observer` pin `cohort/v1` as-is, or
+  should it wait for a `v2` built from the 1m re-derivation? *Recommendation:
+  pin `v1` now.* The cohort *membership* does not change with resolution, so
+  `v1` is still correct for the observer; the 1m work changes outcomes within
+  the cohort, not its membership. A `v2` is only warranted if membership
+  itself turns out to change.
