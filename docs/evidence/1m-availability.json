@@ -1,0 +1,180 @@
+{
+  "probe_run_at_utc": "2026-11-11T16:25:18.368742+00:00",
+  "environment": "TradeLocker demo (read-only)",
+  "instrument": "XAUUSD",
+  "instrument_id": 1808,
+  "probes": [
+    {
+      "resolution": "1m",
+      "start": "2026-09-15T00:00:00+00:00",
+      "end": "2026-09-15T06:00:00+00:00",
+      "rows": 361,
+      "elapsed_s": 3.52,
+      "first_ts": "2026-09-15 00:00:00+00:00",
+      "last_ts": "2026-09-15 06:00:00+00:00",
+      "median_step_min": 1.0,
+      "gaps_over_1_5x_step": 0,
+      "columns": [
+        "ts",
+        "o",
+        "h",
+        "l",
+        "c",
+        "v"
+      ],
+      "error": null
+    },
+    {
+      "resolution": "1m",
+      "start": "2026-09-15T00:00:00+00:00",
+      "end": "2026-09-16T00:00:00+00:00",
+      "rows": 1379,
+      "elapsed_s": 1.74,
+      "first_ts": "2026-09-15 00:00:00+00:00",
+      "last_ts": "2026-09-16 00:00:00+00:00",
+      "median_step_min": 1.0,
+      "gaps_over_1_5x_step": 1,
+      "columns": [
+        "ts",
+        "o",
+        "h",
+        "l",
+        "c",
+        "v"
+      ],
+      "error": null
+    },
+    {
+      "resolution": "5m",
+      "start": "2026-09-15T00:00:00+00:00",
+      "end": "2026-09-16T00:00:00+00:00",
+      "rows": 277,
+      "elapsed_s": 1.71,
+      "first_ts": "2026-09-15 00:00:00+00:00",
+      "last_ts": "2026-09-16 00:00:00+00:00",
+      "median_step_min": 5.0,
+      "gaps_over_1_5x_step": 1,
+      "columns": [
+        "ts",
+        "o",
+        "h",
+        "l",
+        "c",
+        "v"
+      ],
+      "error": null
+    },
+    {
+      "resolution": "15m",
+      "start": "2026-09-15T00:00:00+00:00",
+      "end": "2026-09-16T00:00:00+00:00",
+      "rows": 93,
+      "elapsed_s": 1.78,
+      "first_ts": "2026-09-15 00:00:00+00:00",
+      "last_ts": "2026-09-16 00:00:00+00:00",
+      "median_step_min": 15.0,
+      "gaps_over_1_5x_step": 1,
+      "columns": [
+        "ts",
+        "o",
+        "h",
+        "l",
+        "c",
+        "v"
+      ],
+      "error": null
+    },
+    {
+      "resolution": "30m",
+      "start": "2026-09-15T00:00:00+00:00",
+      "end": "2026-09-16T00:00:00+00:00",
+      "rows": 47,
+      "elapsed_s": 1.79,
+      "first_ts": "2026-09-15 00:00:00+00:00",
+      "last_ts": "2026-09-16 00:00:00+00:00",
+      "median_step_min": 30.0,
+      "gaps_over_1_5x_step": 1,
+      "columns": [
+        "ts",
+        "o",
+        "h",
+        "l",
+        "c",
+        "v"
+      ],
+      "error": null
+    },
+    {
+      "resolution": "1m",
+      "start": "2026-08-01T00:00:00+00:00",
+      "end": "2026-08-08T00:00:00+00:00",
+      "rows": 6886,
+      "elapsed_s": 2.18,
+      "first_ts": "2026-08-02 22:01:00+00:00",
+      "last_ts": "2026-08-07 20:54:00+00:00",
+      "median_step_min": 1.0,
+      "gaps_over_1_5x_step": 4,
+      "columns": [
+        "ts",
+        "o",
+        "h",
+        "l",
+        "c",
+        "v"
+      ],
+      "error": null
+    },
+    {
+      "resolution": "1m",
+      "start": "2026-08-01T00:00:00+00:00",
+      "end": "2026-08-15T00:00:00+00:00",
+      "rows": 13772,
+      "elapsed_s": 2.71,
+      "first_ts": "2026-08-02 22:01:00+00:00",
+      "last_ts": "2026-08-14 20:54:00+00:00",
+      "median_step_min": 1.0,
+      "gaps_over_1_5x_step": 9,
+      "columns": [
+        "ts",
+        "o",
+        "h",
+        "l",
+        "c",
+        "v"
+      ],
+      "error": null
+    },
+    {
+      "resolution": "1m",
+      "start": "2026-08-01T00:00:00+00:00",
+      "end": "2026-08-22T00:00:00+00:00",
+      "rows": 0,
+      "elapsed_s": 0.0,
+      "error": "ValueError: No. of requested rows (30240) larger than max allowed (30000).Try splitting your request in smaller chunks."
+    },
+    {
+      "resolution": "1m",
+      "start": "2026-08-01T00:00:00+00:00",
+      "end": "2026-08-31T00:00:00+00:00",
+      "rows": 0,
+      "elapsed_s": 0.0,
+      "error": "ValueError: No. of requested rows (43200) larger than max allowed (30000).Try splitting your request in smaller chunks."
+    }
+  ],
+  "full_period": {
+    "start": "2025-04-01",
+    "end": "2026-11-03",
+    "calendar_days": 581,
+    "estimated_1m_rows": 572285,
+    "chunk_days": 14,
+    "estimated_requests": 41,
+    "estimated_minutes_at_5s_per_request": 3.5
+  },
+  "conclusion": {
+    "one_minute_available": true,
+    "rows_per_24h": 13772,
+    "row_cap_enforced_at": 30000,
+    "cap_error_seen": "ValueError: No. of requested rows (30240) larger than max allowed (30000).Try splitting your request in smaller chunks.",
+    "largest_working_1m_chunk_rows": 13772
+  }
+}
