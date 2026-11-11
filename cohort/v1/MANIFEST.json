@@ -1,0 +1,101 @@
+{
+  "cohort_version": "v1",
+  "created_at": "2026-11-11T16:29:44.477189+00:00",
+  "source": {
+    "repo": "rade-bot",
+    "git_commit": "4ec3b32e8a5c5e9b46670309736387b1fe6b8ca1",
+    "labelled_setups_sha256": "652556315f3b3bc0b2604bb805d71e5a4a05c9a1bfda71637a9589b2f0399c96",
+    "note": "Regenerate with: python scripts/export_cohort.py --version <v>"
+  },
+  "definition": {
+    "inclusion": "parsed, valid, non-recap, filled (fill_status == 'filled' and is_recap == 0 and fill_ts present)",
+    "exclusion_notes": [
+      "29 filled non-recap setups carry no split assignment and are excluded",
+      "recaps excluded upstream by labelling/recap_filter.py",
+      "cohort membership is independent of bar resolution; the 1m re-derivation changes outcomes within the cohort, not membership"
+    ]
+  },
+  "counts": {
+    "labelled_total": 2382,
+    "cohort": 1972,
+    "with_at_least_2_tps": 1889,
+    "with_at_least_3_tps": 1211,
+    "per_split": {
+      "train": {
+        "ids": 1198,
+        "in_cohort": 1173,
+        "excluded": 25,
+        "posted_at_range": [
+          "2025-04-09",
+          "2026-05-05"
+        ]
+      },
+      "val": {
+        "ids": 388,
+        "in_cohort": 383,
+        "excluded": 5,
+        "posted_at_range": [
+          "2026-05-07",
+          "2026-08-21"
+        ]
+      },
+      "test": {
+        "ids": 404,
+        "in_cohort": 387,
+        "excluded": 17,
+        "posted_at_range": [
+          "2026-08-25",
+          "2026-11-02"
+        ]
+      }
+    }
+  },
+  "split_policy": {
+    "method": "chronological 60/20/20 by posted_at, 39h purge at both boundaries",
+    "reuse": "the archived split id files are reused verbatim; they are not re-cut",
+    "roles": {
+      "train": "development only - no selection",
+      "val": "selection",
+      "test": "holdout - opened once"
+    }
+  },
+  "assumptions_ref": "docs/14-redirect-plan.md#4-replay-protocol",
+  "assumptions": {
+    "bar_resolution": "1m primary; 30m reported as sensitivity",
+    "entry": "limit touch at the stated price",
+    "fill_window_hours": 24,
+    "tp_ladder": "normalised nearest-first, wrong-side targets dropped",
+    "sizing": "0.5% of a constant 100000 reference equity",
+    "spread": 0.25,
+    "slippage": 0.25,
+    "commission": 0.0,
+    "entry_cost_in_R": true,
+    "stop_after_tp1": "cost-adjusted breakeven (entry +/- 0.50)",
+    "stop_after_tp2": "unchanged",
+    "trail_rule": "1R behind favourable peak, ratcheted, never backward",
+    "runner_size_at_ftl": "half the final tranche trails, half closes",
+    "pre_ladder_cap_hours": 24,
+    "runner_cap_hours": 48,
+    "intra_bar_ordering": "stop wins ties (pessimistic); ambiguous cases flagged and counted",
+    "seed": 42
+  },
+  "files": {
+    "labeled_setups.csv": {
+      "sha256": "f23292e6712eff0626f154be491c30ebcf7f69793fdf754e4b6d1ac68219f9cb",
+      "bytes": 375981,
+      "rows": 1972
+    },
+    "split_test_ids.json": {
+      "sha256": "4afd13de3028a30a44c27cc9f55d9a967a78dd86fd2c533d88afb146eb70656a",
+      "bytes": 3639
+    },
+    "split_train_ids.json": {
+      "sha256": "3244d4377585bf4edf8bf256bd69f9d641101e14b07a9f6dba129edc41be7cbb",
+      "bytes": 9401
+    },
+    "split_val_ids.json": {
+      "sha256": "52a60a91420d23373533c485a7a73a06188c3cc46c03853704676e472e0ee4ca",
+      "bytes": 3455
+    }
+  }
+}
