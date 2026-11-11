@@ -97,5 +97,28 @@
       "sha256": "52a60a91420d23373533c485a7a73a06188c3cc46c03853704676e472e0ee4ca",
       "bytes": 3455
     }
+  },
+  "timestamp_convention": {
+    "note": "Timestamps in labeled_setups.csv are NAIVE and already in UTC. This is inherited from the labeller: scripts/store_labeled.py parses them with utc=True before writing to the database, and the export copies the values verbatim.",
+    "reader_rule": "Treat a naive timestamp as UTC. NEVER call .astimezone() on a naive datetime - it interprets the value as LOCAL time and silently shifts every posted_at (and therefore every fill window) by the machine UTC offset.",
+    "why_it_matters": "On a UTC+1 machine this shifted every setup by -1 hour and turned mean net R from -0.0507 into +0.0979 R. See docs/evidence/legacy-reconciliation.md section 4b.",
+    "asserted_by": "tests/test_replay_reconciliation.py::test_naive_cohort_timestamps_are_read_as_utc and ::test_cohort_csv_timestamps_match_the_database"
+  },
+  "replay_status": {
+    "note": "The archived S0 baseline (data/s0_report.csv) is superseded for expectancy purposes by the paired replay, because the legacy engine never normalised the take-profit ladder. See docs/evidence/legacy-reconciliation.md.",
+    "legacy_defect": "a target on the wrong side of the entry was filled instantly at that target price (pk=452 alone produced -37.46 R)",
+    "net_effect_on_the_baseline": "+0.0378 R per setup, 97% of it carried by 15 setups",
+    "replay_fills": "1969 of the 1972 cohort rows; the other 3 (pk=9730/9731/9732) have an entirely unreachable ladder and are marked invalid"
+  },
+  "ftl_population": {
+    "definition": "the final normalised ladder level is touched at any point inside 48h of fill, independent of the exit policy",
+    "counts_by_split": {
+      "train": 701,
+      "val": 297,
+      "test": 317
+    },
+    "total_over_split_ids": 1315,
+    "total_over_filled_cohort": 1340,
+    "supersedes": "the 1235 (631/296/308) figure quoted in docs/14-redirect-plan.md, which came from an ad-hoc calculation that was never committed as code and cannot be reproduced"
   }
 }

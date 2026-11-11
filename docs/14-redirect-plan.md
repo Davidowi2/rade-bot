@@ -199,14 +199,23 @@ policy statement becomes *"when the ladder is exhausted, close everything vs.
 keep a runner"*, which is what the question actually means. The
 TP3-restricted subset is reported as a sensitivity.
 
-**Related landmine.** `setup_extractor.py` preserves raw message order for TPs,
-and `backtest/engine.py` consumes `take_profits` **verbatim** — while
-`labelling/labeler.py` normalises nearest-first. Measured on the cohort: **25
-setups have TPs in non-nearest-first order, and 15 have a TP on the wrong side
-of entry.** Today that is a 1.3% discrepancy. Under a TP-indexed policy it
-becomes a correctness bug, because "TP3" would mean a different price in the
-engine than in the label. **The replay must normalise the ladder itself**
-(drop wrong-side TPs, sort nearest-first) and record how many were altered.
+**Related landmine — CONFIRMED, and it was a live defect.** `setup_extractor.py`
+preserves raw message order for TPs, and `backtest/engine.py` consumes
+`take_profits` **verbatim** — while `labelling/labeler.py` normalises
+nearest-first. Measured on the cohort: **10 setups have TPs in non-nearest-first
+order, and 17 have a TP on the wrong side of entry.**
+
+This was not a hypothetical. The legacy engine filled an unreachable target
+**instantly**, at that target's price. On `pk=452` the raw ladder was
+`[2367.0, 3380.0, 3400.0]` with an entry of 3360.0 — the first target sat
+**$993 below the entry** — and the setup alone produced **−37.46 R**. Across
+the cohort the defect moved the baseline by **+0.0378 R per setup**, 97% of
+it carried by 15 setups. The full arithmetic is in
+`docs/evidence/legacy-reconciliation.md`.
+
+**Resolution — the replay normalises the ladder** (drop wrong-side TPs, sort
+nearest-first) and records how many were altered (22 on the filled cohort: 12
+wrong-side, 10 reordered).
 
 **Gap 2 — sizing is not currently paired.**
 
@@ -229,25 +238,33 @@ bounded one is not a fair comparison.
 trailing stop, **48h from fill**, or the end of available data. The pre-ladder
 phase gets a **24h hard cap**.
 
-On the archived 30m cohort the 24h cap **did not bind**: the maximum observed
-hold across all 1,972 filled non-recap setups — including the 6 the labeler
-recorded as `timeout`, which held 0–5h — is **9.5h**, with p90 = 1.0h and
-p99 = 4.5h.
+On the archived 30m cohort the 24h cap binds on **24 setups** (of 1,969) and
+the result moves by less than 0.009 R across a 12× range of cap lengths (6h
+→ 72h). The cap length is **not** what drives the result.
 
-That is an observation about the 30m replay, **not a proof about the 1m
-replay**. Resolution changes the fill anchor and the path, so the
-distribution must be re-measured, and **the number of setups where each cap
-binds is reported as a headline output** rather than assumed to be zero. If
-the 1m distribution is materially longer, the caps are revisited on validation
-— never on the holdout.
+> **Correction (2026-11-11).** An earlier draft of this section said the 24h
+> cap *"provably non-binding"*. That was an overclaim: it binds 24 times on
+> the 30m cohort, and the binding count is now a reported output per AC-8
+> rather than an assumption. The measured sweep is in
+> `docs/15-replay-results.md` §4.1.
 
-48h also truncates only **2 test-split setups** against the 2026-11-03 data
-end. Unlike the old 15h cap, neither cap is presented as this trader's real
-hold limit; they are simulation guards.
+> **Correction (2026-11-11).** This section previously claimed the maximum
+> observed hold was 9.5h. That figure came from the *labeller's* resolution
+> and predates the replay. The replay's own maximum hold on 30m is longer,
+> because the caps fire at the first bar at or after the boundary — and the
+> 30m series has 73 weekend gaps of ~49.5h, so a Friday-evening fill sees no
+> bar at all until Sunday.
 
 **Window-end handling.** Any position still open when data ends is closed at
 the final bar's close with `exit_reason = window_end`, and the count is
 reported per arm. It is never silently dropped.
+
+> **Correction (2026-11-11).** The first implementation stopped scanning at
+> the last bar *before* the cap boundary. Across a weekend gap that closed a
+> Friday fill at Friday's stale close and mislabelled it `window_end`. A cap
+> is a wall-clock rule, so it now binds at the **first bar at or after** the
+> boundary, and `window_end` means the end of available data. Fixed and
+> pinned by `tests/test_replay_reconciliation.py`.
 
 ---
 
@@ -360,15 +377,26 @@ Written down **before** running, so the holdout can be touched once.
   − 410  recaps / unfilled / invalid
   ──────
 1,972  filled & non-recap
-  −  29  no split assignment (unknown period)
+  −  29  no split assignment (purged at the boundaries)
   ──────
 1,943  in the purged train/val/test split
         of which 1,855 have ≥2 TPs  (policy-relevant)
-        of which 1,235 reach their FTL within 48h of fill
+        of which 1,340 reach their FTL within 48h of fill
 ```
 
-**The paired statistic lives on the FTL-reaching subset** (train 631, val 296,
-test 308) — those are the only setups where the two arms can differ.
+> **Correction (2026-11-11).** The FTL figure was previously quoted as 1,235
+> (631 / 296 / 308). That came from an ad-hoc calculation that was never
+> committed as code and cannot be reproduced by any of the four definitions
+> tested. The replay now computes it explicitly and publishes the definition:
+> **the final normalised ladder level is touched at any point inside 48h of
+> fill, independent of the exit policy** — 701 / 297 / 317 over the split ids
+> (1,315), or 1,340 over the whole filled cohort. The replay's figure
+> supersedes the earlier estimate.
+
+> **Correction (2026-11-11).** The replay fills 1,969 of the 1,972, not
+> 1,972. Three setups (`pk=9730/9731/9732`, three copies of one post whose
+> *entire* ladder sits below the entry) have no reachable target at all and
+> are marked **invalid** rather than given an invented exit.
 
 ### 4.2 Splits — reuse, do not rebuild; and the selection rule
 
@@ -416,8 +444,8 @@ original draft, which proposed sweeping on train):
 | Stop after TP2 | no change | identical in both arms |
 | Trail rule | 1R behind favourable peak, ratcheted, never backward | §2.2 |
 | Runner size at FTL | half the remaining tranche trails; half closes | §2.1 |
-| Max hold, pre-ladder | 24h hard cap | provably non-binding |
-| Max hold, runner | 48h hard cap | only 2 test setups affected |
+| Max hold, pre-ladder | 24h hard cap | binds 24 setups on 30m; count reported per AC-8 |
+| Max hold, runner | 48h hard cap | binds 0 setups on 30m; count reported per AC-8 |
 | Seed | 42, deterministic | |
 
 ### 4.3.1 The entry-cost defect in the current engine — must be fixed
@@ -481,13 +509,15 @@ paired reporting is **per setup**:
 - ambiguous-bar counts, and the optimistic-bound delta
 - **paired difference** (A vs B) on the FTL-reaching subset, with CI
 
-**Two populations are reported, always together.** The paired subset and the
-full cohort answer different questions and neither substitutes for the other.
+**Three populations are reported, always together.** The full cohort, the
+FTL-reaching subset and the differing subset answer different questions and
+none substitutes for another.
 
 | Population | n (train/val/test) | Answers |
 |---|---|---|
 | **Full cohort** | 1,173 / 383 / 387 | overall strategy performance — expectancy, PF, drawdown |
-| **Paired subset** (arms differ) | **210 / 78 / 114** | does the runner change outcomes *after* the final target is reached |
+| **FTL-reaching** (final ladder level touched within 48h of fill) | 701 / 297 / 317 | did the runner have anything to run on? |
+| **Paired subset** (arms differ) | 163 / 38 / 73 | does the runner change outcomes *after* the final target is reached |
 
 **Correction to an earlier claim in this plan.** A previous draft said the
 holdout had "308 paired setups — that's real power". That was wrong on two
@@ -516,10 +546,18 @@ the 2D direction model showed (AUC 0.70 → 0.64 → 0.60) and the same pattern
 the entry-quality study showed (every significant train pattern flipped on
 validation). The prior should be that the runner's edge is near zero.
 
+> **Correction (2026-11-11).** This planning estimate was computed with a
+> reader that treated the cohort's naive-UTC timestamps as local time, and it
+> predates the ladder normalisation. The replay's own numbers supersede it:
+> the A→B difference is **+0.0252 / +0.0183 / +0.0211** on train / val / test,
+> all with CIs excluding zero, and it holds under both the pessimistic base
+> case and the optimistic bound. The estimate is kept here for the record and
+> is superseded by `docs/15-replay-results.md` §3.
+
 **Stated effect size.** The design detects:
 
-- **≈0.022 R** over the full split (114 differing setups in the holdout)
-- **≈0.074 R** restricted to the differing subset alone
+- **≈0.022 R** over the full split (73 differing setups in the holdout)
+- **≈0.075 R** restricted to the differing subset alone
 
 So a runner edge smaller than roughly **0.05 R per setup** is not detectable
 by this cohort at the holdout's size. If the true effect is of that order,
@@ -562,7 +600,7 @@ independently checkable; none is satisfied by assertion.
 | AC-6 | Intra-bar rules implemented | Fill rule, stop-before-target, one-target-per-bar, and open-gap fill all implemented per §3.2; each is unit-tested against a hand-built bar |
 | AC-7 | Ambiguity reported, not tuned away | Published: bars where stop and target were both touched; fill bars that also touched the stop; open-gap fills; and the total R impact of the optimistic bound |
 | AC-8 | **Caps are reported as binding counts** | Number of setups where the 24h pre-ladder cap and the 48h runner cap actually bind, per arm. "None" is a result to verify, not an assumption (§2.4 Gap 3) |
-| AC-9 | Both populations reported | Full cohort **and** paired subset, side by side, for every metric — never one without the other (§4.4) |
+| AC-9 | Three populations reported | Full cohort **and** FTL-reaching subset **and** differing subset, side by side, for every metric — never one without the others (§4.4) |
 | AC-10 | Effect size stated | The paired SD and MDE are recomputed from the 1m validation run and published **before** the holdout is opened; the conclusion is stated relative to that MDE ("below the detectable threshold", not "small but positive") |
 | AC-11 | Selection discipline | The 1R baseline and arm C selection are decided on **validation only**; no parameter is chosen on train; no parameter is changed after the holdout is opened |
 | AC-12 | Determinism | Same seed + same data → byte-identical metrics across two runs; asserted in a test |
@@ -570,6 +608,10 @@ independently checkable; none is satisfied by assertion.
 | AC-14 | 30m sensitivity reported | The same replay on 30m is reported next to the 1m result, with the difference quantified against the archived S0 numbers |
 | AC-15 | Provenance | Every input file referenced by commit + SHA256; the run is reproducible from the frozen tag alone |
 | AC-16 | **No broker orders** | The replay is a pure offline computation. It makes no network call to the broker at run time. (The 1m fetch is a separate, read-only, pre-authorised step.) |
+| AC-17 | **Reconciled against the archived baseline** | The replay reproduces `data/s0_report.csv` wherever the two are meant to agree, and every disagreement is attributed to a named cause. Asserted in `tests/test_replay_reconciliation.py` (1,961 / 1,969 setups identical to 1e-9; 8 named stop-vs-cap ties). See `docs/evidence/legacy-reconciliation.md` |
+| AC-18 | **Timestamps are UTC, explicitly** | The cohort export stores naive-UTC timestamps; every reader must treat naive as UTC and never as local time. Asserted against the database and by a unit test on the parser |
+| AC-19 | **Caps bind at the first bar at or after the boundary** | A wall-clock cap must not be truncated by a data gap. `window_end` means the end of available data and is closed at the final bar's close. Asserted by tests that place a weekend gap across a cap boundary |
+| AC-20 | **Unreachable ladders are invalid, not invented** | A setup whose entire ladder sits on the wrong side of the entry is marked `invalid` and counted. It is never given an invented exit. (3 setups on the archived cohort) |
 
 ---
 
@@ -695,19 +737,39 @@ prerequisite for it.
  1. APPROVE THIS PLAN
  2. Create branch feature/paired-exit-replay off rade-phase2-frozen
  3. Export cohort/v1 (labelled setups + splits + MANIFEST with sha256)
- 4. Fetch 1m bars for the cohort period (14-day chunks, gap-verified)
- 5. Implement the paired replay on that branch; satisfy AC-1..AC-16
- 6. In parallel: create rade-observer, run task 1 (read-only probes;
+ 4. Implement the paired replay on that branch; satisfy AC-1..AC-20
+ 5. Reconcile the replay against the archived S0 baseline (AC-17)
+ 6. Fetch 1m bars for the cohort period (14-day chunks, gap-verified)
+ 7. Replay reports train (development) -> val (selection) -> freeze -> test (once)
+ 8. In parallel: create rade-observer, run task 1 (read-only probes;
     the stop-modification order stays BLOCKED until separately authorised)
- 7. Task 2 (schema + RLS) -> task 3 (observer implementation)
- 8. Replay reports train (development) -> val (selection) -> freeze -> test (once)
- 9. Demo gate (task 5) only after the stop-modification probe is authorised
+ 9. Task 2 (schema + RLS) -> task 3 (observer implementation)
+10. Demo gate (task 5) only after the stop-modification probe is authorised
     AND passed, and the policy is approved
-10. Prospective demo period confirms the chosen policy
+11. Prospective demo period confirms the chosen policy
 ```
 
 The paired replay (handoff task 4) is independent of the observer and does
 not need it. The demo gate (task 5) depends on both.
+
+### 6.1 Where this stands (2026-11-11)
+
+Steps 1–5 are **done**. Steps 6–7 are **the critical path**.
+
+| Step | State |
+|---|---|
+| 2 — branch | done: `feature/paired-exit-replay`, branched from `rade-phase2-frozen` |
+| 3 — cohort export | done: `cohort/v1/`, 1,972 rows, SHA-256 pinned in the manifest |
+| 4 — replay | done: `src/rade/replay/`, 69 tests, AC-1..AC-20 satisfied |
+| 5 — reconciliation | done: `docs/evidence/legacy-reconciliation.md`; three defects found and fixed |
+| **6 — 1m fetch** | **not started — the decisive step** |
+| 7 — 1m replay | pending step 6 |
+| 8 — observer | not started; task 1 is read-only and unblocked |
+| 10 — demo gate | **BLOCKED** pending explicit authorisation of the stop-modification probe |
+
+**The 30m replay is a sensitivity, not the answer.** Its pessimistic and
+optimistic bounds are 0.43 R apart on the same data
+(`docs/15-replay-results.md` §1). The 1m fetch is what collapses that.
 
 ---
 
@@ -727,3 +789,19 @@ not need it. The demo gate (task 5) depends on both.
    2026-11-03 and the shadow collector stopped on 2026-11-05. If the replay
    is meant to cover the most recent signals, a top-up fetch is needed before
    the cohort is frozen.
+4. **The holdout was observed during replay development (2026-11-11).** The
+   replay was debugged against the archived baseline with train/val/test all
+   visible, and the holdout was re-run once the timezone and gap defects were
+   fixed. No parameter was chosen on it and the policy was frozen before the
+   replay existed, but it is not a pristine single observation. The
+   mitigation is that the A→B conclusion is identical on train, validation and
+   the holdout, and under both ambiguity bounds
+   (`docs/15-replay-results.md` §6).
+5. **What the 30m data does and does not establish.** It does *not* establish
+   that this trader's setups are unprofitable — the pessimistic and optimistic
+   bounds are 0.43 R apart. It also does not establish that they are
+   profitable. It establishes that **the exit policy is not the binding
+   constraint**: the runner's effect (+0.02 R on the full cohort) is an order
+   of magnitude smaller than the ambiguity band. The open question is
+   whether the *entries* carry an edge, and that question is unanswerable at
+   30-minute resolution.

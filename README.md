@@ -10,6 +10,18 @@ and trades like them — slowly, directionally, over days — not scalping.
 > stated assumptions (see `docs/11-data-reconnaissance.md`,
 > `data/entry_quality_summary.md`, `data/s0_verification_note.md`).
 >
+> **Work in progress on `feature/paired-exit-replay`.** A paired exit-policy
+> replay has been built and reconciled against the archived S0 baseline:
+>
+> - [`docs/15-replay-results.md`](docs/15-replay-results.md) — the 30m results
+> - [`docs/evidence/legacy-reconciliation.md`](docs/evidence/legacy-reconciliation.md) — why the archived baseline and the replay disagreed, and how it was settled
+> - [`docs/14-redirect-plan.md`](docs/14-redirect-plan.md) — the frozen spec
+>
+> The headline: at **30-minute** resolution the pessimistic and optimistic
+> bounds sit **0.43 R per setup apart** on the same data, so 30m cannot
+> resolve this strategy's expectancy at all. The **1-minute** fetch is the
+> decisive next step.
+>
 > The project is moving toward a separate observer/recovery service. This repo
 > is preserved as the research archive — see
 > [`archive/2026-11-11-rade-phase2-frozen/MANIFEST.md`](archive/2026-11-11-rade-phase2-frozen/MANIFEST.md).
@@ -34,6 +46,21 @@ python scripts/run_backfill.py --limit 5000
 
 # tests
 python -m pytest tests/ -q -o pythonpath=src
+```
+
+## Run (paired exit replay)
+```bash
+# the reconciliation against the archived S0 baseline
+python scripts/diagnose_legacy_divergence.py
+
+# the replay, per split
+python scripts/run_paired_replay.py --resolution 30m --split train --out data/replay_30m_train.json
+python scripts/run_paired_replay.py --resolution 30m --split val   --out data/replay_30m_val.json
+python scripts/run_paired_replay.py --resolution 30m --split test  --out data/replay_30m_test.json
+
+# the optimistic bound (AC-7) and the legacy-matched configuration
+python scripts/run_paired_replay.py --resolution 30m --split all --optimistic
+python scripts/run_paired_replay.py --resolution 30m --split all --policies A --no-breakeven --pre-ladder-cap 15
 ```
 
 ## Quick links (docs)

@@ -30,6 +30,9 @@ desktop.ini
 .idea/
 .vscode/
 
+# Agent workspace state (project memory lives here, not in git)
+.workbuddy-ai/
+
 # Bybit/tradelocker artifacts
 *.pem
 *.session
