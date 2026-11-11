@@ -20,6 +20,9 @@ data/
 logs/
 *.log
 
+# Frozen snapshots (contain a live Telegram session - never commit)
+archive/
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -3,7 +3,18 @@
 Swing-direction trading bot that learns from a trader's public Telegram channel
 and trades like them — slowly, directionally, over days — not scalping.
 
-> Status: Phase 0 — documentation & planning. No trading code yet.
+> **Status: frozen at Phase 2 research infrastructure (2026-11-11).**
+> Phases 2A–2D are built (ingestion → labelling → features → backtest → models).
+> `probe/`, `risk/`, `execution/` and `ops/` are empty stubs — there is no live
+> trading path. The measured results are **negative** under the repo's own
+> stated assumptions (see `docs/11-data-reconnaissance.md`,
+> `data/entry_quality_summary.md`, `data/s0_verification_note.md`).
+>
+> The project is moving toward a separate observer/recovery service. This repo
+> is preserved as the research archive — see
+> [`archive/2026-11-11-rade-phase2-frozen/MANIFEST.md`](archive/2026-11-11-rade-phase2-frozen/MANIFEST.md).
+> Restore the code with `git checkout preserve/phase2-frozen`.
+
 
 ## Quick links
 - [Overview](docs/00-overview.md)
