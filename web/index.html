@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rade mirror — paper only</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #5c6370;
+    --line: #dfe3ea; --accent: #1f4e79; --ok: #1c6b3f; --warn: #8a5a00; --bad: #a1231f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1c1f25; --ink: #e8eaee; --muted: #9aa3b2;
+      --line: #2c313a; --accent: #7fb2e5; --ok: #6fce9a; --warn: #e0b25c; --bad: #f0857f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 20px 24px; border-bottom: 1px solid var(--line); background: var(--panel);
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { padding: 20px 24px 48px; max-width: 1100px; margin: 0 auto; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); background: var(--bg);
+  }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.bad { color: var(--bad); border-color: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .card .value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .card .note { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
+  .panel h2 { font-size: 14px; margin: 0; padding: 13px 16px; border-bottom: 1px solid var(--line); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  tr:last-child td { border-bottom: none; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .empty { padding: 16px; color: var(--muted); font-size: 13px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  input {
+    flex: 1 1 260px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); font-size: 14px;
+  }
+  button {
+    padding: 9px 16px; border-radius: 8px; border: 1px solid var(--accent);
+    background: var(--accent); color: #fff; font-size: 14px; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--accent); }
+  .hidden { display: none !important; }
+  .err { color: var(--bad); font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Rade mirror</h1>
+    <div class="sub">Telegram → validation → paper intents. Read-only view.</div>
+  </div>
+  <div class="badges">
+    <span class="badge ok">paper only</span>
+    <span class="badge">broker writes disabled</span>
+    <span class="badge warn">exit policy unresolved</span>
+  </div>
+</header>
+
+<main>
+  <section id="gate" class="panel hidden">
+    <h2>Dashboard token</h2>
+    <div style="padding:16px">
+      <form id="gate-form">
+        <input id="token" type="password" autocomplete="off" placeholder="DASHBOARD_TOKEN">
+        <button type="submit">Open</button>
+        <button type="button" class="ghost" id="forget">Forget</button>
+      </form>
+      <div class="err" id="gate-err"></div>
+      <div class="sub" style="margin-top:8px">
+        The token is kept in this tab only. It is checked by the server; it is not the
+        backend or database key.
+      </div>
+    </div>
+  </section>
+
+  <section id="dash" class="hidden">
+    <div class="grid" id="cards"></div>
+
+    <div class="panel">
+      <h2>Paper intents</h2>
+      <div id="intents"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Review required</h2>
+      <div id="review"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Recent messages</h2>
+      <div id="events"></div>
+    </div>
+
+    <div class="sub" id="foot"></div>
+  </section>
+</main>
+
+<script>
+const TOKEN_KEY = "rade.dashboard.token";
+let timer = null;
+
+function token() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
+
+async function api(path) {
+  const res = await fetch(path, { headers: { "x-dashboard-token": token() } });
+  if (res.status === 401) throw new Error("unauthorised");
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function shortTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? esc(iso) : d.toLocaleString();
+}
+
+function badge(status) {
+  const cls = status === "paper_intent" ? "ok"
+    : (status === "blocked" || status === "conflict") ? "bad"
+    : status === "manual_review" ? "warn" : "";
+  return `<span class="badge ${cls}">${esc(status)}</span>`;
+}
+
+function table(rows, columns) {
+  if (!rows.length) return '<div class="empty">Nothing here.</div>';
+  const head = columns.map(c => `<th>${esc(c.label)}</th>`).join("");
+  const body = rows.map(r => "<tr>" + columns.map(c => `<td>${c.render(r)}</td>`).join("") + "</tr>").join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderCards(status) {
+  const listener = status.listener || {};
+  const counts = status.counts || {};
+  const total = Object.values(counts).reduce((a, b) => a + (typeof b === "number" ? b : 0), 0);
+  const listenerValue = !listener.known ? "unknown"
+    : listener.stale ? "stale" : (listener.phase || "unknown");
+  const cards = [
+    { label: "Service", value: status.paper_only ? "paper" : "unknown",
+      note: `store: ${esc(status.store || "?")}` },
+    { label: "Listener", value: listenerValue,
+      note: listener.heartbeat_age_s != null ? `heartbeat ${listener.heartbeat_age_s}s ago` : "no heartbeat file",
+      warn: listener.stale || !listener.known },
+    { label: "Events stored", value: String(total),
+      note: Object.entries(counts).filter(([, v]) => typeof v === "number")
+        .map(([k, v]) => `${k} ${v}`).join(" · ") || "none yet" },
+    { label: "Uptime", value: `${Math.round((status.uptime_s || 0) / 60)}m`,
+      note: "this process, not the listener" },
+  ];
+  document.getElementById("cards").innerHTML = cards.map(c => `
+    <div class="card">
+      <div class="label">${esc(c.label)}</div>
+      <div class="value">${esc(c.value)}</div>
+      <div class="note">${c.note}</div>
+    </div>`).join("");
+}
+
+function renderIntents(rows) {
+  document.getElementById("intents").innerHTML = table(rows, [
+    { label: "Received", render: r => esc(shortTime(r.received_at)) },
+    { label: "Message", render: r => `<code>${esc(r.message_id)}</code> rev ${esc(r.revision)}` },
+    { label: "Signal", render: r => {
+        const s = r.signal_json || {};
+        const tps = (s.take_profits || []).join(", ");
+        return `${esc((s.side || "").toUpperCase())} ${esc(s.instrument || "")}<br>
+                <span class="sub">entry ${esc(s.published_entry)} · SL ${esc(s.stop_loss)} · TP ${esc(tps)}</span>`;
+      } },
+    { label: "Intent", render: r => {
+        const i = r.intent_json || {};
+        return `${esc(i.size_lots)} lot · ${esc(i.order_state)}<br>
+                <span class="sub">filled: ${esc(i.filled)} · risk $${esc(i.risk_budget)}</span>`;
+      } },
+  ]);
+}
+
+function renderEvents(rows, columns) {
+  const el = document.getElementById(columns.target);
+  el.innerHTML = table(rows, [
+    { label: "Received", render: r => esc(shortTime(r.received_at)) },
+    { label: "Message", render: r => `<code>${esc(r.message_id)}</code> rev ${esc(r.revision)}` },
+    { label: "Status", render: r => badge(r.status) },
+    { label: "Reason", render: r => `<span class="sub">${esc(r.reason)}</span>` },
+  ]);
+}
+
+async function refresh() {
+  try {
+    const status = await api("/api/status");
+    renderCards(status);
+    const [intents, review, events] = await Promise.all([
+      api("/api/intents?limit=25"),
+      api("/api/review?limit=25"),
+      api("/api/events?limit=40"),
+    ]);
+    renderIntents(intents.events || []);
+    renderEvents(review.events || [], { target: "review" });
+    renderEvents(events.events || [], { target: "events" });
+    document.getElementById("foot").textContent =
+      `Updated ${new Date().toLocaleTimeString()} · refresh every 30s · ` +
+      `exit policy: ${status.exit_policy || "unresolved"}`;
+    document.getElementById("gate").classList.add("hidden");
+    document.getElementById("dash").classList.remove("hidden");
+    document.getElementById("gate-err").textContent = "";
+  } catch (err) {
+    document.getElementById("dash").classList.add("hidden");
+    document.getElementById("gate").classList.remove("hidden");
+    document.getElementById("gate-err").textContent =
+      err.message === "unauthorised" ? "Token rejected." : `Cannot reach the service: ${err.message}`;
+  }
+}
+
+function start() {
+  if (!token()) {
+    document.getElementById("gate").classList.remove("hidden");
+    return;
+  }
+  refresh();
+  if (timer) clearInterval(timer);
+  timer = setInterval(refresh, 30000);
+}
+
+document.getElementById("gate-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const value = document.getElementById("token").value.trim();
+  if (!value) return;
+  sessionStorage.setItem(TOKEN_KEY, value);
+  document.getElementById("token").value = "";
+  start();
+});
+
+document.getElementById("forget").addEventListener("click", () => {
+  sessionStorage.removeItem(TOKEN_KEY);
+  if (timer) clearInterval(timer);
+  document.getElementById("dash").classList.add("hidden");
+  document.getElementById("gate").classList.remove("hidden");
+});
+
+start();
+</script>
+</body>
+</html>

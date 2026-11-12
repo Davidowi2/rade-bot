@@ -1,0 +1,9 @@
+# Runtime dependencies for the mirror service and listener only.
+# Deliberately excludes pandas/numpy/pyarrow: the deployed process never reads
+# the research data, and a smaller image builds faster on a free tier.
+python-dotenv>=1.0
+pydantic>=2.6
+pydantic-settings>=2.2
+requests>=2.32
+telethon>=1.36
+tradelocker>=0.1

@@ -813,7 +813,7 @@ decision rule has been applied.
 | 5 — reconciliation | done: `docs/evidence/legacy-reconciliation.md`; three defects found and fixed |
 | 6 — 1m fetch | **done**: 564,213 bars, 42/42 chunks, 11 holes under 55 min in 19 months |
 | 7 — 1m replay | **done**: train → val → holdout, all four arms |
-| 8 — observer | **in progress**: task 1 read-only half — Telegram catch-up/dedupe/edits pass on real ids; broker read surface verified with writes disarmed; all latency rows BLOCKED by the host (clock 5.4h out, TLS connect 2–5s). `docs/17-observer-step1.md`, `docs/18-observer-tradelocker.md` |
+| 8 — observer | **in progress**: read-only halves verified — Telegram catch-up/dedupe/edits on real ids, broker read surface with writes disarmed. **Mirror pipeline built and tested locally** (parser, fail-closed sizing, idempotent store, listener, notifications, read-only API, dashboard, deploy config); 198 tests pass, 15/15 simulation scenarios pass. Not deployed; latency rows still BLOCKED by the host. `docs/17-observer-step1.md`, `docs/18-observer-tradelocker.md`, `docs/19-mirror-pipeline.md` |
 | 10 — demo gate | **BLOCKED — and now not recommended to open at all** (§6.2) |
 
 ### 6.2 Outcome of the 1m replay — study CLOSED (2026-11-12)

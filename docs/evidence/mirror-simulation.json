@@ -1,0 +1,132 @@
+{
+  "mode": "simulation",
+  "provenance": {
+    "message_source": "stored Telegram history, message 18048 in data/rade.db",
+    "channel": "@XAUUSD_FOREX4",
+    "posted_at": "2026-11-02T01:15:58+00:00",
+    "text_sha256": "7813d1cad0612d9f889f8d49ff8d3bab2c7f9dcef4fa73ea549051dfa3362fb1",
+    "quote": "synthetic, stamped at evaluation time; not a live broker quote",
+    "equity": "synthetic 10,000 for sizing only",
+    "contract_spec": "TradeLocker XAUUSD read-only response; still unconfirmed by a demo fill",
+    "proves": "parser/validator/ledger behaviour",
+    "does_not_prove": "live Telegram push delivery, broker execution, exit policy"
+  },
+  "scenarios": [
+    {
+      "scenario": "real archived signal",
+      "expected": "paper_intent",
+      "actual": "paper_intent",
+      "verdict": "PASS",
+      "reason": "validated; simulation only",
+      "order_state": "would_fill_market",
+      "filled": false,
+      "size_lots": 0.05
+    },
+    {
+      "scenario": "duplicate delivery",
+      "expected": "duplicate",
+      "actual": "duplicate",
+      "verdict": "PASS",
+      "reason": "event already processed"
+    },
+    {
+      "scenario": "restart replay",
+      "expected": "duplicate",
+      "actual": "duplicate",
+      "verdict": "PASS",
+      "reason": "event already processed"
+    },
+    {
+      "scenario": "same revision, changed body",
+      "expected": "conflict",
+      "actual": "conflict",
+      "verdict": "PASS",
+      "reason": "same message id and revision arrived with different text; review required"
+    },
+    {
+      "scenario": "edited signal",
+      "expected": "manual_review",
+      "actual": "manual_review",
+      "verdict": "PASS",
+      "reason": "edited signal; never amend an existing intent automatically"
+    },
+    {
+      "scenario": "malformed call",
+      "expected": "ignored",
+      "actual": "ignored",
+      "verdict": "PASS",
+      "reason": "message is not a recognised signal"
+    },
+    {
+      "scenario": "recap post",
+      "expected": "ignored",
+      "actual": "ignored",
+      "verdict": "PASS",
+      "reason": "recap/result post, not a trade call"
+    },
+    {
+      "scenario": "news post",
+      "expected": "ignored",
+      "actual": "ignored",
+      "verdict": "PASS",
+      "reason": "message is not a recognised signal"
+    },
+    {
+      "scenario": "missing quote",
+      "expected": "blocked",
+      "actual": "blocked",
+      "verdict": "PASS",
+      "reason": "market signal needs a fresh broker quote"
+    },
+    {
+      "scenario": "stale quote",
+      "expected": "blocked",
+      "actual": "blocked",
+      "verdict": "PASS",
+      "reason": "broker quote is stale"
+    },
+    {
+      "scenario": "missing contract spec",
+      "expected": "blocked",
+      "actual": "blocked",
+      "verdict": "PASS",
+      "reason": "broker contract/lot specification is incomplete"
+    },
+    {
+      "scenario": "risk above the 0.5% cap",
+      "expected": "blocked",
+      "actual": "blocked",
+      "verdict": "PASS",
+      "reason": "risk configuration is invalid (per-trade risk must be in (0, 0.5%])"
+    },
+    {
+      "scenario": "missing equity",
+      "expected": "blocked",
+      "actual": "blocked",
+      "verdict": "PASS",
+      "reason": "account equity is missing or invalid"
+    },
+    {
+      "scenario": "minimum lot exceeds risk budget",
+      "expected": "skipped_minimum_lot",
+      "actual": "skipped_minimum_lot",
+      "verdict": "PASS",
+      "reason": "minimum lot 0.01 would exceed the risk budget; skip"
+    },
+    {
+      "scenario": "limit call",
+      "expected": "paper_intent",
+      "actual": "paper_intent",
+      "verdict": "PASS",
+      "reason": "validated; simulation only",
+      "order_state": "pending_limit",
+      "filled": false,
+      "size_lots": 0.05
+    }
+  ],
+  "summary": {
+    "total": 15,
+    "passed": 15,
+    "failed": 0
+  }
+}

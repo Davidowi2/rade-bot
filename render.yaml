@@ -1,0 +1,72 @@
+# Render blueprint for the read-only mirror service.
+#
+# Free-tier facts this file is built around (render.com/docs/free, checked
+# 2026-11-12):
+#   * Free instances exist for Web Service / Postgres / Key Value only.
+#     "Other service types don't support Free instances" - so there is no free
+#     background worker and no free cron job. The listener therefore runs as a
+#     thread inside this web service.
+#   * A free web service spins down after 15 minutes without inbound traffic and
+#     takes about a minute to spin back up.
+#   * The filesystem is ephemeral: it is wiped on redeploy, restart and
+#     spin-down. That is why Supabase is the store and why the listener cursor is
+#     recovered from the database rather than from a file.
+#
+# Consequence, stated plainly: this is not a 24/7 listener. An external monitor
+# pinging /healthz every few minutes prevents most spin-downs, but Render may
+# still restart a free service at any time, and any gap is recovered on restart
+# by the cursor plus the database's uniqueness constraint.
+services:
+  - type: web
+    name: rade-mirror
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: feature/paired-exit-replay
+    buildCommand: pip install -r requirements-mirror.txt
+    startCommand: python -m rade.observer.service
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: PYTHONPATH
+        value: src
+
+      # --- set these in the Render dashboard; never commit values ---
+      - key: MIRROR_API_TOKEN          # bearer token for /api/*
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY # backend only; never in Vercel
+        sync: false
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: TELEGRAM_SESSION          # StringSession, survives redeploys
+        sync: false
+      - key: TELEGRAM_CHANNEL
+        value: "@XAUUSD_FOREX4"
+      - key: TELEGRAM_BOT_TOKEN        # BotFather notifications
+        sync: false
+      - key: TELEGRAM_NOTIFY_CHAT_ID
+        sync: false
+      - key: MIRROR_EQUITY             # paper equity; never guessed
+        sync: false
+
+      # --- non-secret settings ---
+      - key: MIRROR_RUN_LISTENER
+        value: "1"
+      - key: MIRROR_CONTRACT_UNITS_PER_LOT
+        value: "100"
+      - key: MIRROR_QUOTE_PROVIDER     # "none" until a demo quote is verified
+        value: "none"
+      - key: MIRROR_QUOTE_MAX_AGE_S
+        value: "2"
+      - key: MIRROR_RECONNECT_S
+        value: "900"
+      - key: MIRROR_STATE
+        value: "/tmp/mirror_state.json"
+      - key: MIRROR_HEARTBEAT
+        value: "/tmp/mirror_listener.heartbeat.json"
