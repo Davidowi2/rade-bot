@@ -1,0 +1,79 @@
+{
+  "probe": "telegram reception (read-only)",
+  "read_only": true,
+  "started_at": "2026-11-12T13:22:56.867624+00:00",
+  "finished_at": "2026-11-12T13:24:49.999188+00:00",
+  "duration_s": 113.1,
+  "channel": "@XAUUSD_FOREX4",
+  "clock_skew": {
+    "skew_ms": 19431838.6,
+    "source": "https://www.cloudflare.com (HTTP Date header)",
+    "date_header": "Thu, 12 Nov 2026 18:46:49 GMT",
+    "rtt_ms": 11543.4,
+    "granularity_s": 1.0,
+    "accuracy_ms": "~\u00b11000 (header truncation + RTT/2)",
+    "skew_end_ms": 19426090.3,
+    "skew_end_date_header": "Thu, 12 Nov 2026 18:48:32 GMT",
+    "drift_ms": -5748.3,
+    "certifiable": false
+  },
+  "baseline_message_id": 18700,
+  "baseline_forced": true,
+  "restored_events": 0,
+  "counts": {
+    "new": 85,
+    "revisions": 0,
+    "duplicates": 0,
+    "events_recorded": 85,
+    "live_in_window": 0
+  },
+  "latency": {
+    "n": 0,
+    "p50_ms": null,
+    "p95_ms": null,
+    "max_ms": null,
+    "mean_ms": null,
+    "min_ms": null,
+    "skew_ms": 19431838.6,
+    "verdict": "INVALID - host clock is off by +19431.8s, beyond the 2s tolerance; latency cannot be measured on this host",
+    "corrected_latency_ms": []
+  },
+  "dispatch": {
+    "n": 0,
+    "verdict": "insufficient sample",
+    "p50_ms": null,
+    "p95_ms": null,
+    "max_ms": null,
+    "mean_ms": null,
+    "min_ms": null,
+    "skew_ms": 0.0
+  },
+  "catchup": {
+    "n_live": 85,
+    "n_fetched": 85,
+    "missed": 0,
+    "missed_ids": [],
+    "extra": 0,
+    "extra_ids": [],
+    "complete": true
+  },
+  "reconnects": [
+    {
+      "at": "2026-11-12T13:23:32.499228+00:00",
+      "down_s": 9.54,
+      "ids_before": 0,
+      "ids_after": 0,
+      "recovered": []
+    }
+  ],
+  "missed_edits_on_refetch": [],
+  "errors": [],
+  "verdict": {
+    "reception": "INVALID - host clock is off by +19431.8s, beyond the 2s tolerance; latency cannot be measured on this host",
+    "clock": "BLOCKED - host clock is not on UTC (Windows Time service is stopped and cannot be started without elevation); end-to-end latency cannot be certified on this host, whatever the sample shows",
+    "catchup": "PASS - catch-up recovered exactly what the stream saw",
+    "duplicates": "PASS - no duplicates",
+    "edits": "PASS - no edit missed on refetch",
+    "errors": "none"
+  }
+}

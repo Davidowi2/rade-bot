@@ -1,0 +1,71 @@
+{
+  "probe": "telegram reception (read-only)",
+  "read_only": true,
+  "started_at": "2026-11-12T13:25:09.415974+00:00",
+  "finished_at": "2026-11-12T13:25:55.454097+00:00",
+  "duration_s": 46.0,
+  "channel": "@XAUUSD_FOREX4",
+  "clock_skew": {
+    "skew_ms": 19429394.9,
+    "source": "https://www.cloudflare.com (HTTP Date header)",
+    "date_header": "Thu, 12 Nov 2026 18:48:59 GMT",
+    "rtt_ms": 7976.3,
+    "granularity_s": 1.0,
+    "accuracy_ms": "~\u00b11000 (header truncation + RTT/2)",
+    "skew_end_ms": 19426306.7,
+    "skew_end_date_header": "Thu, 12 Nov 2026 18:49:37 GMT",
+    "drift_ms": -3088.2,
+    "certifiable": false
+  },
+  "baseline_message_id": 18700,
+  "baseline_forced": true,
+  "restored_events": 85,
+  "counts": {
+    "new": 0,
+    "revisions": 0,
+    "duplicates": 85,
+    "events_recorded": 0,
+    "live_in_window": 0
+  },
+  "latency": {
+    "n": 0,
+    "p50_ms": null,
+    "p95_ms": null,
+    "max_ms": null,
+    "mean_ms": null,
+    "min_ms": null,
+    "skew_ms": 19429394.9,
+    "verdict": "INVALID - host clock is off by +19429.4s, beyond the 2s tolerance; latency cannot be measured on this host",
+    "corrected_latency_ms": []
+  },
+  "dispatch": {
+    "n": 0,
+    "verdict": "insufficient sample",
+    "p50_ms": null,
+    "p95_ms": null,
+    "max_ms": null,
+    "mean_ms": null,
+    "min_ms": null,
+    "skew_ms": 0.0
+  },
+  "catchup": {
+    "n_live": 85,
+    "n_fetched": 85,
+    "missed": 0,
+    "missed_ids": [],
+    "extra": 0,
+    "extra_ids": [],
+    "complete": true
+  },
+  "reconnects": [],
+  "missed_edits_on_refetch": [],
+  "errors": [],
+  "verdict": {
+    "reception": "INVALID - host clock is off by +19429.4s, beyond the 2s tolerance; latency cannot be measured on this host",
+    "clock": "BLOCKED - host clock is not on UTC (Windows Time service is stopped and cannot be started without elevation); end-to-end latency cannot be certified on this host, whatever the sample shows",
+    "catchup": "PASS - catch-up recovered exactly what the stream saw",
+    "duplicates": "85 duplicate(s) seen and suppressed",
+    "edits": "PASS - no edit missed on refetch",
+    "errors": "none"
+  }
+}

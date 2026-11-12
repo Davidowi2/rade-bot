@@ -1,0 +1,26 @@
+{
+  "probe": "static audit (no network)",
+  "channel": "@XAUUSD_FOREX4",
+  "listener_exists": false,
+  "detail": "src/rade/ingestion/telegram/ has client.py, parser.py and backfill.py; scripts/shadow_collect.py polls with iter_messages(min_id=...) rather than subscribing to events. There is no push listener, so live latency has never been measured.",
+  "raw_message_columns": [
+    "channel",
+    "deleted",
+    "edited_at",
+    "id",
+    "ingested_at",
+    "message_id",
+    "posted_at",
+    "raw_json",
+    "text"
+  ],
+  "has_received_at": false,
+  "has_revision": false,
+  "has_edited_at": true,
+  "gaps": [
+    "no push listener: latency cannot be measured from stored data",
+    "no received_at column: ingested_at is set on first insert and is poll-time, not receipt-time",
+    "no revision column: backfill upserts in place, so an edit destroys the previous body",
+    "edit detection is bounded to the last 50 ids (shadow_collect.py), so older edits are invisible - the frozen spec says so explicitly"
+  ]
+}

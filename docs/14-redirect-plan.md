@@ -666,6 +666,12 @@ rather than engineered around.
 | **1m history at scale** | chunked fetch, 14-day windows | no gaps > 1m in the merged series |
 | Render → Supabase | write + read from the hosted service | round trip, latency measured |
 
+**Status of the Telegram rows (2026-11-12).** Catch-up, duplicate suppression
+and edit detection pass on real message ids; fast reception is blocked by a
+host clock 5.4h off true UTC, and would in any case need a four-hour soak in the
+10:00–14:00 UTC window rather than a four-minute probe. See
+`docs/17-observer-step1.md`.
+
 **Boundary, and an explicit authorisation gate.** Every probe above is
 read-only **except one**: the TradeLocker stop-modification check, which
 cannot be verified without placing an order.
@@ -796,7 +802,7 @@ decision rule has been applied.
 | 5 — reconciliation | done: `docs/evidence/legacy-reconciliation.md`; three defects found and fixed |
 | 6 — 1m fetch | **done**: 564,213 bars, 42/42 chunks, 11 holes under 55 min in 19 months |
 | 7 — 1m replay | **done**: train → val → holdout, all four arms |
-| 8 — observer | not started; task 1 is read-only and unblocked |
+| 8 — observer | **in progress**: task 1 read-only Telegram half — catch-up, dedupe and edits pass on real ids; latency BLOCKED by a 5.4h host clock error (`docs/17-observer-step1.md`) |
 | 10 — demo gate | **BLOCKED — and now not recommended to open at all** (§6.2) |
 
 ### 6.2 Outcome of the 1m replay — study CLOSED (2026-11-12)
