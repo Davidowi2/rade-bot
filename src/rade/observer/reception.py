@@ -218,16 +218,37 @@ rather than silently repaired.
 """
 
 
-def latency_summary(values: list[float], skew_ms: float = 0.0) -> dict:
+def latency_summary(values: list[float], skew_ms: float | None = 0.0) -> dict:
     """Percentiles of the observed latency, with an explicit sample size.
 
     ``skew_ms`` is ``true_utc - host_utc``: add it to each raw latency to
-    correct for a host clock that is not on UTC. Refuses to invent a number
-    from an empty sample, and refuses to report percentiles at all when the
-    clock error is larger than the quantity being measured.
+    correct for a host clock that is not on UTC. ``None`` means the offset
+    could not be measured at all, which is **not** the same as zero: an
+    unmeasured offset leaves the numbers uncorrected and the percentiles
+    unreportable.
+
+    Refuses to invent a number from an empty sample, and refuses to report
+    percentiles at all when the clock error is larger than the quantity being
+    measured.
     """
-    clean = sorted(v + skew_ms for v in values if v is not None)
+    clean = sorted(v + (skew_ms or 0.0) for v in values if v is not None)
     n = len(clean)
+
+    if skew_ms is None:
+        return {
+            "n": n,
+            "p50_ms": None,
+            "p95_ms": None,
+            "max_ms": None,
+            "mean_ms": None,
+            "min_ms": None,
+            "skew_ms": None,
+            "verdict": (
+                "UNKNOWN - the clock offset could not be measured, so latency "
+                "is neither corrected nor reportable"
+            ),
+            "uncorrected_latency_ms": [round(v, 1) for v in clean[:20]],
+        }
 
     if abs(skew_ms) > SKEW_TOLERANCE_MS:
         return {

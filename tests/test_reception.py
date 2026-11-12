@@ -329,3 +329,52 @@ def test_a_broken_clock_blocks_the_reception_verdict_even_with_a_sample():
                            "complete": True}, Recorder(), [], [], certifiable=False)
     assert v["clock"].startswith("BLOCKED")
     assert "INVALID" in v["reception"]
+
+
+# --------------------------------------------------------------------------
+# a failed measurement is not a passing measurement
+# --------------------------------------------------------------------------
+
+def test_an_unmeasured_clock_offset_is_not_zero():
+    """A failed Date-header fetch used to return 0.0, which reads as PASS."""
+    lat = latency_summary([900.0, 1100.0], skew_ms=None)
+    assert lat["n"] == 2
+    assert lat["p95_ms"] is None
+    assert lat["skew_ms"] is None
+    assert lat["verdict"].startswith("UNKNOWN")
+    assert lat["uncorrected_latency_ms"] == [900.0, 1100.0]
+
+
+def test_an_unmeasured_clock_does_not_report_the_channel_as_quiet():
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "probe_mod2", root / "scripts" / "verify_telegram_reception.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    lat = latency_summary([], skew_ms=None)
+    assert mod._reception_verdict(lat).startswith("UNKNOWN")
+
+
+def test_an_incomplete_fetch_is_not_a_set_mismatch():
+    """A fetch that broke after 85 messages must not report extra=85."""
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "probe_mod3", root / "scripts" / "verify_telegram_reception.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    diff = catchup_diff({1, 2, 3}, set())
+    diff["fetch_complete"] = False
+    diff["complete"] = False
+    v = mod._verdict(latency_summary([], skew_ms=0.0), diff, Recorder(), [], [],
+                     certifiable=True, clock_measured=True)
+    assert v["catchup"].startswith("INCOMPLETE")
+    assert "extra" not in v["catchup"]
+    assert v["edits"].startswith("inconclusive")

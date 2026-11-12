@@ -56,7 +56,7 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def measure_clock_skew_ms() -> tuple[float, dict]:
+def measure_clock_skew_ms() -> tuple[float | None, dict]:
     """Estimate ``true_utc - host_utc`` from an HTTP ``Date`` header.
 
     Two independent sources disagreed with this host by hours, not seconds, so
@@ -66,6 +66,11 @@ def measure_clock_skew_ms() -> tuple[float, dict]:
     detect a gross error (and to refuse to report latency), but **not** precise
     enough to certify a 2s budget on its own. A production host is expected to
     run NTP; this check exists to catch a host that does not.
+
+    Returns ``None`` when the offset could not be measured. That is deliberate:
+    an unmeasured offset must not be read as zero, which is what a 0.0 return
+    would do - and did, until a run with no network reported "clock PASS" on a
+    host that is five hours out.
     """
     import email.utils
     import time
@@ -79,7 +84,7 @@ def measure_clock_skew_ms() -> tuple[float, dict]:
         t1 = time.time()
         header = resp.headers.get("Date")
         if not header:
-            return 0.0, {**detail, "error": "no Date header"}
+            return None, {**detail, "error": "no Date header"}
         server = email.utils.parsedate_to_datetime(header).timestamp()
         rtt = t1 - t0
         # the Date header is truncated to the whole second, so the true server
@@ -95,7 +100,7 @@ def measure_clock_skew_ms() -> tuple[float, dict]:
             "accuracy_ms": "~±1000 (header truncation + RTT/2)",
         }
     except Exception as exc:  # pragma: no cover - network dependent
-        return 0.0, {**detail, "error": f"{type(exc).__name__}: {exc}"}
+        return None, {**detail, "error": f"{type(exc).__name__}: {exc}"}
 
 
 class Probe:
@@ -103,7 +108,7 @@ class Probe:
 
     def __init__(self, channel: str, seconds: float, reconnect_after: float | None,
                  out_dir: Path, state_from: list[Path] | None = None,
-                 baseline_id: int | None = None):
+                 baseline_id: int | None = None, soak_file: Path | None = None):
         self.channel = channel
         self.seconds = seconds
         self.reconnect_after = reconnect_after
@@ -112,12 +117,29 @@ class Probe:
         self.entity = None
         self.state_from = state_from or []
         self.forced_baseline = baseline_id
+        self.soak_file = soak_file
 
         stamp = utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
         out_dir.mkdir(parents=True, exist_ok=True)
-        self.jsonl_path = out_dir / f"telegram-reception-{stamp}.jsonl"
-        self.json_path = out_dir / f"telegram-reception-{stamp}.json"
-        self._jsonl = self.jsonl_path.open("w", encoding="utf-8")
+        if soak_file is not None:
+            # one rolling file per soak: a restart appends to it and rebuilds
+            # de-duplication state from it, so a 4h listen survives the daily
+            # restarts the free tier imposes
+            self.jsonl_path = soak_file
+            self.json_path = soak_file.with_suffix(".summary.json")
+            self.heartbeat_path = soak_file.with_suffix(".heartbeat.json")
+            # each run also keeps its own summary: a rolling file would
+            # otherwise overwrite the record of a run that failed
+            self.run_json_path = out_dir / f"telegram-soak-run-{stamp}.json"
+            self._jsonl = self.jsonl_path.open("a", encoding="utf-8")
+            if soak_file.exists() and soak_file.stat().st_size:
+                self.state_from = [*self.state_from, soak_file]
+        else:
+            self.jsonl_path = out_dir / f"telegram-reception-{stamp}.jsonl"
+            self.json_path = out_dir / f"telegram-reception-{stamp}.json"
+            self.heartbeat_path = None
+            self.run_json_path = self.json_path
+            self._jsonl = self.jsonl_path.open("w", encoding="utf-8")
 
         self.baseline_id: int | None = None
         self.reconnects: list[dict] = []
@@ -125,6 +147,28 @@ class Probe:
         self.live_window_ids: set[int] = set()
         self._subscribed = False
         self.dispatch_ms: list[float] = []
+        self.last_event_at: datetime | None = None
+
+    def _heartbeat(self, phase: str) -> None:
+        """Prove the listener is alive, not merely that a process exists.
+
+        A soak that dies silently is worse than one that never started: the
+        absence of messages looks like a quiet channel. The heartbeat carries
+        the last event time and the elapsed seconds, so staleness is visible.
+        """
+        if self.heartbeat_path is None:
+            return
+        self.heartbeat_path.write_text(json.dumps({
+            "channel": self.channel,
+            "phase": phase,
+            "beat_at": utcnow().isoformat(),
+            "started_at": self.started_at.isoformat(),
+            "elapsed_s": round((utcnow() - self.started_at).total_seconds(), 1),
+            "last_event_at": self.last_event_at.isoformat() if self.last_event_at else None,
+            "events_this_run": len(self.recorder.events),
+            "duplicates_this_run": self.recorder.duplicates,
+            "connected": bool(self.client and self.client.is_connected()),
+        }, indent=2), encoding="utf-8")
 
     def _restore_state(self) -> int:
         """Load earlier evidence so a restart suppresses rather than duplicates."""
@@ -146,6 +190,7 @@ class Probe:
     def _emit(self, event) -> None:
         self._jsonl.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
         self._jsonl.flush()
+        self.last_event_at = utcnow()
 
     def _note(self, msg: str) -> None:
         print(f"  {msg}", flush=True)
@@ -229,33 +274,54 @@ class Probe:
             return m.id
         return None
 
-    async def _fetch_since(self, since_id: int) -> set[int]:
-        """Fetch every id newer than ``since_id`` and record it as catch-up."""
+    async def _fetch_since(self, since_id: int) -> set[int] | None:
+        """Fetch every id newer than ``since_id`` and record it as catch-up.
+
+        Returns ``None`` when the fetch did not complete. A partial fetch is the
+        dangerous case: it has already recorded some messages into the recorder,
+        so treating its empty id set as "the fetch returned nothing" makes every
+        one of those messages look like a message the history does not contain.
+        That is how a network drop became ``extra=85`` on a run where the fetch
+        had in fact returned 85 messages before it broke.
+        """
         ids: set[int] = set()
-        async for m in self.client.iter_messages(
-            self.entity, min_id=since_id, reverse=True, limit=None
-        ):
-            ids.add(m.id)
-            obs = Observation(
-                channel=self.channel,
-                message_id=m.id,
-                posted_at=m.date,
-                received_at=utcnow(),
-                text=m.message,
-                edited_at=getattr(m, "edit_date", None),
-                source="catchup",
+        try:
+            async for m in self.client.iter_messages(
+                self.entity, min_id=since_id, reverse=True, limit=None
+            ):
+                ids.add(m.id)
+                obs = Observation(
+                    channel=self.channel,
+                    message_id=m.id,
+                    posted_at=m.date,
+                    received_at=utcnow(),
+                    text=m.message,
+                    edited_at=getattr(m, "edit_date", None),
+                    source="catchup",
+                )
+                rec = self.recorder.record(obs)
+                if rec is not None:
+                    self._emit(rec)
+        except Exception as exc:  # pragma: no cover - network dependent
+            self.errors.append(
+                f"catchup fetch: {type(exc).__name__}: {exc} "
+                f"(partial: {len(ids)} id(s) seen before it broke)"
             )
-            rec = self.recorder.record(obs)
-            if rec is not None:
-                self._emit(rec)
+            return None
         return ids
 
     async def run(self) -> dict:
         from rade.ingestion.telegram.client import make_client
 
         started = utcnow()
+        self.started_at = started
+        self._last_beat = started
         skew_ms, skew_detail = measure_clock_skew_ms()
-        self._note(f"host clock skew: {skew_ms / 1000.0:+.1f}s vs true UTC")
+        self._note(
+            f"host clock skew: {skew_ms / 1000.0:+.1f}s vs true UTC"
+            if skew_ms is not None else
+            "host clock skew: UNMEASURED (no network to an independent clock)"
+        )
         restored = self._restore_state()
         self.client = make_client()
 
@@ -268,6 +334,7 @@ class Probe:
         self._note(f"connected; channel={self.channel} baseline_id={self.baseline_id}")
         self._note(f"listening for {self.seconds:.0f}s "
                    f"(read-only: no send, no broker, no orders)")
+        self._heartbeat("listening")
 
         deadline = started + timedelta(seconds=self.seconds)
         reconnect_at = (
@@ -278,6 +345,9 @@ class Probe:
 
         while utcnow() < deadline:
             await asyncio.sleep(0.25)
+            if utcnow() - self._last_beat >= timedelta(seconds=30):
+                self._last_beat = utcnow()
+                self._heartbeat("listening")
             if reconnect_at and not did_reconnect and utcnow() >= reconnect_at:
                 did_reconnect = True
                 await self._reconnect()
@@ -285,12 +355,10 @@ class Probe:
         live_ids = set(self.recorder.ids())
 
         # --- catch-up audit: would a reconnect have recovered everything? ---
-        fetched_ids: set[int] = set()
+        fetched_ids: set[int] | None = set()
         if self.baseline_id is not None:
-            try:
-                fetched_ids = await self._fetch_since(self.baseline_id)
-            except Exception as exc:  # pragma: no cover - network dependent
-                self.errors.append(f"catchup fetch: {type(exc).__name__}: {exc}")
+            fetched_ids = await self._fetch_since(self.baseline_id)
+        fetch_complete = fetched_ids is not None
 
         # --- edit audit: re-fetch the recent window and diff bodies --------
         missed_edits = []
@@ -316,7 +384,11 @@ class Probe:
         # message we already hold into a "missed" one.
         known_before = {i for i in self.recorder.known_ids() if i > floor}
         live_only = {i for i in live_ids if i > floor}
-        diff = catchup_diff(known_before, fetched_ids)
+        diff = catchup_diff(known_before, fetched_ids or set())
+        diff["fetch_complete"] = fetch_complete
+        if not fetch_complete:
+            # the set comparison is meaningless against a fetch that broke
+            diff["complete"] = False
         lat = latency_summary(
             [e.latency_ms for e in self.recorder.events
              if e.source in ("live", "live-edit")],
@@ -326,8 +398,15 @@ class Probe:
         dispatch = latency_summary(self.dispatch_ms, skew_ms=0.0)
 
         skew_end_ms, skew_end_detail = measure_clock_skew_ms()
-        drift_ms = skew_end_ms - skew_ms
-        certifiable = abs(skew_ms) <= SKEW_TOLERANCE_MS and abs(drift_ms) <= SKEW_TOLERANCE_MS
+        if skew_ms is not None and skew_end_ms is not None:
+            drift_ms = skew_end_ms - skew_ms
+        else:
+            drift_ms = None
+        certifiable = (
+            skew_ms is not None
+            and abs(skew_ms) <= SKEW_TOLERANCE_MS
+            and (drift_ms is None or abs(drift_ms) <= SKEW_TOLERANCE_MS)
+        )
 
         summary = {
             "probe": "telegram reception (read-only)",
@@ -337,11 +416,12 @@ class Probe:
             "duration_s": round((utcnow() - started).total_seconds(), 1),
             "channel": self.channel,
             "clock_skew": {
-                "skew_ms": round(skew_ms, 1),
+                "skew_ms": None if skew_ms is None else round(skew_ms, 1),
                 **skew_detail,
-                "skew_end_ms": round(skew_end_ms, 1),
+                "skew_end_ms": None if skew_end_ms is None else round(skew_end_ms, 1),
                 "skew_end_date_header": skew_end_detail.get("date_header"),
-                "drift_ms": round(drift_ms, 1),
+                "drift_ms": None if drift_ms is None else round(drift_ms, 1),
+                "measured": skew_ms is not None,
                 "certifiable": certifiable,
             },
             "baseline_message_id": self.baseline_id,
@@ -361,9 +441,17 @@ class Probe:
             "missed_edits_on_refetch": missed_edits,
             "errors": self.errors,
             "verdict": _verdict(lat, diff, self.recorder, missed_edits, self.errors,
-                                certifiable=certifiable),
+                                certifiable=certifiable,
+                                clock_measured=skew_ms is not None),
         }
+
+        if self.soak_file is not None:
+            summary["soak"] = soak_summary(self.soak_file, self.channel, skew_ms)
+
         self.json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        if self.run_json_path != self.json_path:
+            self.run_json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        self._heartbeat("finished")
         return summary
 
     async def _reconnect(self) -> None:
@@ -396,7 +484,7 @@ class Probe:
 
 def _reception_verdict(lat: dict) -> str:
     """Never print a percentile the clock cannot support."""
-    if str(lat.get("verdict", "")).startswith("INVALID"):
+    if str(lat.get("verdict", "")).startswith(("INVALID", "UNKNOWN")):
         return lat["verdict"]
     if lat["n"] == 0:
         return "inconclusive - channel was quiet, no latency sample"
@@ -406,7 +494,7 @@ def _reception_verdict(lat: dict) -> str:
 
 
 def _verdict(lat: dict, diff: dict, rec: Recorder, missed_edits: list, errors: list,
-             certifiable: bool = True) -> dict:
+             certifiable: bool = True, clock_measured: bool = True) -> dict:
     """Turn the measurements into explicit pass/fail/inconclusive lines.
 
     An empty window must never report PASS. "Zero missed out of zero" is not
@@ -415,14 +503,21 @@ def _verdict(lat: dict, diff: dict, rec: Recorder, missed_edits: list, errors: l
     an unmeasured one.
 
     ``certifiable`` is false when the host clock is too wrong to time a
-    message. That does not stop the probe from testing catch-up, dedupe or
-    edits - those are set comparisons - but it does stop it from claiming the
-    2s reception budget was met.
+    message; ``clock_measured`` is false when the offset could not be measured
+    at all. The second case used to be reported as PASS, because a failed
+    measurement returned 0.0 and 0.0 is inside the tolerance.
+
+    A fetch that did not complete makes the set comparison meaningless, so it
+    is reported as a failure of the audit, not as a mismatch.
     """
     empty = diff["n_live"] == 0 and diff["n_fetched"] == 0
+    fetch_complete = diff.get("fetch_complete", True)
     return {
         "reception": _reception_verdict(lat),
         "clock": (
+            "UNMEASURED - no independent clock was reachable; the offset is "
+            "unknown, not zero"
+            if not clock_measured else
             "PASS - host clock within tolerance of true UTC"
             if certifiable else
             "BLOCKED - host clock is not on UTC (Windows Time service is stopped "
@@ -430,6 +525,9 @@ def _verdict(lat: dict, diff: dict, rec: Recorder, missed_edits: list, errors: l
             "be certified on this host, whatever the sample shows"
         ),
         "catchup": (
+            "INCOMPLETE - the catch-up fetch broke before it finished; the set "
+            "comparison below is not a result"
+            if not fetch_complete else
             "inconclusive - no messages in the window, nothing to reconcile"
             if empty else
             "PASS - catch-up recovered exactly what the stream saw"
@@ -443,6 +541,8 @@ def _verdict(lat: dict, diff: dict, rec: Recorder, missed_edits: list, errors: l
             f"{rec.duplicates} duplicate(s) seen and suppressed"
         ),
         "edits": (
+            "inconclusive - the refetch that detects edits did not complete"
+            if not fetch_complete else
             "inconclusive - no messages in the window to refetch"
             if empty else
             "PASS - no edit missed on refetch" if not missed_edits else
@@ -483,6 +583,63 @@ def audit_only(channel: str) -> dict:
     }
 
 
+def soak_summary(soak_file: Path, channel: str, skew_ms: float) -> dict:
+    """What the soak has accumulated so far, across every run that appended to it.
+
+    The live latency sample is the point: a 4-minute probe cannot produce a p95
+    on a channel that posts once an hour, and a soak that restarts daily must
+    keep counting rather than start over.
+    """
+    from rade.observer.reception import load_events
+
+    events = load_events(soak_file)
+    if not events:
+        return {"n_events": 0, "verdict": "no events recorded yet"}
+
+    live = [e for e in events if e.source in ("live", "live-edit")]
+    catchup = [e for e in events if e.source == "catchup"]
+    lat = latency_summary([e.latency_ms for e in live], skew_ms=skew_ms)
+    posted = [e.posted_at for e in events]
+    return {
+        "file": soak_file.name,
+        "n_events": len(events),
+        "n_live": len(live),
+        "n_catchup": len(catchup),
+        "n_revisions": sum(1 for e in events if e.kind == "revision"),
+        "first_posted_at": min(posted).isoformat(),
+        "last_posted_at": max(posted).isoformat(),
+        "span_hours": round((max(posted) - min(posted)).total_seconds() / 3600.0, 2),
+        "live_latency": lat,
+        "verdict": (
+            "no push-delivered message yet - the live path is still unproven"
+            if not live else
+            f"{len(live)} push-delivered message(s); "
+            + ("p95 " + str(lat["p95_ms"]) + "ms" if lat.get("p95_ms") is not None
+               else "latency " + str(lat.get("verdict")))
+        ),
+    }
+
+
+def print_soak(soak_file: Path, channel: str) -> int:
+    """Report the soak without connecting. Safe to run at any time."""
+    skew_ms, _ = measure_clock_skew_ms()
+    s = soak_summary(soak_file, channel, skew_ms)
+    hb_path = soak_file.with_suffix(".heartbeat.json")
+    hb = json.loads(hb_path.read_text(encoding="utf-8")) if hb_path.exists() else None
+    print(json.dumps(s, indent=2))
+    if hb:
+        beat = datetime.fromisoformat(hb["beat_at"])
+        age = (utcnow() - beat).total_seconds()
+        print(f"\nheartbeat: {hb['phase']} at {hb['beat_at']} "
+              f"({age:.0f}s ago), connected={hb['connected']}, "
+              f"elapsed {hb['elapsed_s']}s")
+        if age > 120:
+            print("  WARNING: no heartbeat for over 2 minutes - the soak is not running")
+    else:
+        print(f"\nno heartbeat file at {hb_path.name}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--channel", default=None)
@@ -498,6 +655,11 @@ def main() -> int:
                          "replay that window through the fetch path. Use with "
                          "--state-from to test dedupe against real history "
                          "without waiting for the channel to speak.")
+    ap.add_argument("--soak", metavar="JSONL", default=None,
+                    help="append to one rolling evidence file and rebuild dedupe "
+                         "state from it, so a multi-hour listen survives restarts")
+    ap.add_argument("--summary-only", action="store_true",
+                    help="report the accumulated soak and exit; does not connect")
     ap.add_argument("--audit-only", action="store_true")
     ap.add_argument("--out-dir", default=str(EVIDENCE))
     args = ap.parse_args()
@@ -517,9 +679,14 @@ def main() -> int:
         print(f"\nwrote {path.relative_to(ROOT)}")
         return 0
 
+    if args.summary_only:
+        soak = Path(args.soak) if args.soak else EVIDENCE / "telegram-soak.jsonl"
+        return print_soak(soak, channel)
+
     probe = Probe(channel, args.seconds, args.reconnect_after, Path(args.out_dir),
                   state_from=[Path(p) for p in args.state_from],
-                  baseline_id=args.baseline_id)
+                  baseline_id=args.baseline_id,
+                  soak_file=Path(args.soak) if args.soak else None)
     print("=" * 70)
     print("TELEGRAM RECEPTION PROBE — READ-ONLY (no send, no broker, no orders)")
     print("=" * 70)
@@ -532,9 +699,19 @@ def main() -> int:
     print(f"dispatch  : {json.dumps(summary['dispatch'])}")
     print(f"catch-up  : {json.dumps(summary['catchup'])}")
     print(f"counts    : {json.dumps(summary['counts'])}")
-    print(f"\nwrote {probe.json_path.relative_to(ROOT)}")
-    print(f"wrote {probe.jsonl_path.relative_to(ROOT)}")
+    if "soak" in summary:
+        print(f"soak      : {json.dumps(summary['soak'])}")
+    print(f"\nwrote {_rel(probe.json_path)}")
+    print(f"wrote {_rel(probe.jsonl_path)}")
     return 0
+
+
+def _rel(path: Path) -> str:
+    """Path relative to the repo when it is inside it, otherwise as given."""
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 if __name__ == "__main__":
