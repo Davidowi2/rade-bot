@@ -1,16 +1,26 @@
 # Paired exit-policy replay — 1-minute results (authoritative)
 
-**Status:** complete. This supersedes the 30-minute result.
+**Status:** **CLOSED** (2026-11-12). This supersedes the 30-minute result and
+is the final word on the retrospective exit-policy study.
 **Date:** 2026-11-11
 **Revised:** 2026-11-12 — statistical wording, the runner population, the
 drawdown label and the reconciliation arithmetic corrected after review. See
-§8 for exactly what changed and why. The numbers did not change; the claims
-about them did.
+§8 for exactly what changed and why. A second revision withdrew the claim that
+the exit policy is "not the binding constraint": the runner's own interval is
+too wide to support it, and the honest conclusion is that no policy was
+selected and the runner's effect is unresolved.
 **Spec:** `docs/14-redirect-plan.md` §3–§4
 **30m sensitivity:** `docs/15-replay-results.md`
 **Reconciliation:** `docs/evidence/legacy-reconciliation.md`
 **Data + input hashes:** `docs/evidence/1m-fetch.json`,
 `docs/evidence/1m-gaps.json`, `docs/evidence/replay-inputs.json`
+
+> **Study closed — do not re-open on this cohort.** The frozen 1m cohort has
+> now been examined during replay development, so it can no longer serve as a
+> clean holdout for a new hypothesis. Any further question — including
+> selection — needs **prospective** data. That is what the observer phase is
+> for. Searching this same sample again for a rule that works would be
+> overfitting with extra steps.
 
 ---
 
@@ -155,12 +165,15 @@ each bar, which this replay does not compute.
 
 The **entire spread across four exit policies is 0.0085 R per setup**, against
 a per-setup R standard deviation of about 1.08 and a paired MDE of 0.007–0.010 R.
-The exit policy moves the result by less than the noise in a single trade.
+The exit choice moves the *average* setup by less than the noise in a single
+trade — which bounds its aggregate effect and says nothing about its effect on
+the 14% of setups where a runner exists (see §6, item 2).
 
 Per split, Policy A: train +0.0281, val −0.0739, test +0.0235. **The
 split-to-split variation (±0.05 R) is six times larger than the largest
-difference between any two arms.** That is the whole statistical story: the
-choice of exit is not what determines this strategy's outcome.
+difference between any two arms.** That is the whole statistical story at the
+cohort level: the choice of exit is not visible above the period-to-period
+noise. It is a statement about resolution, not about mechanism.
 
 Note also that every interval in the table spans zero by a wide margin. The
 four arms are not four different strategies with four different expectancies;
@@ -263,12 +276,17 @@ trade, not whether a resting limit was reached.
    the data is consistent with a true mean anywhere from roughly −0.17 R to
    +0.03 R. Anyone quoting "−0.074 R per setup" as the strategy's expectancy is
    overreading a 380-setup sample.
-2. **The exit policy is not the binding constraint.** Four policies, spanning
-   "close everything at the final target" to "trail half the final tranche",
-   differ by 0.0085 R — less than the period-to-period noise and less than the
-   cost of the entry spread (0.0306 R). The bar-path ambiguity band is now
-   0.05 R, so this comparison is resolvable even though the absolute level is
-   not.
+2. **No exit policy was selected, and the runner's effect is unresolved.**
+   The four arms' full-cohort means span 0.0085 R — smaller than the standard
+   error on any one of them (≈0.024 R), and smaller than the cost of the entry
+   spread (0.0306 R). That bounds how much the exit choice moves the **average
+   setup**. It does **not** bound the runner's effect on the setups where it
+   actually acts: on the 55 runner-eligible validation setups the A→B
+   difference is **+0.0124 R with a 95% interval of [−0.0465, +0.0713]**. An
+   effect of +0.07 R on those 55 setups would be worth about +0.010 R across
+   the cohort — the same size as the spread itself. **So "the exit policy does
+   not matter" is not established**; what is established is that this cohort
+   cannot resolve the difference.
 3. **The 30m result must not be quoted.** Its runner edge (+0.024 R, CIs
    excluding zero on all splits) reverses sign at 1m. Any earlier statement
    derived from 30m — including the plan's planning estimate — is void.

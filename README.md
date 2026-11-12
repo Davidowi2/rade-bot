@@ -23,14 +23,15 @@ and trades like them — slowly, directionally, over days — not scalping.
 > have a **negative mean on the validation split** (−0.060 to −0.074 R per
 > setup), and they differ from each other by only 0.0085 R — less than the
 > entry spread. The runner's apparent edge at 30 minutes reverses sign at
-> 1 minute, so the 30m result is retracted. **The exit policy is not the
-> binding constraint**; the open question is whether *selection* carries an
-> edge.
+> 1 minute, so the 30m result is retracted. **No exit policy was selected, and
+> the runner's effect is unresolved** — its interval on the 55 eligible
+> validation setups is [−0.047, +0.071], wide enough to hide an edge worth
+> having.
 >
 > **Read the intervals, not just the means.** All four validation intervals
 > include zero (e.g. Policy A: −0.074 R, 95% CI [−0.166, +0.018]). The correct
 > claim is that no policy is *demonstrated* to work on 380 setups — not that
-> the strategy is proven to lose. See `docs/16-replay-results-1m.md` §1.
+> the strategy is proven to lose, and not that the exit choice is irrelevant. See `docs/16-replay-results-1m.md` §1.
 >
 > The project is moving toward a separate observer/recovery service. This repo
 > is preserved as the research archive — see

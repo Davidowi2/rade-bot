@@ -200,8 +200,9 @@ excludes zero (+0.0183 [+0.0043, +0.0324] full cohort; +0.0235 [+0.0056,
 runner rule is unchanged.~~
 
 **But selection is not endorsement.** B is the better exit policy on this
-data; neither arm has positive expectancy at 30m. The exit policy is not the
-binding constraint.
+data; neither arm has positive expectancy at 30m. (The stronger claim that the
+exit policy "does not matter" was withdrawn on 2026-11-12 — the runner's own
+interval is too wide to support it. See `docs/16` §6.)
 
 ---
 

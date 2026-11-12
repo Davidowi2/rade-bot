@@ -799,17 +799,23 @@ decision rule has been applied.
 | 8 — observer | not started; task 1 is read-only and unblocked |
 | 10 — demo gate | **BLOCKED — and now not recommended to open at all** (§6.2) |
 
-### 6.2 Outcome of the 1m replay
+### 6.2 Outcome of the 1m replay — study CLOSED (2026-11-12)
 
-`docs/16-replay-results-1m.md` is the authoritative result. Three findings:
+`docs/16-replay-results-1m.md` is the authoritative and **final** result for
+this retrospective study. Four findings:
 
 1. **The 30m conclusion is retracted.** The runner's +0.024 R edge at 30m
    becomes −0.003 R at 1m, with CIs including zero on every split. It was an
    artefact of bar width: 31% of setups were stopped out on their fill bar at
    30m, versus 4.3% at 1m.
-2. **The exit policy is not the binding constraint.** Four policies differ by
-   0.0085 R per setup on the whole cohort — less than the entry spread
-   (0.0306 R) and less than the split-to-split noise (±0.05 R).
+2. **No exit policy was selected, and the runner's effect is unresolved.** The
+   four arms' full-cohort means span 0.0085 R per setup — smaller than the
+   entry spread (0.0306 R) and smaller than the standard error on any one arm
+   (≈0.024 R). That bounds the exit choice's effect on the *average* setup; it
+   does not bound the runner's effect where it acts. On the 55 runner-eligible
+   validation setups the A→B interval is [−0.0465, +0.0713], wide enough to
+   contain an edge worth having. **"The exit policy does not matter" is not an
+   established finding.**
 3. **Every arm's validation mean is negative** (A −0.0739, B −0.0721, C
    −0.0624, CB −0.0598) — **but every 95% interval includes zero**, so this is
    a failure to demonstrate positive expectancy, not a demonstration of loss.
@@ -824,9 +830,14 @@ negative and stop"* — **the decision is to report the negative and stop.**
 stop-modification order remains BLOCKED, and there is now no approved policy to
 place it for.
 
-What remains open is **selection**, not exit: whether any pre-specified rule
-identifies a subset of these setups with positive expectancy. That is a
-different study on the same frozen cohort and the same 1m data.
+**The retrospective study is closed.** It has answered the question it was
+built for — no exit policy is selected — and the frozen cohort has now been
+examined during development, so it cannot serve as a clean holdout again.
+
+Selection is still the open question, but **it must be tested on prospective
+data, not on this cohort**. Re-searching the same sample for a rule that works
+is overfitting wearing a lab coat. That is why the next phase is the read-only
+observer (§5), which generates a genuinely fresh period of signals.
 
 ---
 
@@ -855,15 +866,15 @@ different study on the same frozen cohort and the same 1m data.
    the holdout, and under both ambiguity bounds
    (`docs/15-replay-results.md` §6).
 5. **What the data now establishes.** With 1m bars the ambiguity band is 0.05 R
-   (down from 0.43 R at 30m), so the measurement is resolvable. It establishes
-   that **copying the published setups mechanically does not pay for its
-   costs** on the validation period, under any of four exit policies, and that
-   **the exit policy is not the binding constraint**. It does **not** establish
-   that the trader is unprofitable — the replay cannot see his discretionary
-   filtering, his actual fills, or the setups he never posted. The open
-   question is **selection**: whether any pre-specified rule identifies a
-   subset of these setups with positive expectancy. That is a different study
-   on the same frozen cohort and the same 1m data.
+   (down from 0.43 R at 30m), so the *path* measurement is resolvable. It
+   establishes that **copying the published setups mechanically does not show
+   a positive expectancy** on the validation period under any of four exit
+   policies, with every arm's interval spanning zero. It does **not** establish
+   that the strategy loses, that the trader is unprofitable, or that the exit
+   policy is irrelevant — the runner's own interval on the 55 eligible setups
+   is [−0.0465, +0.0713]. The open question is **selection**: whether any
+   pre-specified rule identifies a subset of these setups with positive
+   expectancy. That is a different study on a **different, prospective** sample.
 6. **The demo gate should not open.** With no approved policy there is nothing
    to demo. The stop-modification probe remains blocked for that reason, not
    only for want of authorisation.
