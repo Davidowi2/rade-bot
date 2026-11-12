@@ -672,6 +672,13 @@ host clock 5.4h off true UTC, and would in any case need a four-hour soak in the
 10:00–14:00 UTC window rather than a four-minute probe. See
 `docs/17-observer-step1.md`.
 
+**Status of the TradeLocker rows (2026-11-12).** Quotes, positions, orders,
+executions, account state and the 18 documented rate limits all return on demo,
+with every write method disarmed and proven to refuse. Latency is **not
+attributable on this host**: a bare TLS connection to any host costs 2–5s and
+one run timed out entirely, so broker timing must be measured on the deployment
+host. See `docs/18-observer-tradelocker.md`.
+
 **Boundary, and an explicit authorisation gate.** Every probe above is
 read-only **except one**: the TradeLocker stop-modification check, which
 cannot be verified without placing an order.
@@ -802,7 +809,7 @@ decision rule has been applied.
 | 5 — reconciliation | done: `docs/evidence/legacy-reconciliation.md`; three defects found and fixed |
 | 6 — 1m fetch | **done**: 564,213 bars, 42/42 chunks, 11 holes under 55 min in 19 months |
 | 7 — 1m replay | **done**: train → val → holdout, all four arms |
-| 8 — observer | **in progress**: task 1 read-only Telegram half — catch-up, dedupe and edits pass on real ids; latency BLOCKED by a 5.4h host clock error (`docs/17-observer-step1.md`) |
+| 8 — observer | **in progress**: task 1 read-only half — Telegram catch-up/dedupe/edits pass on real ids; broker read surface verified with writes disarmed; all latency rows BLOCKED by the host (clock 5.4h out, TLS connect 2–5s). `docs/17-observer-step1.md`, `docs/18-observer-tradelocker.md` |
 | 10 — demo gate | **BLOCKED — and now not recommended to open at all** (§6.2) |
 
 ### 6.2 Outcome of the 1m replay — study CLOSED (2026-11-12)

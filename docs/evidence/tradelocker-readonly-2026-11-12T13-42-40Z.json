@@ -1,0 +1,353 @@
+{
+  "probe": "tradelocker read-only",
+  "read_only": true,
+  "writes_disarmed": [
+    "create_order",
+    "modify_order",
+    "modify_position",
+    "close_position",
+    "close_all_positions",
+    "delete_order",
+    "delete_all_orders",
+    "delete_all_orders_manual"
+  ],
+  "write_guard": {
+    "create_order": "refused",
+    "close_position": "refused",
+    "modify_position": "refused"
+  },
+  "environment": "demo",
+  "base_url": "https://demo.tradelocker.com",
+  "account_id": 2509174,
+  "symbol": "XAUUSD",
+  "instrument_id": 1808,
+  "auth_ms": 44121.0,
+  "calls_ok": 11,
+  "calls_failed": 0,
+  "latency_ms": {
+    "p50": 6755.0,
+    "p95": 15625.7,
+    "max": 16037.6
+  },
+  "reconciliation": {
+    "positions_reported": 0,
+    "executions_reported": 0,
+    "account_state_keys": [
+      "availableFunds",
+      "balance",
+      "blockedBalance",
+      "blockedForStocks",
+      "cashBalance",
+      "initialMarginReq",
+      "maintMarginReq",
+      "marginBeforeWarning",
+      "marginWarningLevel",
+      "openGrossPnL",
+      "openNetPnL",
+      "optionValue",
+      "ordersCount",
+      "positionsCount",
+      "projectedBalance",
+      "stockOrdersReq",
+      "stocksValue",
+      "stopOutLevel",
+      "todayFees",
+      "todayGross",
+      "todayNet",
+      "todayTradesCount",
+      "todayVolume",
+      "unsettledCash",
+      "warningMarginReq",
+      "withdrawalAvailable"
+    ]
+  },
+  "calls": [
+    {
+      "call": "instrument_id(XAUUSD)",
+      "ok": true,
+      "ms": 16037.6,
+      "value": 1808
+    },
+    {
+      "call": "accounts",
+      "ok": true,
+      "ms": 15213.8,
+      "value": [
+        {
+          "id": 2452904,
+          "name": "PLEXY#3a1c76ca-04b1-4b03-a15b-470dd360b1f3#1#1",
+          "currency": "USD",
+          "accNum": 1,
+          "accountBalance": 30.16,
+          "status": "ACTIVE"
+        },
+        {
+          "id": 2509174,
+          "name": "PLEXY#3a1c76ca-04b1-4b03-a15b-470dd360b1f3#2#2",
+          "currency": "USD",
+          "accNum": 2,
+          "accountBalance": 100992.92,
+          "status": "ACTIVE"
+        }
+      ]
+    },
+    {
+      "call": "account_state",
+      "ok": true,
+      "ms": 15044.1,
+      "value": {
+        "balance": 100992.92,
+        "projectedBalance": 100992.92,
+        "availableFunds": 100992.92,
+        "blockedBalance": 0,
+        "cashBalance": 100992.92,
+        "unsettledCash": 0,
+        "withdrawalAvailable": 100992.92,
+        "stocksValue": 0,
+        "optionValue": 0,
+        "initialMarginReq": 0,
+        "maintMarginReq": 0,
+        "marginWarningLevel": 100.0,
+        "blockedForStocks": 0,
+        "stockOrdersReq": 0,
+        "stopOutLevel": 500.0,
+        "warningMarginReq": 0,
+        "marginBeforeWarning": 100992.92,
+        "todayGross": 0,
+        "todayNet": 0,
+        "todayFees": 0,
+        "todayVolume": 0.0,
+        "todayTradesCount": 0,
+        "openGrossPnL": 0,
+        "openNetPnL": 0.0,
+        "positionsCount": 0,
+        "ordersCount": 0
+      }
+    },
+    {
+      "call": "positions",
+      "ok": true,
+      "ms": 5905.9,
+      "value": []
+    },
+    {
+      "call": "orders",
+      "ok": true,
+      "ms": 6994.3,
+      "value": []
+    },
+    {
+      "call": "executions",
+      "ok": true,
+      "ms": 6464.3,
+      "value": []
+    },
+    {
+      "call": "rate_limits",
+      "ok": true,
+      "ms": 0.1,
+      "value": [
+        {
+          "rateLimitType": "GET_ACCOUNTS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_EXECUTIONS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_INSTRUMENTS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_ORDERS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 1
+        },
+        {
+          "rateLimitType": "GET_ORDERS_HISTORY",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 1
+        },
+        {
+          "rateLimitType": "GET_POSITIONS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 1
+        },
+        {
+          "rateLimitType": "GET_ACCOUNTS_STATE",
+          "measure": "SECONDS",
+          "intervalNum": 2,
+          "limit": 4
+        },
+        {
+          "rateLimitType": "GET_INSTRUMENT_DETAILS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_TRADE_SESSIONS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_SESSION_STATUSES",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "PLACE_ORDER",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "MODIFY_ORDER",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "MODIFY_POSITION",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "DAILY_BAR",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "QUOTES",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 10
+        },
+        {
+          "rateLimitType": "DEPTH",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 10
+        },
+        {
+          "rateLimitType": "TRADES",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "QUOTES_HISTORY",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 3
+        }
+      ]
+    },
+    {
+      "call": "instrument_details",
+      "ok": true,
+      "ms": 4669.4,
+      "value": {
+        "name": "XAUUSD",
+        "description": "",
+        "type": "EQUITY_CFD",
+        "tradingExchange": "Plexy",
+        "marketDataExchange": "Metals",
+        "country": null,
+        "isin": "",
+        "industry": null,
+        "sector": null,
+        "marketCap": null,
+        "logoUrl": null,
+        "localizedName": "XAUUSD",
+        "settlementSystem": "Immediate",
+        "tickSize": [
+          {
+            "leftRangeLimit": null,
+            "tickSize": 0.01
+          }
+        ],
+        "tickCost": [
+          {
+            "leftRangeLimit": null,
+            "tickCost": 0.0
+          }
+        ],
+        "baseCurrency": null,
+        "quotingCurrency": "USD",
+        "symbolStatus": "FULLY_OPEN",
+        "lotSize": 100,
+        "lotStep": 0.01,
+        "minLot": 0.01,
+        "maxLot": 50,
+        "bettingCurrency": null,
+        "betStep": null,
+        "betSize": null,
+        "tradeSessionId": 12691,
+        "contractMonth": null,
+        "firstTradeDate": null,
+        "lastTradeDate": null,
+        "noticeDate": null,
+        "settlementDate": null,
+        "deliveryStatus": null,
+        "exerciseStyle": null,
+        "strikePrice": null,
+        "strikeType": null,
+        "tradeSessionStatusId": 21,
+        "barSource": "BID",
+        "hasIntraday": true,
+        "hasDaily": true,
+        "leverage": "31.25",
+        "margin_hedging_type": "fx_cfd"
+      }
+    },
+    {
+      "call": "quote_bid",
+      "ok": true,
+      "ms": 5233.2,
+      "value": 3878.68
+    },
+    {
+      "call": "quote_ask",
+      "ok": true,
+      "ms": 7912.6,
+      "value": 3879.67
+    },
+    {
+      "call": "quotes",
+      "ok": true,
+      "ms": 6755.0,
+      "value": {
+        "ap": 3880.23,
+        "bp": 3879.99,
+        "as": 100.0,
+        "bs": 100.0
+      }
+    }
+  ],
+  "errors": [],
+  "verdict": {
+    "writes": "PASS - all write methods refuse to execute",
+    "auth": "PASS",
+    "quotes": "PASS",
+    "positions": "PASS - position list returned",
+    "executions": "PASS - fills returned",
+    "reconciliation": "not applicable - no open positions",
+    "errors": "none"
+  },
+  "finished_at": "2026-11-12T13:42:40.741685+00:00"
+}

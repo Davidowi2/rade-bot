@@ -1,0 +1,326 @@
+{
+  "probe": "tradelocker read-only",
+  "read_only": true,
+  "writes_disarmed": [
+    "create_order",
+    "modify_order",
+    "modify_position",
+    "close_position",
+    "close_all_positions",
+    "delete_order",
+    "delete_all_orders",
+    "delete_all_orders_manual"
+  ],
+  "write_guard": {
+    "create_order": "refused",
+    "close_position": "refused",
+    "modify_position": "refused"
+  },
+  "environment": "demo",
+  "base_url": "https://demo.tradelocker.com",
+  "account_id": 2509174,
+  "symbol": "XAUUSD",
+  "instrument_id": 1808,
+  "auth_ms": 53907.4,
+  "pace_s": 1.05,
+  "calls_ok": 8,
+  "calls_failed": 3,
+  "latency_ms": {
+    "p50": 10737.2,
+    "p95": 56399.0,
+    "max": 58801.3
+  },
+  "network_baseline": {
+    "host": "demo.tradelocker.com",
+    "dns_ms": 2.5,
+    "tcp_ms": 6782.6,
+    "error": "TimeoutError: _ssl.c:1064: The handshake operation timed out"
+  },
+  "reconciliation": {
+    "positions_reported": 0,
+    "executions_reported": 0,
+    "account_state_keys": [
+      "availableFunds",
+      "balance",
+      "blockedBalance",
+      "blockedForStocks",
+      "cashBalance",
+      "initialMarginReq",
+      "maintMarginReq",
+      "marginBeforeWarning",
+      "marginWarningLevel",
+      "openGrossPnL",
+      "openNetPnL",
+      "optionValue",
+      "ordersCount",
+      "positionsCount",
+      "projectedBalance",
+      "stockOrdersReq",
+      "stocksValue",
+      "stopOutLevel",
+      "todayFees",
+      "todayGross",
+      "todayNet",
+      "todayTradesCount",
+      "todayVolume",
+      "unsettledCash",
+      "warningMarginReq",
+      "withdrawalAvailable"
+    ]
+  },
+  "calls": [
+    {
+      "call": "rate_limits",
+      "ok": true,
+      "ms": 17112.9,
+      "value": [
+        {
+          "rateLimitType": "GET_ACCOUNTS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_EXECUTIONS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_INSTRUMENTS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_ORDERS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 1
+        },
+        {
+          "rateLimitType": "GET_ORDERS_HISTORY",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 1
+        },
+        {
+          "rateLimitType": "GET_POSITIONS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 1
+        },
+        {
+          "rateLimitType": "GET_ACCOUNTS_STATE",
+          "measure": "SECONDS",
+          "intervalNum": 2,
+          "limit": 4
+        },
+        {
+          "rateLimitType": "GET_INSTRUMENT_DETAILS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_TRADE_SESSIONS",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "GET_SESSION_STATUSES",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 2
+        },
+        {
+          "rateLimitType": "PLACE_ORDER",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "MODIFY_ORDER",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "MODIFY_POSITION",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "DAILY_BAR",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "QUOTES",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 10
+        },
+        {
+          "rateLimitType": "DEPTH",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 10
+        },
+        {
+          "rateLimitType": "TRADES",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 5
+        },
+        {
+          "rateLimitType": "QUOTES_HISTORY",
+          "measure": "SECONDS",
+          "intervalNum": 1,
+          "limit": 3
+        }
+      ]
+    },
+    {
+      "call": "instrument_id(XAUUSD)",
+      "ok": true,
+      "ms": 6902.0,
+      "value": 1808
+    },
+    {
+      "call": "accounts",
+      "ok": true,
+      "ms": 8358.6,
+      "value": [
+        {
+          "id": 2452904,
+          "name": "PLEXY#3a1c76ca-04b1-4b03-a15b-470dd360b1f3#1#1",
+          "currency": "USD",
+          "accNum": 1,
+          "accountBalance": 30.16,
+          "status": "ACTIVE"
+        },
+        {
+          "id": 2509174,
+          "name": "PLEXY#3a1c76ca-04b1-4b03-a15b-470dd360b1f3#2#2",
+          "currency": "USD",
+          "accNum": 2,
+          "accountBalance": 100992.92,
+          "status": "ACTIVE"
+        }
+      ]
+    },
+    {
+      "call": "account_state",
+      "ok": true,
+      "ms": 8897.9,
+      "value": {
+        "balance": 100992.92,
+        "projectedBalance": 100992.92,
+        "availableFunds": 100992.92,
+        "blockedBalance": 0,
+        "cashBalance": 100992.92,
+        "unsettledCash": 0,
+        "withdrawalAvailable": 100992.92,
+        "stocksValue": 0,
+        "optionValue": 0,
+        "initialMarginReq": 0,
+        "maintMarginReq": 0,
+        "marginWarningLevel": 100.0,
+        "blockedForStocks": 0,
+        "stockOrdersReq": 0,
+        "stopOutLevel": 500.0,
+        "warningMarginReq": 0,
+        "marginBeforeWarning": 100992.92,
+        "todayGross": 0,
+        "todayNet": 0,
+        "todayFees": 0,
+        "todayVolume": 0.0,
+        "todayTradesCount": 0,
+        "openGrossPnL": 0,
+        "openNetPnL": 0.0,
+        "positionsCount": 0,
+        "ordersCount": 0
+      }
+    },
+    {
+      "call": "positions",
+      "ok": true,
+      "ms": 10737.2,
+      "value": []
+    },
+    {
+      "call": "orders",
+      "ok": true,
+      "ms": 10210.5,
+      "value": []
+    },
+    {
+      "call": "executions",
+      "ok": true,
+      "ms": 5492.2,
+      "value": []
+    },
+    {
+      "call": "instrument_details",
+      "ok": false,
+      "ms": 58801.3,
+      "error": "ReadTimeout: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)"
+    },
+    {
+      "call": "quote_bid",
+      "ok": false,
+      "ms": 49590.2,
+      "error": "SSLError: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Max retries exceeded with url: /backend-api/trade/quotes?ref=py_c&v=0.56.1&tradableInstrumentId=1808&routeId=804883 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1082)')))"
+    },
+    {
+      "call": "quote_ask",
+      "ok": true,
+      "ms": 26724.9,
+      "value": 3880.27
+    },
+    {
+      "call": "quotes",
+      "ok": false,
+      "ms": 53996.7,
+      "error": "ReadTimeout: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)"
+    }
+  ],
+  "errors": [
+    {
+      "call": "instrument_details",
+      "ok": false,
+      "ms": 58801.3,
+      "error": "ReadTimeout: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connectionpool.py\", line 779, in urlopen\n    self._prepare_proxy(conn)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connectionpool.py\", line 1074, in _prepare_proxy\n    conn.connect()\n    ~~~~~~~~~~~~^^\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connection.py\", line 878, in connect\n    wrapped_socket, is_verified = _ssl_wrap_socket_and_match_hostname(\n                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        sock=sock,\n        ^^^^^^^^^^\n    ...<14 lines>...\n        assert_fingerprint=self.assert_fingerprint,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nTimeoutError: _ssl.c:1064: The handshake operation timed out\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\requests\\adapters.py\", line 589, in send\n    resp = conn.urlopen(\n        method=request.method,\n    ...<9 lines>...\n        chunked=chunked,\n    )\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connectionpool.py\", line 847, in urlopen\n    retries = retries.increment(\n        method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]\n    )\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\util\\retry.py\", line 510, in increment\n    raise reraise(type(error), error, _stacktrace)\n          ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nurllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\scripts\\verify_tradelocker_readonly.py\", line 80, in timed\n    value = fn(*a, **kw)\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\tradelocker\\utils.py\", line 160, in wrapper\n    response = cached_func_applied_self(*args, **kwargs)\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\tradelocker\\utils.py\", line 138, in func_with_cache_key\n    return func(*args, **kwargs)\nrequests.exceptions.ReadTimeout: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)\n"
+    },
+    {
+      "call": "quote_bid",
+      "ok": false,
+      "ms": 49590.2,
+      "error": "SSLError: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Max retries exceeded with url: /backend-api/trade/quotes?ref=py_c&v=0.56.1&tradableInstrumentId=1808&routeId=804883 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1082)')))",
+      "traceback": "urllib3.exceptions.SSLError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1082)\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\requests\\adapters.py\", line 589, in send\n    resp = conn.urlopen(\n        method=request.method,\n    ...<9 lines>...\n        chunked=chunked,\n    )\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connectionpool.py\", line 847, in urlopen\n    retries = retries.increment(\n        method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]\n    )\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\util\\retry.py\", line 555, in increment\n    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nurllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Max retries exceeded with url: /backend-api/trade/quotes?ref=py_c&v=0.56.1&tradableInstrumentId=1808&routeId=804883 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1082)')))\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\scripts\\verify_tradelocker_readonly.py\", line 80, in timed\n    value = fn(*a, **kw)\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\tradelocker\\utils.py\", line 92, in wrapper\n    return_value = func(*args, **kwargs)\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\tradelocker\\tradelocker_api.py\", line 1347, in get_latest_bid_price\n    current_quotes: dict[str, float] = cast(dict[str, float], self.get_quotes(instrument_id))\n                                                              ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^\nrequests.exceptions.SSLError: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Max retries exceeded with url: /backend-api/trade/quotes?ref=py_c&v=0.56.1&tradableInstrumentId=1808&routeId=804883 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1082)')))\n"
+    },
+    {
+      "call": "quotes",
+      "ok": false,
+      "ms": 53996.7,
+      "error": "ReadTimeout: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connectionpool.py\", line 779, in urlopen\n    self._prepare_proxy(conn)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connectionpool.py\", line 1074, in _prepare_proxy\n    conn.connect()\n    ~~~~~~~~~~~~^^\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connection.py\", line 878, in connect\n    wrapped_socket, is_verified = _ssl_wrap_socket_and_match_hostname(\n                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        sock=sock,\n        ^^^^^^^^^^\n    ...<14 lines>...\n        assert_fingerprint=self.assert_fingerprint,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nTimeoutError: _ssl.c:1064: The handshake operation timed out\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\requests\\adapters.py\", line 589, in send\n    resp = conn.urlopen(\n        method=request.method,\n    ...<9 lines>...\n        chunked=chunked,\n    )\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\connectionpool.py\", line 847, in urlopen\n    retries = retries.increment(\n        method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]\n    )\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\urllib3\\util\\retry.py\", line 510, in increment\n    raise reraise(type(error), error, _stacktrace)\n          ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nurllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\scripts\\verify_tradelocker_readonly.py\", line 80, in timed\n    value = fn(*a, **kw)\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\tradelocker\\utils.py\", line 92, in wrapper\n    return_value = func(*args, **kwargs)\n  File \"C:\\Users\\owida\\OneDrive\\Documents\\Rade bot\\.venv\\Lib\\site-packages\\tradelocker\\tradelocker_api.py\", line 1370, in get_quotes\n    response_json = self._request(\"get\", route_url, additional_params=additional_params)\nrequests.exceptions.ReadTimeout: HTTPSConnectionPool(host='demo.tradelocker.com', port=443): Read timed out. (read timeout=10)\n"
+    }
+  ],
+  "verdict": {
+    "writes": "PASS - all write methods refuse to execute",
+    "auth": "PASS",
+    "quotes": "FAIL",
+    "positions": "PASS - position list returned",
+    "executions": "PASS - fills returned",
+    "latency": "not measured",
+    "reconciliation": "not applicable - no open positions",
+    "errors": "3 call(s) failed"
+  },
+  "finished_at": "2026-11-12T13:52:27.214705+00:00"
+}
