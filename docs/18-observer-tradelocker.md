@@ -77,25 +77,44 @@ connection:
 | `www.cloudflare.com` | 1,328 ms | 2,991 ms | 5,070 ms |
 | `api.telegram.org` | 285 ms | 1,065 ms | 1,811 ms |
 
-**The link is the problem, not the broker.** A TLS handshake to Cloudflare
-costs five seconds from this host. No API timing taken here can be attributed
-to TradeLocker, and none is: the probe's verdict says
-`INCONCLUSIVE on this host - a bare TLS connect to the broker costs N ms`.
+**A third measurement, twenty minutes later, contradicts the first two:**
+
+| Target | DNS | TCP | TLS |
+|---|---|---|---|
+| `api.telegram.org` | 71 ms | 628 ms | **637 ms** |
+| `demo.tradelocker.com` | 327 ms | 471 ms | **539 ms** |
+| `www.cloudflare.com` | 262 ms | 581 ms | **515 ms** |
+
+So the link is not *slow*, it is **unstable by an order of magnitude within the
+hour**: 0.5s handshakes at best, 6.8s of TCP and a dead TLS handshake at worst.
+That is worse for measurement than a consistently slow link, because a single
+run cannot tell you which regime it was in. The API timings above were taken in
+the bad regime, which is why they say nothing about TradeLocker.
+
+At the best observed 0.5s handshake, this host would still spend a quarter of
+the 2s reception budget on TCP+TLS alone before any API work. That is the
+conclusion that survives all three measurements: **timings taken here are
+link-bound, and must be taken on the deployment host.**
 
 This is the second host-level defect found today, and it is the more serious of
 the two:
 
 1. **Clock** 19,430 s slow (`w32time` stopped) — blocks any end-to-end latency
    measurement.
-2. **Network** seconds per connection, timeouts under load — blocks *any*
-   latency measurement, and would block a live observer outright.
+2. **Network** unstable between 0.5s and 7s per connection, with timeouts under
+   load — blocks any *attributable* latency measurement, and would make a live
+   observer unreliable.
 
 Both are properties of this developer machine. Neither can be fixed from here
 (the time service needs elevation; the network is not ours to fix). The
 consequence for the plan is the same for both: **the observer must be measured
 and run on the deployment host**, which §5.3 of the plan already specifies as
-the Render worker. A desktop that takes 50s to log in to a demo account cannot
-be the evidence for a 2s reception budget or a broker-polling design.
+the Render worker. A desktop whose connection varies by 14× within an hour
+cannot be the evidence for a 2s reception budget or a broker-polling design.
+
+`scripts/preflight.py` now checks both before anything else is measured, so the
+next pass starts by discovering the host's state rather than by producing
+numbers that have to be retracted.
 
 ---
 

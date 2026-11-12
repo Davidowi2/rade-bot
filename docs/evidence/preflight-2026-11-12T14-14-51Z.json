@@ -1,0 +1,70 @@
+{
+  "probe": "preflight",
+  "read_only": true,
+  "host": "Legacy",
+  "finished_at": "2026-11-12T14:14:51.133031+00:00",
+  "checks": [
+    {
+      "check": "environment",
+      "status": "PASS",
+      "detail": "credentials present; broker environment is demo",
+      "value": null,
+      "threshold": null
+    },
+    {
+      "check": "database",
+      "status": "PASS",
+      "detail": "integrity ok; 595,536 bars, 15,027 raw messages",
+      "value": null,
+      "threshold": null
+    },
+    {
+      "check": "clock",
+      "status": "FAIL",
+      "detail": "host is +19427.5s from true UTC - enable NTP (w32time on Windows) before measuring latency",
+      "value": 19427494.8,
+      "threshold": 2000.0
+    },
+    {
+      "check": "network",
+      "status": "WARN",
+      "detail": "worst handshake 1082ms; usable, but latency comparisons will be noisy",
+      "value": 1082.2,
+      "threshold": 2000.0,
+      "hosts": [
+        {
+          "host": "api.telegram.org",
+          "dns_ms": 616.9,
+          "tcp_ms": 1464.6,
+          "tls_ms": 889.0
+        },
+        {
+          "host": "demo.tradelocker.com",
+          "dns_ms": 2.1,
+          "tcp_ms": 991.4,
+          "tls_ms": 557.3
+        },
+        {
+          "host": "www.cloudflare.com",
+          "dns_ms": 1.7,
+          "tcp_ms": 760.3,
+          "tls_ms": 1082.2
+        }
+      ]
+    },
+    {
+      "check": "telegram",
+      "status": "PASS",
+      "detail": "authorised; latest message id 18785",
+      "value": 18785,
+      "threshold": null
+    }
+  ],
+  "failed": [
+    "clock"
+  ],
+  "warned": [
+    "network"
+  ],
+  "verdict": "FAIL - this host must not be used to measure latency or run the observer"
+}

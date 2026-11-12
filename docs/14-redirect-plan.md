@@ -675,9 +675,13 @@ host clock 5.4h off true UTC, and would in any case need a four-hour soak in the
 **Status of the TradeLocker rows (2026-11-12).** Quotes, positions, orders,
 executions, account state and the 18 documented rate limits all return on demo,
 with every write method disarmed and proven to refuse. Latency is **not
-attributable on this host**: a bare TLS connection to any host costs 2–5s and
-one run timed out entirely, so broker timing must be measured on the deployment
+attributable on this host**: a bare TLS connection costs 0.5s at best and timed
+out entirely at worst, so broker timing must be measured on the deployment
 host. See `docs/18-observer-tradelocker.md`.
+
+`scripts/preflight.py` now gates the host before anything is measured — clock,
+network, credentials, database, and optionally the Telegram session and the
+broker login — because both defects were found after the numbers were taken.
 
 **Boundary, and an explicit authorisation gate.** Every probe above is
 read-only **except one**: the TradeLocker stop-modification check, which
