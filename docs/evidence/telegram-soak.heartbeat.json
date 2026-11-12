@@ -1,11 +1,11 @@
 {
   "channel": "@XAUUSD_FOREX4",
   "phase": "finished",
-  "beat_at": "2026-11-12T14:46:57.927391+00:00",
-  "started_at": "2026-11-12T14:46:38.946828+00:00",
-  "elapsed_s": 19.0,
-  "last_event_at": null,
-  "events_this_run": 0,
+  "beat_at": "2026-11-12T18:48:22.062295+00:00",
+  "started_at": "2026-11-12T14:48:20.015050+00:00",
+  "elapsed_s": 14402.0,
+  "last_event_at": "2026-11-12T16:59:05.743132+00:00",
+  "events_this_run": 1,
   "duplicates_this_run": 0,
   "connected": false
 }

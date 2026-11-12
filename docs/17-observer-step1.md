@@ -248,6 +248,30 @@ reconnect took 3.9s and `catch_up()` recovered nothing (nothing was posted),
 and the subsequent fetch returned the same 85 messages as duplicates —
 `new=0, duplicates=85`. The rolling state works.
 
+### The four-hour soak, closed
+
+The soak ran 14:48–18:48Z (4 h 0 m, exit 0) and is the first run in which the
+live path delivered anything: **one message, via the edit handler** (id 18786,
+posted 22:22:24Z and edited 22:22:25Z true time). Final file: 86 events, 1 live,
+85 catch-up, spanning 12.9 h of channel history.
+
+Two things did not go the way the plan hoped, and both are recorded rather than
+smoothed over:
+
+* **No `NewMessage` update fired**, even though the message was posted inside the
+  window. The push path for new messages is still unobserved. One hypothesis —
+  that Telegram collapsed the post and its immediate edit into a single edit
+  update because delivery was ~25 s late — is untested.
+* **The run ended in a network outage.** The client was disconnected when the
+  final catch-up audit ran, so the audit is reported as `INCOMPLETE` instead of a
+  set comparison, and the edit refetch is `inconclusive`. The §8 fixes behaved
+  correctly here: this is the first time they were exercised by a real failure
+  rather than a constructed one.
+
+Latency remains `INVALID` on this host (clock 19,423.8 s behind true UTC). The
+forced reconnect inside the run took 19.3 s and recovered 0 messages, which is
+correct — nothing was posted during it.
+
 ## 8. Three false passes found by a network outage
 
 A run taken while the link was down produced a summary that was wrong in three

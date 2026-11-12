@@ -132,15 +132,28 @@ What that does and does not establish:
 
 * **It establishes** that the live connection receives updates without a fetch.
   The push path is no longer purely theoretical.
-* **It does not establish a latency figure.** Corrected by the measured host
-  clock error (19,429.9 s behind true UTC, from an HTTP `Date` header with a
-  7.5 s round trip), the update arrived about **30 s ± 4 s** after the edit. That
-  is a single sample of an *edit*, and Telegram's edit propagation is not the
-  same path as a new-message push. It neither proves nor disproves the 2 s
-  reception budget.
+* **It does not establish a latency figure.** The probe measured the host clock
+  at 19,423.8 s behind true UTC for that run and corrected the sample to
+  **25,524.8 ms** after the original post — about 24.5 s after the edit itself.
+  The `Date` header is accurate to roughly ±1 s and the round trip was 7.5 s, so
+  the estimate is good to a few seconds, not to the 2 s budget. It is a single
+  sample of an *edit*, and Telegram's edit propagation is not the same path as a
+  new-message push. It neither proves nor disproves the reception budget.
+* **It sharpens the remaining gap.** Message 18786 was posted *inside* the soak
+  window and its edit arrived, but no `NewMessage` update for it ever fired. The
+  new-message push path has therefore still never been observed, and one sample
+  now suggests something specific to investigate: Telegram may have collapsed the
+  post and its edit into a single edit update because delivery was ~25 s late.
+  That is a hypothesis, not a finding.
 * **It does show the clock is still the blocker.** Any end-to-end latency number
   from this host is unmeasurable until `w32time` runs or the measurement moves to
   the deployment host.
+
+The run ended in a network outage that disconnected the client, so the final
+catch-up audit is reported as `INCOMPLETE` rather than as a set comparison — the
+false-pass fixes from `docs/17` §8 holding under a real failure rather than a
+constructed one. Duplicates: PASS (none). Edits: inconclusive (the refetch never
+ran).
 
 I did **not** start a second listener. The soak holds the Telethon session, and
 the CLI refuses to start while `docs/evidence/telegram-soak.heartbeat.json` is

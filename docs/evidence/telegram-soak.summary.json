@@ -1,20 +1,20 @@
 {
   "probe": "telegram reception (read-only)",
   "read_only": true,
-  "started_at": "2026-11-12T14:46:38.946828+00:00",
-  "finished_at": "2026-11-12T14:46:57.889070+00:00",
-  "duration_s": 18.9,
+  "started_at": "2026-11-12T14:48:20.015050+00:00",
+  "finished_at": "2026-11-12T18:48:22.017872+00:00",
+  "duration_s": 14402.0,
   "channel": "@XAUUSD_FOREX4",
   "clock_skew": {
-    "skew_ms": 19423925.6,
+    "skew_ms": 19423805.7,
     "source": "https://www.cloudflare.com (HTTP Date header)",
-    "date_header": "Thu, 12 Nov 2026 20:10:23 GMT",
-    "rtt_ms": 1319.4,
+    "date_header": "Thu, 12 Nov 2026 20:12:04 GMT",
+    "rtt_ms": 1182.7,
     "granularity_s": 1.0,
     "accuracy_ms": "~\u00b11000 (header truncation + RTT/2)",
-    "skew_end_ms": 19426195.4,
-    "skew_end_date_header": "Thu, 12 Nov 2026 20:10:40 GMT",
-    "drift_ms": 2269.8,
+    "skew_end_ms": 19425258.2,
+    "skew_end_date_header": "Fri, 13 Nov 2026 00:12:05 GMT",
+    "drift_ms": 1452.5,
     "measured": true,
     "certifiable": false
   },
@@ -22,22 +22,24 @@
   "baseline_forced": false,
   "restored_events": 85,
   "counts": {
-    "new": 0,
+    "new": 1,
     "revisions": 0,
     "duplicates": 0,
-    "events_recorded": 0,
-    "live_in_window": 0
+    "events_recorded": 1,
+    "live_in_window": 1
   },
   "latency": {
-    "n": 0,
+    "n": 1,
     "p50_ms": null,
     "p95_ms": null,
     "max_ms": null,
     "mean_ms": null,
     "min_ms": null,
-    "skew_ms": 19423925.6,
-    "verdict": "INVALID - host clock is off by +19423.9s, beyond the 2s tolerance; latency cannot be measured on this host",
-    "corrected_latency_ms": []
+    "skew_ms": 19423805.7,
+    "verdict": "INVALID - host clock is off by +19423.8s, beyond the 2s tolerance; latency cannot be measured on this host",
+    "corrected_latency_ms": [
+      25524.8
+    ]
   },
   "dispatch": {
     "n": 0,
@@ -50,46 +52,60 @@
     "skew_ms": 0.0
   },
   "catchup": {
-    "n_live": 0,
+    "n_live": 1,
     "n_fetched": 0,
     "missed": 0,
     "missed_ids": [],
-    "extra": 0,
-    "extra_ids": [],
-    "complete": true,
-    "fetch_complete": true
+    "extra": 1,
+    "extra_ids": [
+      18786
+    ],
+    "complete": false,
+    "fetch_complete": false
   },
-  "reconnects": [],
+  "reconnects": [
+    {
+      "at": "2026-11-12T16:48:20.171231+00:00",
+      "down_s": 19.28,
+      "ids_before": 0,
+      "ids_after": 0,
+      "recovered": []
+    }
+  ],
   "missed_edits_on_refetch": [],
-  "errors": [],
+  "errors": [
+    "catchup fetch: ConnectionError: Cannot send requests while disconnected (partial: 0 id(s) seen before it broke)"
+  ],
   "verdict": {
-    "reception": "INVALID - host clock is off by +19423.9s, beyond the 2s tolerance; latency cannot be measured on this host",
+    "reception": "INVALID - host clock is off by +19423.8s, beyond the 2s tolerance; latency cannot be measured on this host",
     "clock": "BLOCKED - host clock is not on UTC (Windows Time service is stopped and cannot be started without elevation); end-to-end latency cannot be certified on this host, whatever the sample shows",
-    "catchup": "inconclusive - no messages in the window, nothing to reconcile",
-    "duplicates": "inconclusive - no messages in the window",
-    "edits": "inconclusive - no messages in the window to refetch",
-    "errors": "none"
+    "catchup": "INCOMPLETE - the catch-up fetch broke before it finished; the set comparison below is not a result",
+    "duplicates": "PASS - no duplicates",
+    "edits": "inconclusive - the refetch that detects edits did not complete",
+    "errors": "1 error(s)"
   },
   "soak": {
     "file": "telegram-soak.jsonl",
-    "n_events": 85,
-    "n_live": 0,
+    "n_events": 86,
+    "n_live": 1,
     "n_catchup": 85,
     "n_revisions": 0,
     "first_posted_at": "2026-11-12T09:30:17+00:00",
-    "last_posted_at": "2026-11-12T17:15:12+00:00",
-    "span_hours": 7.75,
+    "last_posted_at": "2026-11-12T22:22:24+00:00",
+    "span_hours": 12.87,
     "live_latency": {
-      "n": 0,
+      "n": 1,
       "p50_ms": null,
       "p95_ms": null,
       "max_ms": null,
       "mean_ms": null,
       "min_ms": null,
-      "skew_ms": 19423925.6,
-      "verdict": "INVALID - host clock is off by +19423.9s, beyond the 2s tolerance; latency cannot be measured on this host",
-      "corrected_latency_ms": []
+      "skew_ms": 19423805.7,
+      "verdict": "INVALID - host clock is off by +19423.8s, beyond the 2s tolerance; latency cannot be measured on this host",
+      "corrected_latency_ms": [
+        25524.8
+      ]
     },
-    "verdict": "no push-delivered message yet - the live path is still unproven"
+    "verdict": "1 push-delivered message(s); latency INVALID - host clock is off by +19423.8s, beyond the 2s tolerance; latency cannot be measured on this host"
   }
 }
