@@ -1,8 +1,8 @@
 {
-  "generated_at_utc": "2026-11-12T09:35:33+00:00",
-  "git_commit": "7c399956a6adf593810a8668e23f38beecdadc15",
+  "generated_at_utc": "2026-11-12T09:38:27+00:00",
+  "git_commit": "0cc0ed0e326040dfdc935997d98a362122c15b5f",
   "git_branch": "feature/paired-exit-replay",
-  "git_dirty": true,
+  "git_dirty": false,
   "why": "data/rade.db and the replay JSONs are gitignored, so this file is the only committed proof of which inputs a reported result used. A reviewer can hash their own copy and compare.",
   "commit_semantics": "git_commit is the HEAD at the moment the hashes were computed. Because this file is itself committed afterwards, the manifest in commit N normally records commit N-1; that is expected. Re-run this script at any time to refresh it.",
   "database": {
