@@ -178,8 +178,14 @@ it every fill window.
 | Buggy reader (naive → local) | 1,959 | **+0.0979** | 0.691 | 1.296 |
 | Fixed reader (naive → UTC) | 1,969 | **−0.0507** | 0.580 | 0.887 |
 
-**+0.1486 R per setup.** The bug turned a losing strategy into an apparently
-winning one and silently un-filled 10 setups.
+**+0.1486 R per setup** in the frozen configuration. The bug turned a losing
+strategy into an apparently winning one and silently un-filled 10 setups.
+
+> **This figure is configuration-specific.** Measured in the *reconciliation*
+> configuration (Policy A, breakeven off, cap 15h) the same bug is worth
+> **+0.1804 R** — see §6. Both are correct; the shift changes which bar each
+> limit fills on, so its value depends on the caps and the breakeven rule in
+> force. Do not mix figures across configurations in one table.
 
 Fixed with an explicit `parse_utc()` helper, and pinned by two tests
 (`test_naive_cohort_timestamps_are_read_as_utc`,
@@ -235,14 +241,60 @@ The win rate matches to 0.2pp. The mean R differs by **+0.0388 R** — which is
 the ladder correction (+0.0378 R) plus the 8 tie cases (−0.0002 R), to within
 0.0008 R.
 
-**The entire original +0.2218 R gap is accounted for:**
+**The end-to-end gap is accounted for.** An earlier version of this note
+presented four attributed causes whose sizes summed to +0.2258 R, not to the
++0.2218 R gap it claimed to explain, and whose timezone figure (+0.184 R)
+contradicted the +0.1486 R measured in §4b. Both figures were real — they were
+measured in **different configurations** — but presenting them in one table as
+if additive was wrong.
 
-| Source | Size | Owner |
-|---|---|---|
-| Timezone bug in the cohort reader | **+0.184 R** | replay (fixed) |
-| Missing ladder normalisation | **+0.038 R** | legacy engine (defect) |
-| Gap-across-cap-boundary handling | +0.004 R | replay (fixed) |
-| Stop-vs-cap tie-break | −0.0002 R | intentional (replay is right) |
+The table is therefore replaced with a **measured waterfall**
+(`scripts/decompose_gap.py`), which holds one configuration fixed and toggles
+one cause at a time:
+
+```
+config: Policy A, breakeven off, pre-ladder cap 15h, 30m bars, database path
+```
+
+| Stage | n filled | mean R | Δ |
+|---|---|---|---|
+| 0. archived baseline (`data/s0_report.csv`) | 1,972 | −0.0879 | — |
+| 1. replay, all three defects present | 1,997 | +0.0955 | +0.1834 |
+| 2. + ladder normalisation | 1,994 | +0.1326 | **+0.0371** |
+| 3. + cap-boundary handling | 1,994 | +0.1313 | −0.0012 |
+| 4. + correct timestamps | 1,969 | **−0.0491** | **−0.1804** |
+
+| Check | Result |
+|---|---|
+| Gap closed (stage 4 − baseline) | **+0.0389 R** |
+| Sum of the measured deltas | **+0.0389 R** |
+| Additivity | **exact** |
+
+**Why the two timezone figures differ — and both are right.**
+
+| Configuration | Timezone effect |
+|---|---|
+| Reconciliation config (Policy A, BE off, cap 15h) | **+0.1804 R** |
+| Frozen config (BE on, cap 24h) — §4b | **+0.1486 R** |
+
+The shift moves every `posted_at` by −1h, which changes *which bar* each
+resting limit fills on. How much that is worth depends on the caps and the
+breakeven rule in force, because those determine how long the trade is held
+afterwards. So the effect is genuinely configuration-dependent. The figure that
+belongs in this reconciliation is **+0.1804**, because that is the
+configuration the reconciliation runs in; the +0.1486 belongs to the frozen
+result and should never have been placed in the same table.
+
+**Why the deltas are order-dependent.** Toggling in a different order moves
+weight between stages — the timestamp shift changes which bars are scanned,
+which changes which setups reach the ladder defect. The reproducible claim is
+the **sum**, not any individual figure. Stage 4 landing exactly on the
+independently computed corrected baseline (−0.0491) is the check that matters.
+
+**The residual.** Stage 4 differs from the archived baseline by +0.0389 R,
+which is the ladder defect's true cost measured end-to-end: +0.0371 from the
+waterfall, −0.0012 from the tie-break, and about +0.0030 of interaction between
+the timestamp shift and the other two toggles.
 
 ---
 
@@ -271,11 +323,15 @@ gap the 1-minute fetch exists to close.
 | File | Change |
 |---|---|
 | `scripts/run_paired_replay.py` | `parse_utc()` — naive cohort timestamps are UTC |
-| `src/rade/replay/engine.py` | caps bind at the first bar at/after the boundary; `window_end` means end-of-data; `optimistic_ambiguity` added |
-| `src/rade/replay/assumptions.py` | `optimistic_ambiguity` flag (AC-7 bound) |
-| `src/rade/replay/metrics.py` | FTL-reaching population added to the paired statistics |
+| `src/rade/replay/engine.py` | caps bind at the first bar at/after the boundary; `window_end` means end-of-data; `optimistic_ambiguity` added; `ftl_open` distinguishes a live position from a price touch |
+| `src/rade/replay/assumptions.py` | `optimistic_ambiguity` flag (AC-7 bound); two diagnostic toggles for the waterfall |
+| `src/rade/replay/ladder.py` | `raw_ladder()` — diagnostic-only reproduction of the legacy defect |
+| `src/rade/replay/metrics.py` | FTL populations split into price-touched vs runner-eligible; sampling CI on the mean; drawdown renamed |
 | `scripts/diagnose_legacy_divergence.py` | **new** — the reconciliation, re-runnable |
+| `scripts/decompose_gap.py` | **new** — the measured waterfall in §6 |
+| `scripts/hash_replay_inputs.py` | **new** — SHA-256 of the bar database, cohort and replay outputs |
 | `tests/test_replay_reconciliation.py` | **new** — 5 regression tests pinning the reconciliation |
+| `tests/test_replay_statistics.py` | **new** — 14 tests pinning the review corrections |
 | `tests/test_replay.py` | 3 tests for the optimistic bound; self-sufficient `sys.path` |
 | `cohort/v1/MANIFEST.json` | `timestamp_convention` documented (CSV bytes unchanged) |
 

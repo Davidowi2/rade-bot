@@ -1,0 +1,318 @@
+{
+  "generated_at_utc": "2026-11-12T09:35:33+00:00",
+  "git_commit": "7c399956a6adf593810a8668e23f38beecdadc15",
+  "git_branch": "feature/paired-exit-replay",
+  "git_dirty": true,
+  "why": "data/rade.db and the replay JSONs are gitignored, so this file is the only committed proof of which inputs a reported result used. A reviewer can hash their own copy and compare.",
+  "commit_semantics": "git_commit is the HEAD at the moment the hashes were computed. Because this file is itself committed afterwards, the manifest in commit N normally records commit N-1; that is expected. Re-run this script at any time to refresh it.",
+  "database": {
+    "path": "data\\rade.db",
+    "sha256": "48b91e9c586c975f421a5c81af241593bb7ed0edb59ee0b6058408b2c403b575",
+    "size_bytes": 173207552,
+    "bars": {
+      "1D": {
+        "n": 2991,
+        "min_ts": "2016-01-03 00:00:00.000000",
+        "max_ts": "2026-11-03 00:00:00.000000"
+      },
+      "1H": {
+        "n": 9460,
+        "min_ts": "2025-04-01 00:00:00.000000",
+        "max_ts": "2026-11-03 00:00:00.000000"
+      },
+      "1m": {
+        "n": 564213,
+        "min_ts": "2025-04-01 00:00:00.000000",
+        "max_ts": "2026-11-03 00:00:00.000000"
+      },
+      "30m": {
+        "n": 18872,
+        "min_ts": "2025-04-01 00:00:00.000000",
+        "max_ts": "2026-11-03 00:00:00.000000"
+      }
+    },
+    "labeled_setups": 2382,
+    "raw_telegram_messages": 15027
+  },
+  "cohort": {
+    "labeled_setups.csv": {
+      "sha256": "f23292e6712eff0626f154be491c30ebcf7f69793fdf754e4b6d1ac68219f9cb",
+      "matches_manifest": true,
+      "size_bytes": 375981
+    },
+    "split_test_ids.json": {
+      "sha256": "4afd13de3028a30a44c27cc9f55d9a967a78dd86fd2c533d88afb146eb70656a",
+      "matches_manifest": true,
+      "size_bytes": 3639
+    },
+    "split_train_ids.json": {
+      "sha256": "3244d4377585bf4edf8bf256bd69f9d641101e14b07a9f6dba129edc41be7cbb",
+      "matches_manifest": true,
+      "size_bytes": 9401
+    },
+    "split_val_ids.json": {
+      "sha256": "52a60a91420d23373533c485a7a73a06188c3cc46c03853704676e472e0ee4ca",
+      "matches_manifest": true,
+      "size_bytes": 3455
+    }
+  },
+  "replay_outputs": {
+    "data/replay_1m_train.json": {
+      "present": true,
+      "sha256": "749cdd6454d8914553b643a5398dd13ad8ded3183ab08465e61159702084e12f",
+      "size_bytes": 19028,
+      "resolution": "1m",
+      "split": "train",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": 0.02814276429864138,
+        "B": 0.024933026406143585,
+        "C": 0.03251439182379919,
+        "CB": 0.029481281853957993
+      }
+    },
+    "data/replay_1m_val.json": {
+      "present": true,
+      "sha256": "65e7d5e9baf34c3f520e30eb19fecac4cc956c116d750b209e31a21e6623cbc4",
+      "size_bytes": 18825,
+      "resolution": "1m",
+      "split": "val",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": -0.07389691565578031,
+        "B": -0.07210702917295823,
+        "C": -0.062437538045086914,
+        "CB": -0.059802845817372996
+      }
+    },
+    "data/replay_1m_test.json": {
+      "present": true,
+      "sha256": "84469d7197784a8bb6ffed797c2dceef66d90c149aad36f03e56b33f1de3c135",
+      "size_bytes": 18324,
+      "resolution": "1m",
+      "split": "test",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": 0.02350858341532424,
+        "B": 0.018545890113135056,
+        "C": 0.02608067682511398,
+        "CB": 0.021643425709688958
+      }
+    },
+    "data/replay_1m_all.json": {
+      "present": true,
+      "sha256": "5977866b6a96c1bd1014488be7d50098b6597881885b18ed692d2e4c734805cb",
+      "size_bytes": 19058,
+      "resolution": "1m",
+      "split": "all",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": 0.012843781550834205,
+        "B": 0.009685731162617495,
+        "C": 0.018172691705744107,
+        "CB": 0.015487770723414484
+      }
+    },
+    "data/replay_30m_train.json": {
+      "present": true,
+      "sha256": "cc00395d10b396be23a221f3647750fa6591c7d8e75b689f6bee8f923f4c7ee0",
+      "size_bytes": 18950,
+      "resolution": "30m",
+      "split": "train",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": -0.06891375114222478,
+        "B": -0.043734256930946104,
+        "C": -0.06959993620651277,
+        "CB": -0.04361341876296259
+      }
+    },
+    "data/replay_30m_val.json": {
+      "present": true,
+      "sha256": "fc86ee0d7705105d85d408b9e3d02974cef403da4fb8381db566ab17d0c7d54e",
+      "size_bytes": 13138,
+      "resolution": "30m",
+      "split": "val",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": -0.06422760587461315,
+        "B": -0.04588228763899856,
+        "C": -0.058964273933649634,
+        "CB": -0.039172683768210474
+      }
+    },
+    "data/replay_30m_test.json": {
+      "present": true,
+      "sha256": "e35e7f5cd09daf588f3840bda843d7278289d30f29201b22ca0612ed06436ae2",
+      "size_bytes": 18273,
+      "resolution": "30m",
+      "split": "test",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": 0.004848010217842251,
+        "B": 0.02598766075655615,
+        "C": 0.005557066450154296,
+        "CB": 0.027611852408525563
+      }
+    },
+    "data/replay_30m_all.json": {
+      "present": true,
+      "sha256": "36ec8f32a13764be4122fec5ea7307789e040ac855936a2e64c10fd0661cc05c",
+      "size_bytes": 18970,
+      "resolution": "30m",
+      "split": "all",
+      "assumptions": {
+        "spread": 0.25,
+        "slippage": 0.25,
+        "commission": 0.0,
+        "reference_equity": 100000.0,
+        "risk_pct": 0.005,
+        "fill_window_hours": 24.0,
+        "pre_ladder_cap_hours": 24.0,
+        "runner_cap_hours": 48.0,
+        "trail_multiple_r": 1.0,
+        "runner_fraction_at_ftl": 0.5,
+        "breakeven_after_tp1": true,
+        "seed": 42,
+        "optimistic_ambiguity": false,
+        "normalise_ladder": true,
+        "cap_at_first_bar_after_boundary": true,
+        "breakeven_offset": 0.5
+      },
+      "mean_net_R_by_arm": {
+        "A": -0.05071513236913813,
+        "B": -0.026860197625410462,
+        "C": -0.049492645919640366,
+        "CB": -0.02469795546631635
+      }
+    },
+    "data/gap_decomposition.json": {
+      "present": true,
+      "sha256": "e1bcf7302b5faebaf5b4cfce15cfd0b0e2b5eeda575aaf3f8a1c04754f70efc7",
+      "size_bytes": 1979,
+      "resolution": null,
+      "split": null,
+      "assumptions": {},
+      "mean_net_R_by_arm": {}
+    }
+  }
+}

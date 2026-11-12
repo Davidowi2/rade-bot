@@ -79,3 +79,17 @@ def normalise_ladder(direction: str, entry_price: float, take_profits) -> Ladder
         dropped_duplicate=dropped_duplicate,
         reordered=reordered,
     )
+
+
+def raw_ladder(direction: str, entry_price: float, take_profits) -> LadderInfo:
+    """The ladder exactly as published, with no filtering or sorting.
+
+    **Diagnostic use only.** This reproduces the legacy engine's behaviour
+    (``src/rade/backtest/engine.py``), which indexes ``take_profits`` verbatim
+    and therefore fills a wrong-side target instantly at that target's price.
+    It exists so the reconciliation waterfall in
+    ``docs/evidence/legacy-reconciliation.md`` can be computed rather than
+    asserted. Never use it for a reported result.
+    """
+    original = [float(t) for t in (take_profits or [])]
+    return LadderInfo(levels=list(original), original=original)

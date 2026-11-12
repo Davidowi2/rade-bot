@@ -116,14 +116,23 @@ def report(results_by_policy: dict, label: str, a: Assumptions) -> None:
               f"(unfilled {agg['n_unfilled']}, invalid {agg['n_invalid']})")
         print(f"  mean net R          : {fmt(agg['mean_net_R'])}   "
               f"median {fmt(agg['median_net_R'])}   total {fmt(agg['total_R'], 2)} R")
+        print(f"  sampling CI95       : [{fmt(agg['mean_net_R_ci95'][0])}, "
+              f"{fmt(agg['mean_net_R_ci95'][1])}]   "
+              f"SD {agg['mean_net_R_sd']:.4f}  SE {agg['mean_net_R_se']:.4f}  "
+              f"t {agg['mean_net_R_t']:+.2f}   "
+              f"{'excludes 0' if agg['mean_net_R_excludes_zero'] else 'INCLUDES 0'}")
         print(f"  mean legacy R       : {fmt(agg['mean_legacy_R'])}   "
               f"(difference is the entry cost: "
               f"{fmt(agg['mean_legacy_R'] - agg['mean_net_R'])} R/setup)")
         print(f"  win rate / PF       : {agg['win_rate']:.3f} / {agg['profit_factor']:.3f}")
-        print(f"  max drawdown        : {agg['max_drawdown_R']:.3f} R")
+        print(f"  max drawdown (not a portfolio DD): "
+              f"{agg['max_drawdown_R_closed_by_fill_time']:.3f} R")
         print(f"  hold (mean/median)  : {agg['mean_hours_held']:.2f}h / {agg['median_hours_held']:.2f}h")
         print(f"  exit reasons        : {agg['exit_reasons']}")
-        print(f"  FTL reached (<=48h) : {agg['n_ftl_reached']} of {agg['n_filled']}")
+        print(f"  final target touched: {agg['n_ftl_touched']} of {agg['n_filled']} "
+              f"(price-only, position may be closed)")
+        print(f"  runner-eligible     : {agg['n_ftl_open']} of {agg['n_filled']} "
+              f"(position live at the final target)")
         if agg["flags"]:
             print(f"  flags               : {agg['flags']}")
         print(f"  ladder altered      : {agg['n_ladder_altered']}")
@@ -211,10 +220,15 @@ def main() -> int:
     }
 
     print(f"\n{'=' * 78}\nPAIRED COMPARISONS\n{'=' * 78}")
-    base = "A"
-    for other in policies:
-        if other == base:
-            continue
+    # Every ordered pair, not just A-versus-others: the selection rule asks
+    # whether C beats B, and that comparison has to be in the saved output
+    # rather than computed ad hoc in a separate script.
+    pairs = [
+        (a_, b_)
+        for i, a_ in enumerate(policies)
+        for b_ in policies[i + 1:]
+    ]
+    for base, other in pairs:
         ps = paired_stats(results_by_policy[base], results_by_policy[other], base, other)
         payload["paired"][f"{base}->{other}"] = ps
         print(f"\n--- {base} vs {other} ---")
@@ -225,17 +239,22 @@ def main() -> int:
               f"CI95 [{fmt(ps['ci95'][0])}, {fmt(ps['ci95'][1])}]  "
               f"SD {ps['paired_sd']:.4f}  SE {ps['paired_se']:.4f}  "
               f"MDE {ps['mde_80_full']:.4f} R")
-        print(f"  [FTL-reaching] n {ps['n_ftl']}  diff : {fmt(ps['mean_diff_ftl'])}  "
-              f"CI95 [{fmt(ps['ci95_ftl'][0])}, {fmt(ps['ci95_ftl'][1])}]  "
-              f"MDE {ps['mde_80_ftl']:.4f} R   "
-              f"(differing {ps['n_ftl_differing']}, "
-              f"diff {fmt(ps['mean_diff_ftl_differing'])}, "
-              f"CI95 [{fmt(ps['ci95_ftl_differing'][0])}, {fmt(ps['ci95_ftl_differing'][1])}])")
+        print(f"  [final tgt touched] n {ps['n_ftl_touched']}  diff : "
+              f"{fmt(ps['mean_diff_ftl_touched'])}  "
+              f"CI95 [{fmt(ps['ci95_ftl_touched'][0])}, {fmt(ps['ci95_ftl_touched'][1])}]  "
+              f"MDE {ps['mde_80_ftl_touched']:.4f} R   "
+              f"(differing {ps['n_ftl_touched_differing']}, "
+              f"diff {fmt(ps['mean_diff_ftl_touched_differing'])}, "
+              f"CI95 [{fmt(ps['ci95_ftl_touched_differing'][0])}, "
+              f"{fmt(ps['ci95_ftl_touched_differing'][1])}])")
+        print(f"  [open at final tgt] n {ps['n_ftl_open']}  diff : "
+              f"{fmt(ps['mean_diff_ftl_open'])}  "
+              f"CI95 [{fmt(ps['ci95_ftl_open'][0])}, {fmt(ps['ci95_ftl_open'][1])}]  "
+              f"MDE {ps['mde_80_ftl_open']:.4f} R")
         print(f"  [differing]    n {ps['n_differing']}  diff : "
               f"{fmt(ps['mean_diff_differing'])}  "
               f"CI95 [{fmt(ps['ci95_differing'][0])}, {fmt(ps['ci95_differing'][1])}]  "
               f"MDE {ps['mde_80_differing']:.4f} R")
-        print(f"  verdict             : {ps['verdict']}")
         print(f"  verdict             : {ps['verdict']}")
 
     if args.out:

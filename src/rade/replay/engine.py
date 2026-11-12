@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from typing import Iterable, NamedTuple, Sequence
 
 from .assumptions import Assumptions
-from .ladder import LadderInfo, normalise_ladder
+from .ladder import LadderInfo, normalise_ladder, raw_ladder
 
 POLICY_A = "A"
 """Close the entire remaining position at the final target."""
@@ -127,6 +127,25 @@ class ReplayResult:
     def flag(self, name: str) -> bool:
         return bool(self.flags.get(name, False))
 
+    @property
+    def ftl_open(self) -> bool:
+        """The final target was reached while the position was still live.
+
+        This is the **runner-eligible** population, and it is the honest
+        counterpart to ``flags["ftl_reached"]``. The flag only says price
+        touched the final level at some point inside the horizon, even if the
+        trade had already stopped out; this property requires an actual final-
+        target leg (``ftl`` or ``ftl_half``) to have been filled.
+
+        **A and B share this population exactly**, because they behave
+        identically up to the final target. **C and CB do not** - their
+        TP2-to-TP1 stop move happens *before* the final target, so it stops
+        some trades out that A and B would have carried to the end. On the 1m
+        cohort that is 346 runner-eligible setups for C against 373 for A, and
+        it is why C cannot be described as a runner variant.
+        """
+        return any(lg.kind in ("ftl", "ftl_half") for lg in self.legs)
+
 
 def _flags() -> dict[str, bool]:
     return {
@@ -173,17 +192,23 @@ def ftl_reach(
     a: Assumptions,
     times: Sequence[datetime] | None = None,
 ) -> tuple[bool, float | None]:
-    """Whether the final ladder level is touched inside the runner horizon.
+    """Whether the final ladder level is *touched* inside the runner horizon.
 
-    This is **arm-independent**: it depends on the ladder and the price path,
-    not on the exit policy, so both arms report the same population. It is the
-    population the plan calls the FTL-reaching subset - the setups where the
-    runner has anything to run on.
+    **Price-only, not position-aware.** This answers "did the market trade at
+    or beyond the final target within the horizon", and it deliberately does
+    not check whether the position was still open at that moment. A setup that
+    stopped out an hour after filling still returns True if price later
+    reached the final level.
 
-    Reaching the level is not the same as the ladder *completing*: a trade can
-    be stopped out before the final target is reached, and those setups still
-    count here. That distinction is the one the plan's correction note insists
-    on.
+    It is therefore **arm-independent** (both arms get the same population),
+    and it is an *upper bound* on where a runner could have mattered - not a
+    count of trades that actually had a runner. For the position-aware count
+    use ``aggregate()["n_ftl_open"]``, which counts exits at the final target.
+
+    The distinction matters: on the 1m validation split 295 setups carry this
+    flag, but only 55 Policy A setups actually exited at the final target. The
+    other 240 had already been stopped out or capped before the level was
+    reached.
     """
     if setup.stop_loss is None or not setup.take_profits:
         return False, None
@@ -192,7 +217,11 @@ def ftl_reach(
     if abs(entry - sl) <= 0:
         return False, None
 
-    ladder = normalise_ladder(setup.direction, entry, setup.take_profits)
+    ladder = (
+        normalise_ladder(setup.direction, entry, setup.take_profits)
+        if a.normalise_ladder
+        else raw_ladder(setup.direction, entry, setup.take_profits)
+    )
     if ladder.n == 0:
         return False, None
 
@@ -244,7 +273,11 @@ def replay_setup(
         return ReplayResult(setup_id=setup.setup_id, policy=policy, status="invalid",
                             direction=setup.direction, entry_price=entry, flags=flags)
 
-    ladder: LadderInfo = normalise_ladder(setup.direction, entry, setup.take_profits)
+    ladder: LadderInfo = (
+        normalise_ladder(setup.direction, entry, setup.take_profits)
+        if a.normalise_ladder
+        else raw_ladder(setup.direction, entry, setup.take_profits)
+    )
     if ladder.n == 0:
         return ReplayResult(setup_id=setup.setup_id, policy=policy, status="invalid",
                             direction=setup.direction, entry_price=entry, flags=flags)
@@ -306,7 +339,12 @@ def replay_setup(
     # is: the end of available data, closed at the final bar's close.
     scan_hours = max(a.pre_ladder_cap_hours, a.runner_cap_hours)
     scan_end_ts = fill_bar.ts + timedelta(hours=scan_hours)
-    scan_end_idx = min(bisect.bisect_left(times, scan_end_ts) + 1, len(bars))
+    if a.cap_at_first_bar_after_boundary:
+        scan_end_idx = min(bisect.bisect_left(times, scan_end_ts) + 1, len(bars))
+    else:
+        # Diagnostic only: the original replay bug, which truncated at the bar
+        # before the boundary and so closed a Friday fill at Friday's price.
+        scan_end_idx = min(bisect.bisect_left(times, scan_end_ts), len(bars))
 
     trail_distance = a.trail_multiple_r * risk_price
     tp2_to_tp1 = policy in (POLICY_C, POLICY_CB)

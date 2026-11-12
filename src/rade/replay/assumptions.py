@@ -90,6 +90,25 @@ class Assumptions:
         """
         return self.spread + self.slippage
 
+    # --- diagnostic toggles (reconciliation only, never for a result) ----
+    # These exist so the legacy-divergence waterfall can be *computed* rather
+    # than asserted. Both default to the plan's behaviour. Nothing in a
+    # reported result may set either to False.
+    normalise_ladder: bool = True
+    """Normalise the TP ladder (drop wrong-side targets, sort nearest-first).
+
+    ``False`` reproduces the legacy engine's defect: a target on the wrong
+    side of entry is filled instantly at that target's price.
+    """
+
+    cap_at_first_bar_after_boundary: bool = True
+    """A wall-clock cap binds at the first bar at or after its boundary.
+
+    ``False`` reproduces the original replay bug: truncate at the last bar
+    *before* the boundary, which across a weekend gap closes a Friday fill at
+    a stale Friday price.
+    """
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["breakeven_offset"] = self.breakeven_offset

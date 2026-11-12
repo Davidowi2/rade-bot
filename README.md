@@ -20,11 +20,17 @@ and trades like them — slowly, directionally, over days — not scalping.
 > - [`docs/14-redirect-plan.md`](docs/14-redirect-plan.md) — the frozen spec
 >
 > **The headline:** on 564,213 fetched 1-minute bars, all four exit policies
-> are **negative on the validation split** (−0.060 to −0.074 R per setup), and
-> they differ from each other by only 0.0085 R — less than the entry spread.
-> The runner's apparent edge at 30 minutes reverses sign at 1 minute, so the
-> 30m result is retracted. **The exit policy is not the binding constraint**;
-> the open question is whether *selection* carries an edge.
+> have a **negative mean on the validation split** (−0.060 to −0.074 R per
+> setup), and they differ from each other by only 0.0085 R — less than the
+> entry spread. The runner's apparent edge at 30 minutes reverses sign at
+> 1 minute, so the 30m result is retracted. **The exit policy is not the
+> binding constraint**; the open question is whether *selection* carries an
+> edge.
+>
+> **Read the intervals, not just the means.** All four validation intervals
+> include zero (e.g. Policy A: −0.074 R, 95% CI [−0.166, +0.018]). The correct
+> claim is that no policy is *demonstrated* to work on 380 setups — not that
+> the strategy is proven to lose. See `docs/16-replay-results-1m.md` §1.
 >
 > The project is moving toward a separate observer/recovery service. This repo
 > is preserved as the research archive — see

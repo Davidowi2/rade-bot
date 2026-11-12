@@ -122,10 +122,21 @@ not the exit.
 Three populations are always reported together, because each answers a
 different question and none substitutes for another.
 
+> **Corrected 2026-11-12.** This table originally described the 1,340-setup
+> group as "FTL-reaching — did the runner have anything to run on?". That was
+> wrong: 1,340 setups had the final target's *price* touched at some point,
+> but only **282** had a live position when it was reached. The other 1,058
+> had already stopped out or hit the pre-ladder cap. The group is now called
+> **final target touched** and is presented as an upper bound; the 282-setup
+> group is the **runner-eligible** population, and at 30m it happens to equal
+> the differing subset for A vs B (as it must — see `docs/14-redirect-plan.md`
+> §4.4).
+
 | Population | n (all) | What it answers |
 |---|---|---|
 | **Full cohort** | 1,969 | overall strategy performance |
-| **FTL-reaching** (the final ladder level was touched inside 48h of fill) | 1,340 | did the runner have anything to run on? |
+| **Final target touched** (the final ladder level was traded inside 48h of fill) | 1,340 | did price reach the final target? **Upper bound only** |
+| **Runner-eligible** (a final-target leg filled while the position was live) | **282** | did a runner actually exist? |
 | **Differing** (the arms actually produce different outcomes) | 282 | what is the runner worth? |
 
 Policy A → B, all splits:
@@ -133,8 +144,13 @@ Policy A → B, all splits:
 | Population | n | mean diff (B−A) | CI95 | SD | MDE @80% |
 |---|---|---|---|---|---|
 | Full cohort | 1,969 | **+0.0239** | [+0.0159, +0.0318] | 0.1803 | 0.0114 R |
-| FTL-reaching | 1,340 | **+0.0351** | [+0.0234, +0.0467] | — | 0.0167 R |
+| Final target touched | 1,340 | **+0.0351** | [+0.0234, +0.0467] | — | 0.0167 R |
+| Runner-eligible | 282 | **+0.1666** | [+0.1139, +0.2193] | — | 0.0753 R |
 | Differing | 282 | **+0.1666** | [+0.1139, +0.2193] | — | 0.0753 R |
+
+> All of these figures are 30m, and all of them are **retracted** by the 1m
+> run. At 1m the same comparison is −0.0032 R on the full cohort with a CI
+> spanning zero.
 
 Per split, full cohort: train +0.0252, val +0.0183, test +0.0211 — all with
 CIs excluding zero, and all of the same order.
@@ -163,7 +179,7 @@ actually acts is +0.17 R and is clearly resolved.*
 Pre-registered rule: *"Adopt arm C only if it beats both A and B on
 validation."*
 
-| Split | A → C, full cohort | A → C, FTL-reaching |
+| Split | A → C, full cohort | A → C, final target touched |
 |---|---|---|
 | train | +0.0080 [+0.0001, +0.0160] | −0.0018 [−0.0134, +0.0098] |
 | **val** | **+0.0053 [−0.0031, +0.0136]** | **+0.0037 [−0.0064, +0.0138]** |
@@ -174,10 +190,14 @@ It was never adopted.
 
 ### 3.5 Selection outcome
 
-**Policy B is selected**, on validation only: B beats A there with a CI that
+> **RETRACTED by the 1m run.** The paragraph below was correct for 30m and is
+> wrong for 1m, where B does **not** beat A (CI includes zero). No policy is
+> selected. Kept only to document what the 30m data appeared to show.
+
+~~**Policy B is selected**, on validation only: B beats A there with a CI that
 excludes zero (+0.0183 [+0.0043, +0.0324] full cohort; +0.0235 [+0.0056,
-+0.0414] FTL-reaching), and the pre-registered 1R trail / half-tranche
-runner rule is unchanged.
++0.0414] final-target-touched), and the pre-registered 1R trail / half-tranche
+runner rule is unchanged.~~
 
 **But selection is not endorsement.** B is the better exit policy on this
 data; neither arm has positive expectancy at 30m. The exit policy is not the

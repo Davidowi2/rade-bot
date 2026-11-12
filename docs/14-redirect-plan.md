@@ -381,7 +381,8 @@ Written down **before** running, so the holdout can be touched once.
   ──────
 1,943  in the purged train/val/test split
         of which 1,855 have ≥2 TPs  (policy-relevant)
-        of which 1,340 reach their FTL within 48h of fill
+        of which 1,340 reach the final target PRICE within 48h of fill
+        of which   282 still had a position open when they got there
 ```
 
 > **Correction (2026-11-11).** The FTL figure was previously quoted as 1,235
@@ -392,6 +393,15 @@ Written down **before** running, so the holdout can be touched once.
 > fill, independent of the exit policy** — 701 / 297 / 317 over the split ids
 > (1,315), or 1,340 over the whole filled cohort. The replay's figure
 > supersedes the earlier estimate.
+
+> **Correction (2026-11-12) — that definition counts a price, not a trade.**
+> Touching the final target's *price* does not mean the position was still
+> open: 1,340 setups reach the level, but only **282** have a live position at
+> that moment (163 / 38 / 73 over the splits). The rest had already stopped
+> out or hit the pre-ladder cap. The first figure is an upper bound on where a
+> runner could have mattered; the second is the **runner-eligible** population.
+> Both are now reported separately, and the subgroup is called "final target
+> touched" rather than "FTL-reaching" to stop the two being confused.
 
 > **Correction (2026-11-11).** The replay fills 1,969 of the 1,972, not
 > 1,972. Three setups (`pk=9730/9731/9732`, three copies of one post whose
@@ -503,21 +513,40 @@ paired reporting is **per setup**:
 
 - net R per setup (total P&L ÷ initial risk, one R per setup, not per leg)
 - expectancy in R, profit factor, hit rate
-- max drawdown on the per-setup equity curve
+- **sampling uncertainty of each arm's mean** — SD, SE and a 95% interval.
+  This is required: a negative mean with an interval spanning zero is not
+  evidence of negative expectancy, and must not be reported as if it were.
+- max drawdown on the per-setup equity curve — **an ordering artefact, not a
+  portfolio drawdown**. It sorts completed setups by fill time and accumulates
+  their R; it does not use exit-time cash flows or mark open positions to
+  market. It compares arms fairly because every arm trades the same setups. It
+  must never be used to size or approve an account.
 - average/median hold time, per arm
 - exit-reason mix (`tp1`, `tp2`, `ftl`, `trail_stop`, `sl`, `time_cap`, `window_end`)
 - ambiguous-bar counts, and the optimistic-bound delta
-- **paired difference** (A vs B) on the FTL-reaching subset, with CI
+- **paired difference** (A vs B) on the runner-eligible subset, with CI
 
-**Three populations are reported, always together.** The full cohort, the
-FTL-reaching subset and the differing subset answer different questions and
-none substitutes for another.
+**Four populations are reported, always together.** The full cohort, the
+final-target-touched subset, the runner-eligible subset and the differing
+subset answer different questions and none substitutes for another.
 
-| Population | n (train/val/test) | Answers |
+| Population | n (train/val/test, 1m) | Answers |
 |---|---|---|
-| **Full cohort** | 1,173 / 383 / 387 | overall strategy performance — expectancy, PF, drawdown |
-| **FTL-reaching** (final ladder level touched within 48h of fill) | 701 / 297 / 317 | did the runner have anything to run on? |
-| **Paired subset** (arms differ) | 163 / 38 / 73 | does the runner change outcomes *after* the final target is reached |
+| **Full cohort** | 1,172 / 380 / 382 | overall strategy performance — expectancy, PF, drawdown |
+| **Final target touched** (final ladder level traded within 48h of fill) | 692 / 295 / 299 | did price ever reach the final target? **Upper bound only** — the position may already be closed |
+| **Runner-eligible** (a final-target leg filled while the position was live) | **208 / 55 / 101** | did a runner actually exist? |
+
+*(Runner-eligible counts are for Policy A. C and CB give 197 / 54 / 86: their
+TP2→TP1 stop fires before the final target, so it removes some setups that A
+and B carry to the end. That is one reason C is not a runner variant.)*
+| **Differing subset** (arms differ) | 208 / 55 / 101 | does the runner change the outcome? |
+
+**A structural identity worth knowing.** For A vs B the differing subset is
+*exactly* the runner-eligible subset, per split — 208 / 55 / 101 at 1m. That
+is by construction: A and B are identical until the final target, so they can
+only diverge where a final target was reached with the position live. It makes
+A vs B the one comparison that genuinely tests the runner thesis, and it is a
+useful assertion to check on any future run.
 
 **Correction to an earlier claim in this plan.** A previous draft said the
 holdout had "308 paired setups — that's real power". That was wrong on two
@@ -600,7 +629,9 @@ independently checkable; none is satisfied by assertion.
 | AC-6 | Intra-bar rules implemented | Fill rule, stop-before-target, one-target-per-bar, and open-gap fill all implemented per §3.2; each is unit-tested against a hand-built bar |
 | AC-7 | Ambiguity reported, not tuned away | Published: bars where stop and target were both touched; fill bars that also touched the stop; open-gap fills; and the total R impact of the optimistic bound |
 | AC-8 | **Caps are reported as binding counts** | Number of setups where the 24h pre-ladder cap and the 48h runner cap actually bind, per arm. "None" is a result to verify, not an assumption (§2.4 Gap 3) |
-| AC-9 | Three populations reported | Full cohort **and** FTL-reaching subset **and** differing subset, side by side, for every metric — never one without the others (§4.4) |
+| AC-9 | Four populations reported | Full cohort, final-target-touched, runner-eligible and differing subsets, side by side, for every metric — never one without the others (§4.4). "Final target touched" must never be described as "the position was still open" |
+| AC-9b | Sampling uncertainty reported | Every arm's mean is published with SD, SE and a 95% interval, and a negative point estimate with an interval spanning zero is reported as **not resolved**, never as a measured loss |
+| AC-9c | Drawdown labelled honestly | The drawdown figure is named as a closed-trade ordering artefact and explicitly not a portfolio drawdown (§4.4) |
 | AC-10 | Effect size stated | The paired SD and MDE are recomputed from the 1m validation run and published **before** the holdout is opened; the conclusion is stated relative to that MDE ("below the detectable threshold", not "small but positive") |
 | AC-11 | Selection discipline | The 1R baseline and arm C selection are decided on **validation only**; no parameter is chosen on train; no parameter is changed after the holdout is opened |
 | AC-12 | Determinism | Same seed + same data → byte-identical metrics across two runs; asserted in a test |
@@ -779,9 +810,12 @@ decision rule has been applied.
 2. **The exit policy is not the binding constraint.** Four policies differ by
    0.0085 R per setup on the whole cohort — less than the entry spread
    (0.0306 R) and less than the split-to-split noise (±0.05 R).
-3. **Every arm is negative on validation** (A −0.0739, B −0.0721, C −0.0624,
-   CB −0.0598). Policy B does not beat A; arm C beats A but not B, so the
-   pre-registered rule adopts neither.
+3. **Every arm's validation mean is negative** (A −0.0739, B −0.0721, C
+   −0.0624, CB −0.0598) — **but every 95% interval includes zero**, so this is
+   a failure to demonstrate positive expectancy, not a demonstration of loss.
+   The intervals are in `docs/16` §1 and are required reporting (AC-9b).
+   Policy B does not beat A; arm C beats A but not B, so the pre-registered
+   rule adopts neither.
 
 Per §4.5 step 2 — *"If the baseline does not hold on validation, report the
 negative and stop"* — **the decision is to report the negative and stop.**

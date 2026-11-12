@@ -54,6 +54,35 @@ def max_drawdown(cumulative: Sequence[float]) -> float:
     return worst
 
 
+def mean_ci(xs: Sequence[float]) -> dict:
+    """Sampling uncertainty of the *mean* of one arm.
+
+    This is a different quantity from the pessimistic/optimistic ambiguity band.
+    The band measures uncertainty about the price path *inside* a bar; this
+    measures uncertainty about the population mean given the sample size. Both
+    are real and neither absorbs the other.
+    """
+    n = len(xs)
+    if n < 2:
+        m = _mean(xs)
+        return {"n": n, "mean": m, "sd": 0.0, "se": 0.0, "ci95": [m, m],
+                "t_stat": 0.0, "excludes_zero": False}
+    m = _mean(xs)
+    sd = _stdev(xs)
+    se = sd / math.sqrt(n)
+    half = Z_ALPHA_05 * se
+    lo, hi = m - half, m + half
+    return {
+        "n": n,
+        "mean": m,
+        "sd": sd,
+        "se": se,
+        "ci95": [lo, hi],
+        "t_stat": (m / se) if se else 0.0,
+        "excludes_zero": (lo > 0) or (hi < 0),
+    }
+
+
 def aggregate(results: Sequence[ReplayResult]) -> dict:
     """Summarise one arm over one split."""
     filled = [r for r in results if r.status == "filled"]
@@ -79,18 +108,34 @@ def aggregate(results: Sequence[ReplayResult]) -> dict:
             if v:
                 flag_counts[k] += 1
 
+    ci = mean_ci(Rs)
+
     return {
         "n_total": len(results),
         "n_filled": len(filled),
         "n_unfilled": sum(1 for r in results if r.status == "unfilled"),
         "n_invalid": sum(1 for r in results if r.status == "invalid"),
-        "mean_net_R": _mean(Rs),
+        "mean_net_R": ci["mean"],
         "median_net_R": _median(Rs),
         "mean_legacy_R": _mean(legacy),
+        # --- sampling uncertainty of the mean (not the bar-path band) ----
+        "mean_net_R_sd": ci["sd"],
+        "mean_net_R_se": ci["se"],
+        "mean_net_R_ci95": ci["ci95"],
+        "mean_net_R_t": ci["t_stat"],
+        "mean_net_R_excludes_zero": ci["excludes_zero"],
         "total_R": sum(Rs),
         "win_rate": len(wins) / len(filled) if filled else 0.0,
         "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else float("inf") if gross_win > 0 else 0.0,
-        "max_drawdown_R": max_drawdown(curve),
+        # NOTE: this is NOT a portfolio drawdown - see drawdown_note.
+        "max_drawdown_R_closed_by_fill_time": max_drawdown(curve),
+        "drawdown_note": (
+            "Ordering artefact, not a portfolio drawdown: completed setups are "
+            "sorted by fill time and their net R accumulated in that order. It "
+            "ignores exit-time cash flows, concurrent exposure and mark-to-market "
+            "on open positions, so it must not be used to size or approve a real "
+            "account."
+        ),
         "mean_hours_held": _mean([r.hours_held for r in filled]),
         "median_hours_held": _median([r.hours_held for r in filled]),
         "total_net_pnl": sum(r.net_pnl for r in filled),
@@ -99,7 +144,13 @@ def aggregate(results: Sequence[ReplayResult]) -> dict:
         "exit_reasons": dict(reasons),
         "flags": dict(flag_counts),
         "n_ladder_altered": sum(1 for r in filled if r.flag("ladder_altered")),
-        "n_ftl_reached": sum(1 for r in filled if r.flag("ftl_reached")),
+        # --- the two FTL counts, which are NOT the same thing -----------
+        # (a) price-only and arm-independent: the final level was touched
+        #     inside the runner horizon, whether or not the position was open.
+        "n_ftl_touched": sum(1 for r in filled if r.flag("ftl_reached")),
+        # (b) position-aware: a final-target leg actually filled, so the
+        #     position was live at the final level and a runner existed.
+        "n_ftl_open": sum(1 for r in filled if r.ftl_open),
     }
 
 
@@ -136,16 +187,20 @@ def paired_stats(
     Three populations are reported, because each answers a different question
     and none substitutes for another (AC-9, AC-10):
 
-    * **full cohort** - overall strategy performance;
-    * **FTL-reaching subset** - the setups where the final target level was
-      touched inside the runner horizon, i.e. the setups where a runner had
-      anything to run on. This is arm-independent;
+    * **full cohort** - overall strategy performance. This is the useful
+      policy comparison.
+    * **final-target-touched subset** - the setups where the final target
+      *price* was touched inside the runner horizon, **regardless of whether
+      the position was still open**. It is arm-independent and it is an upper
+      bound on where a runner could have mattered, not a count of trades that
+      actually had a runner. Many of these setups had already stopped out.
     * **differing subset** - the setups where the arms actually produce
-      different outcomes.
+      different outcomes. This is the only population in which a runner
+      demonstrably existed.
 
-    Reaching the FTL *level* is not the same as the arms differing: a trade
-    can be stopped out before the final target is reached, and those setups
-    count in the FTL population but not in the differing one.
+    Do not describe the second population as "trades that reached the final
+    target with a live position". For that, use ``aggregate()["n_ftl_open"]``,
+    which counts exits *at* the final target and is arm-specific.
     """
     by_id_a = {r.setup_id: r for r in a_results if r.status == "filled"}
     by_id_b = {r.setup_id: r for r in b_results if r.status == "filled"}
@@ -168,12 +223,18 @@ def paired_stats(
     se_dd = sd_dd / math.sqrt(n_d) if n_d else 0.0
     mde_dd = MDE_MULTIPLIER * se_dd
 
-    # the FTL-reaching population (arm-independent)
+    # the final-target-touched population (price-only, arm-independent)
     ftl_ids = [i for i in shared if by_id_a[i].flag("ftl_reached")]
     ftl_diffs = [by_id_b[i].net_R - by_id_a[i].net_R for i in ftl_ids]
     ftl_stats = _subset_stats(ftl_diffs)
     ftl_differing = [d for d in ftl_diffs if abs(d) > 1e-12]
     ftl_diff_stats = _subset_stats(ftl_differing)
+
+    # the position-aware population: arm A was still open when the final
+    # level was reached, so a runner genuinely had something to run on
+    open_ids = [i for i in shared if by_id_a[i].ftl_open]
+    open_diffs = [by_id_b[i].net_R - by_id_a[i].net_R for i in open_ids]
+    open_stats = _subset_stats(open_diffs)
 
     mean_a = _mean([by_id_a[i].net_R for i in shared])
     mean_b = _mean([by_id_b[i].net_R for i in shared])
@@ -212,16 +273,23 @@ def paired_stats(
         "ci95_differing": [mean_dd - Z_ALPHA_05 * se_dd, mean_dd + Z_ALPHA_05 * se_dd],
         "mde_80_differing": mde_dd,
         "verdict": verdict,
-        # --- the FTL-reaching population ---
-        "n_ftl": ftl_stats["n"],
-        "mean_diff_ftl": ftl_stats["mean_diff"],
-        "paired_sd_ftl": ftl_stats["paired_sd"],
-        "paired_se_ftl": ftl_stats["paired_se"],
-        "ci95_ftl": ftl_stats["ci95"],
-        "mde_80_ftl": ftl_stats["mde_80"],
-        "n_ftl_differing": ftl_diff_stats["n"],
-        "mean_diff_ftl_differing": ftl_diff_stats["mean_diff"],
-        "ci95_ftl_differing": ftl_diff_stats["ci95"],
-        "mde_80_ftl_differing": ftl_diff_stats["mde_80"],
-        "verdict_ftl": ftl_verdict,
+        # --- the final-target-touched population (price-only) ---
+        "n_ftl_touched": ftl_stats["n"],
+        "mean_diff_ftl_touched": ftl_stats["mean_diff"],
+        "paired_sd_ftl_touched": ftl_stats["paired_sd"],
+        "paired_se_ftl_touched": ftl_stats["paired_se"],
+        "ci95_ftl_touched": ftl_stats["ci95"],
+        "mde_80_ftl_touched": ftl_stats["mde_80"],
+        "n_ftl_touched_differing": ftl_diff_stats["n"],
+        "mean_diff_ftl_touched_differing": ftl_diff_stats["mean_diff"],
+        "ci95_ftl_touched_differing": ftl_diff_stats["ci95"],
+        "mde_80_ftl_touched_differing": ftl_diff_stats["mde_80"],
+        "verdict_ftl_touched": ftl_verdict,
+        # --- the position-aware population (A was still open at the final level) ---
+        "n_ftl_open": open_stats["n"],
+        "mean_diff_ftl_open": open_stats["mean_diff"],
+        "paired_sd_ftl_open": open_stats["paired_sd"],
+        "paired_se_ftl_open": open_stats["paired_se"],
+        "ci95_ftl_open": open_stats["ci95"],
+        "mde_80_ftl_open": open_stats["mde_80"],
     }
