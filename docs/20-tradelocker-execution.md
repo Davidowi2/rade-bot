@@ -768,6 +768,11 @@ The day is UTC. The first evaluation after midnight opens the new day at
 whatever the equity is then; the peak is *not* reset, because drawdown is a
 property of the account and not of the calendar.
 
+Both adapters implement these rows — SQLite locally, PostgREST on the hosted
+service — and both are tested, because the hosted one is the only store that
+can actually lose state. A wrong upsert there is a breaker that resets on every
+restart and a pause switch that silently resumes.
+
 ### 11.3 Equity is read for every order
 
 `RiskConfig` now takes an `equity_provider`. With the executor running it is

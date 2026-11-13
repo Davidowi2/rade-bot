@@ -53,6 +53,10 @@ class FakePostgrest:
         self.events: dict[str, dict] = {}
         self.notifications: dict[tuple[str, str], dict] = {}
         self.cursors: dict[str, dict] = {}
+        self.trades: list[dict] = []
+        #: Single-row tables, keyed by table name, mirroring the `id = 1` check
+        #: the migration enforces: a second write updates, never adds.
+        self.singletons: dict[str, dict] = {}
         self.calls: list[tuple[str, str, dict]] = []
 
     def request(self, method, path, *, params=None, json_body=None, prefer=None):
@@ -131,6 +135,42 @@ class FakePostgrest:
         if path == "mirror_cursor" and method == "POST":
             self.cursors[json_body["channel"]] = dict(json_body)
             return 201, [self.cursors[json_body["channel"]]]
+
+        if path in {"mirror_risk_state", "mirror_control"}:
+            if method == "GET":
+                row = self.singletons.get(path)
+                if row is None:
+                    return 200, []
+                wanted = params.get("select", "*")
+                if wanted == "*":
+                    return 200, [dict(row)]
+                fields = [f for f in wanted.split(",") if f]
+                return 200, [{f: row.get(f) for f in fields}]
+            if method == "POST":
+                # `id` is the primary key and the adapter always sends 1, so a
+                # merge is an update in place. A second row would be a bug.
+                assert json_body["id"] == 1
+                assert params.get("on_conflict") == "id"
+                row = dict(self.singletons.get(path) or {})
+                row.update(json_body)
+                self.singletons[path] = row
+                return 201, []
+            raise AssertionError(f"unexpected method {method} on {path}")
+
+        if path == "mirror_trades" and method == "GET":
+            rows = [dict(r) for r in self.trades]
+            if "text_sha256" in params:
+                want = params["text_sha256"].split("eq.", 1)[1]
+                rows = [r for r in rows if r.get("text_sha256") == want]
+            if "trade_id" in params and params["trade_id"].startswith("neq."):
+                unwanted = params["trade_id"].split("neq.", 1)[1]
+                rows = [r for r in rows if r.get("trade_id") != unwanted]
+            if "created_at" in params and params["created_at"].startswith("gte."):
+                floor = params["created_at"].split("gte.", 1)[1]
+                rows = [r for r in rows if r.get("created_at", "") >= floor]
+            rows.sort(key=lambda r: r.get("created_at", ""))
+            limit = int(params.get("limit", len(rows) or 1))
+            return 200, rows[:limit]
 
         raise AssertionError(f"unexpected call {method} {path} {params}")
 
@@ -439,6 +479,118 @@ def test_the_supabase_cursor_is_stored_and_read_back():
     assert ledger.load_cursor("@source") == 0
     ledger.save_cursor("@source", 4242, source="latest:4242")
     assert ledger.load_cursor("@source") == 4242
+
+
+# --------------------------------------------------------------------------
+# The pre-trade risk state on the hosted store.
+#
+# These matter more than the SQLite equivalents: the hosted service is the only
+# one that can lose its state, so a wrong upsert here is a breaker that resets
+# itself on every restart and a pause switch that silently resumes.
+# --------------------------------------------------------------------------
+
+def test_supabase_risk_state_is_absent_until_it_is_written():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    assert ledger.risk_state() is None
+
+
+def test_supabase_risk_state_is_one_row_that_updates_in_place():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+
+    ledger.save_risk_state(day="2026-11-13", day_start_equity=10_000.0,
+                           peak_equity=10_000.0)
+    ledger.save_risk_state(day="2026-11-13", day_start_equity=10_000.0,
+                           peak_equity=10_400.0)
+
+    assert ledger.risk_state() == {"day": "2026-11-13",
+                                   "day_start_equity": 10_000.0,
+                                   "peak_equity": 10_400.0}
+    # One row, not two: the id = 1 check in the migration is the only thing
+    # stopping a second writer from creating a row the service never reads.
+    assert len(fake.singletons) == 1
+    writes = [call for call in fake.calls if call[1] == "mirror_risk_state"
+              and call[0] == "POST"]
+    assert all(call[2].get("on_conflict") == "id" for call in writes)
+    assert len(writes) == 2
+
+
+def test_supabase_control_reports_not_paused_before_it_is_set():
+    """No row is a known absence: the switch has never been thrown."""
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    assert ledger.control() is None
+
+
+def test_supabase_pause_round_trips_through_the_boolean_column():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+
+    ledger.set_paused(paused=True, reason="news at 14:00", changed_by="operator")
+    paused = ledger.control()
+    assert paused["paused"] is True
+    assert paused["reason"] == "news at 14:00"
+    assert paused["changed_by"] == "operator"
+    # The column is a Postgres boolean, not an integer, so the adapter must
+    # send true/false. Sending 1 would be stored as true but is a different
+    # type in the payload, and PostgREST rejects the row.
+    assert fake.singletons["mirror_control"]["execution_paused"] is True
+
+    ledger.set_paused(paused=False, reason="resumed", changed_by="operator")
+    assert ledger.control()["paused"] is False
+    assert fake.singletons["mirror_control"]["execution_paused"] is False
+
+
+def test_supabase_finds_a_repeat_of_the_same_text():
+    """The channel's double-post, seen through the hosted store."""
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    fake.trades = [
+        {"trade_id": "t-old", "message_id": 18788, "text_sha256": "abc",
+         "created_at": "2026-11-13T02:37:00+00:00", "state": "open"},
+        {"trade_id": "t-new", "message_id": 18789, "text_sha256": "abc",
+         "created_at": "2026-11-13T02:37:01+00:00", "state": "blocked"},
+        {"trade_id": "t-other", "message_id": 18790, "text_sha256": "def",
+         "created_at": "2026-11-13T02:40:00+00:00", "state": "open"},
+    ]
+
+    found = ledger.same_text_recently("abc", since="2026-11-13T00:00:00+00:00")
+
+    # Oldest first, so the trade named is the one that actually exists.
+    assert found["trade_id"] == "t-old"
+    assert found["status"] == "open"
+    assert found["message_id"] == 18788
+
+
+def test_supabase_excludes_the_trade_being_checked():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    fake.trades = [
+        {"trade_id": "t-old", "message_id": 18788, "text_sha256": "abc",
+         "created_at": "2026-11-13T02:37:00+00:00", "state": "open"},
+    ]
+    assert ledger.same_text_recently(
+        "abc", since="2026-11-13T00:00:00+00:00", exclude_trade_id="t-old") is None
+
+
+def test_supabase_repeat_lookup_ignores_rows_before_the_window():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    fake.trades = [
+        {"trade_id": "t-old", "message_id": 18760, "text_sha256": "abc",
+         "created_at": "2026-11-12T13:25:00+00:00", "state": "closed"},
+    ]
+    assert ledger.same_text_recently(
+        "abc", since="2026-11-13T00:00:00+00:00") is None
+
+
+def test_supabase_repeat_lookup_does_not_match_an_empty_hash():
+    """Every row written before the column existed carries ''; none may match."""
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    assert ledger.same_text_recently("", since="2026-11-13T00:00:00+00:00") is None
+    assert fake.calls == [], "an empty hash must not even be queried"
 
 
 def test_botfather_notifier_scrubs_the_token_from_errors():
