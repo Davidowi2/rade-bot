@@ -190,14 +190,16 @@ fresh, precisely because two readers of one session corrupt each other.
 
 ### Render
 
-Verified against `https://render.com/docs/free` (fetched 2026-11-12):
+Verified against `https://render.com/docs/free` (fetched 2026-11-12, and
+re-fetched 2026-11-13 to confirm it independently):
 
 | Fact | Consequence for this design |
 |---|---|
-| "Free instances" exist for Web Service, Postgres and Key Value; "Other service types don't support Free instances" | **No free background worker and no free cron job.** The listener runs as a thread inside the web service (`MIRROR_RUN_LISTENER=1`). |
-| A free web service "spins down … that goes 15 minutes without receiving any inbound traffic"; spinning back up "takes about one minute" | An external monitor pinging `/healthz` every few minutes prevents most spin-downs, but this is not a guarantee: Render "might restart a Free web service at any time". |
-| The filesystem is ephemeral; changes are "lost every time the service redeploys, restarts, or spins down" | Supabase is the store, and the listener cursor is recovered from the database (`Runtime.restore_cursor`) rather than from a file. |
-| 750 free instance hours per workspace per month | One always-on service fits; a second one does not. |
+| "You can deploy certain Render service types free of charge: Web services…, Render Postgres databases, Render Key Value instances"; "Other service types don't support Free instances"; free web services don't support "Running one-off jobs" | **No free background worker and no free cron job.** The listener runs as a thread inside the web service (`MIRROR_RUN_LISTENER=1`). |
+| "Render **spins down** a Free web service that goes 15 minutes without receiving any inbound traffic… This process takes about one minute." | An external monitor pinging `/healthz` every few minutes prevents most spin-downs, but this is not a guarantee: "Render might restart a Free web service at any time." |
+| "any changes to your web service's filesystem (uploaded images, **local SQLite databases**, etc.) are *lost* every time the service redeploys, restarts, or *spins down*" | This is precisely the store fix in §9.2: hosted mode refuses to fall back to SQLite, and the cursor lives in the database. |
+| "Render grants **750 Free instance hours** to each workspace per calendar month" | One always-on service fits; a second one does not. |
+| "Render may suspend a Free web service that initiates an uncommonly high volume of traffic over the public internet. Examples of service-initiated traffic include: **Accessing an external database**; **Invoking external APIs**." | A risk this design cannot engineer away: the mirror polls Supabase and Telegram, which is exactly the pattern Render names. A suspension would stop the intake until the service is restored or moved to a paid plan. |
 
 **Therefore: this is not a 24/7 listener and nothing here claims it is.** The
 design tolerates restarts instead of pretending to prevent them: on restart the
