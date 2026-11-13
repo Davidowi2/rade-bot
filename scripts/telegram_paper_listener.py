@@ -107,6 +107,8 @@ def run_dry(args, instrument: InstrumentSpec, risk: RiskConfig, ledger) -> int:
         "mode": "dry_run",
         "source": "stored Telegram history (not a live push)",
         "quote_source": "synthetic, at the published entry",
+        "equity_source": "supplied" if args.equity is not None else "synthetic 10,000, sizing only",
+        "contract_units_confirmed": bool(instrument.units_confirmed),
         **result.to_dict(),
     }, indent=2))
     return 0
@@ -202,10 +204,9 @@ def main() -> int:
         return 3
 
     if args.dry_run:
-        if args.contract_units_per_lot is None:
-            print("--contract-units-per-lot is required (the size is never guessed)")
-            return 2
-        instrument = InstrumentSpec("XAUUSD", args.contract_units_per_lot, 0.01, 0.01, 50.0,
+        units = (args.contract_units_per_lot
+                 if args.contract_units_per_lot is not None else 0.0)
+        instrument = InstrumentSpec("XAUUSD", units, 0.01, 0.01, 50.0,
                                     units_confirmed=args.confirm_contract_units)
         risk = RiskConfig(args.equity or 10_000.0, args.risk_pct, args.quote_max_age)
         return run_dry(args, instrument, risk, ledger)
@@ -218,19 +219,27 @@ def main() -> int:
         print("Two readers of one Telethon session corrupt each other's update state.")
         print("Stop it, or pass --allow-concurrent if you are certain.")
         return 3
-    if args.equity is None:
-        print("--equity is required for live mode (the size is never guessed)")
-        return 2
-    if args.contract_units_per_lot is None:
-        print("--contract-units-per-lot is required for live mode (never guessed)")
-        return 2
-    if not args.confirm_contract_units:
-        print("--confirm-contract-units is required for live mode: the contract size "
-              "must have been checked against the broker's own specification")
-        return 2
+
+    # The sizing inputs are required only when sizing is possible. Without a
+    # confirmed contract size the listener still starts and records every
+    # message as blocked, which beats refusing to start and archiving nothing.
+    if args.confirm_contract_units:
+        if args.equity is None:
+            print("--equity is required once the contract size is confirmed "
+                  "(the size is never guessed)")
+            return 2
+        if args.contract_units_per_lot is None:
+            print("--contract-units-per-lot is required once the contract size "
+                  "is confirmed (never guessed)")
+            return 2
+    else:
+        print("the contract size is not confirmed: signals will be recorded as "
+              "blocked, not sized")
+        args.equity = args.equity or 0.0
+        args.contract_units_per_lot = args.contract_units_per_lot or 0.0
 
     instrument = InstrumentSpec("XAUUSD", args.contract_units_per_lot, 0.01, 0.01, 50.0,
-                               units_confirmed=True)
+                               units_confirmed=args.confirm_contract_units)
     risk = RiskConfig(args.equity, args.risk_pct, args.quote_max_age)
     return asyncio.run(run_live(args, instrument, risk, ledger))
 

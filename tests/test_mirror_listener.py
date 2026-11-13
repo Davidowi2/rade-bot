@@ -293,6 +293,43 @@ def test_soak_guard_ignores_a_stale_heartbeat(tmp_path, monkeypatch):
     assert module.soak_is_active() is None
 
 
+# --------------------------------------------------------------------------
+# the CLI's own guards
+# --------------------------------------------------------------------------
+
+def test_the_cli_blocks_when_the_contract_size_is_not_confirmed(tmp_path, monkeypatch,
+                                                               capsys):
+    import sys
+
+    if not (ROOT / "data" / "rade.db").exists():
+        pytest.skip("the local research database is not present")
+    module = _load_script("listener_script_cli_unconfirmed")
+    monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
+    monkeypatch.setattr(sys, "argv", ["telegram_paper_listener.py", "--dry-run",
+                                      "--message-id", "18048"])
+    assert module.main() == 0
+    out = capsys.readouterr().out
+    assert "not confirmed" in out
+    assert "paper_intent" not in out
+
+
+def test_the_cli_sizes_only_when_the_contract_size_is_confirmed(tmp_path, monkeypatch,
+                                                               capsys):
+    import sys
+
+    if not (ROOT / "data" / "rade.db").exists():
+        pytest.skip("the local research database is not present")
+    module = _load_script("listener_script_cli_confirmed")
+    monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
+    monkeypatch.setattr(sys, "argv", ["telegram_paper_listener.py", "--dry-run",
+                                      "--message-id", "18048",
+                                      "--contract-units-per-lot", "100",
+                                      "--confirm-contract-units"])
+    assert module.main() == 0
+    out = capsys.readouterr().out
+    assert "paper_intent" in out
+
+
 def test_listener_module_contains_no_broker_write_call():
     """A paper phase that can call create_order is not a paper phase."""
     source = (ROOT / "src" / "rade" / "observer" / "listener.py").read_text(encoding="utf-8")
@@ -382,6 +419,29 @@ def test_an_unusable_start_setting_is_refused(tmp_path):
         asyncio.run(runtime.establish_baseline())
 
 
+def test_a_zero_or_negative_start_id_is_refused(tmp_path):
+    """Zero is the 'no cursor' sentinel: accepting it would import the archive."""
+    for setting in ("0", "-1", "-9999"):
+        runtime = _runtime(tmp_path, [msg(1)], start_at=setting)
+        asyncio.run(runtime.connect())
+        with pytest.raises(RuntimeError):
+            asyncio.run(runtime.establish_baseline())
+        assert runtime.listener.state.last_message_id == 0
+
+
+def test_a_start_beyond_the_newest_message_warns(tmp_path):
+    logs = []
+    listener = make_listener(tmp_path, quote=quote_now())
+    listener.log = logs.append
+    client = FakeClient([msg(7)])
+    runtime = Runtime(client=client, listener=listener, channel="@source",
+                      heartbeat_path=tmp_path / "beat.json", log=logs.append,
+                      start_at="9999")
+    asyncio.run(runtime.connect())
+    asyncio.run(runtime.establish_baseline())
+    assert any("beyond the newest message" in line for line in logs)
+
+
 def test_the_start_source_is_recorded_for_the_operator(tmp_path):
     runtime = _runtime(tmp_path, [msg(7)])
     asyncio.run(runtime.connect())
@@ -408,3 +468,49 @@ def test_a_client_that_cannot_report_the_newest_message_refuses_to_start(tmp_pat
     asyncio.run(runtime.connect())
     with pytest.raises(RuntimeError):
         asyncio.run(runtime.establish_baseline())
+
+
+# --------------------------------------------------------------------------
+# a failed reconnect must not keep reporting "listening"
+# --------------------------------------------------------------------------
+
+class BrokenReconnectClient(FakeClient):
+    """Connects once, then refuses every reconnect."""
+
+    def __init__(self, messages):
+        super().__init__(messages)
+        self.connects = 0
+
+    async def connect(self):
+        self.connects += 1
+        if self.connects > 1:
+            raise ConnectionError("telegram unreachable")
+        self.connected = True
+
+
+def test_a_failed_reconnect_is_reported_as_degraded(tmp_path):
+    runtime = _runtime(tmp_path, [msg(1)], client=BrokenReconnectClient([msg(1)]))
+    runtime.reconnect_every = 0.01
+    asyncio.run(runtime.connect())
+    runtime.client.connects = 1
+    with pytest.raises(ConnectionError):
+        asyncio.run(runtime.reconnect())
+    runtime.reconnect_failed = True
+    runtime.last_reconnect_error = "ConnectionError: telegram unreachable"
+    assert runtime.phase() == "degraded"
+    runtime.heartbeat("degraded")
+    data = json.loads((tmp_path / "beat.json").read_text(encoding="utf-8"))
+    assert data["phase"] == "degraded"
+    assert data["reconnect_failed"] is True
+    assert "telegram unreachable" in data["last_reconnect_error"]
+
+
+def test_a_successful_reconnect_clears_the_degraded_state(tmp_path):
+    runtime = _runtime(tmp_path, [msg(1)])
+    runtime.reconnect_failed = True
+    runtime.last_reconnect_error = "ConnectionError: boom"
+    asyncio.run(runtime.connect())
+    asyncio.run(runtime.reconnect())
+    assert runtime.reconnect_failed is False
+    assert runtime.last_reconnect_error is None
+    assert runtime.phase() == "listening"

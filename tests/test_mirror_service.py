@@ -159,6 +159,20 @@ def test_healthz_is_503_when_the_listener_stopped(tmp_path):
     assert body["listener"]["reason"] == "listener stopped"
 
 
+def test_healthz_is_503_when_the_reconnect_failed(tmp_path):
+    """A disconnected intake must not keep the health check green."""
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    beat = tmp_path / "hb.json"
+    beat.write_text(json.dumps({"phase": "degraded", "reconnect_failed": True}),
+                     encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=beat,
+                             listener_expected=True)
+    status, body = service.route("/healthz", {})
+    assert status == 503
+    assert body["listener"]["healthy"] is False
+    assert body["listener"]["reason"] == "listener reconnect failed"
+
+
 def test_api_requires_a_token(live):
     assert call(live, "/api/status")[0] == 401
     assert call(live, "/api/events")[0] == 401
@@ -267,10 +281,13 @@ def test_the_service_refuses_to_start_without_a_durable_store(monkeypatch, tmp_p
 
 def test_the_service_refuses_to_start_when_the_listener_cannot_start(monkeypatch,
                                                                      tmp_path):
+    # A confirmed contract size without the value is a misconfiguration that
+    # would silently block every signal, so the service refuses to come up.
     monkeypatch.setenv("MIRROR_API_TOKEN", "t")
     monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
-    monkeypatch.delenv("MIRROR_EQUITY", raising=False)
+    monkeypatch.setenv("MIRROR_CONTRACT_UNITS_CONFIRMED", "1")
     monkeypatch.delenv("MIRROR_CONTRACT_UNITS_PER_LOT", raising=False)
+    monkeypatch.delenv("MIRROR_EQUITY", raising=False)
     monkeypatch.delenv("RENDER", raising=False)
     monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
     assert service_main([]) == 3
@@ -278,11 +295,62 @@ def test_the_service_refuses_to_start_when_the_listener_cannot_start(monkeypatch
 
 def test_the_listener_handle_reports_a_missing_equity(monkeypatch, tmp_path):
     monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
+    monkeypatch.setenv("MIRROR_CONTRACT_UNITS_CONFIRMED", "1")
+    monkeypatch.setenv("MIRROR_CONTRACT_UNITS_PER_LOT", "100")
     monkeypatch.delenv("MIRROR_EQUITY", raising=False)
     handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
     assert handle.expected is True
     assert handle.error is not None
     assert "MIRROR_EQUITY" in handle.error
+
+
+def test_the_listener_starts_without_sizing_inputs_while_unconfirmed(monkeypatch,
+                                                                    tmp_path):
+    """An unconfirmed contract size must not stop the archive from running."""
+    import rade.ingestion.telegram.client as tg_client
+
+    monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
+    monkeypatch.setenv("MIRROR_CHANNEL", "@source")
+    monkeypatch.setenv("MIRROR_HEARTBEAT", str(tmp_path / "hb.json"))
+    monkeypatch.setenv("MIRROR_STATE", str(tmp_path / "state.json"))
+    monkeypatch.delenv("MIRROR_EQUITY", raising=False)
+    monkeypatch.delenv("MIRROR_CONTRACT_UNITS_PER_LOT", raising=False)
+    monkeypatch.delenv("MIRROR_CONTRACT_UNITS_CONFIRMED", raising=False)
+    # No Telegram connection from a unit test.
+    monkeypatch.setattr(tg_client, "make_client", lambda: object())
+
+    handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+    assert handle.expected is True
+    assert handle.error is None
+    assert handle.thread is not None
+
+
+def test_a_confirmed_contract_size_still_requires_the_value(monkeypatch, tmp_path):
+    monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
+    monkeypatch.setenv("MIRROR_CONTRACT_UNITS_CONFIRMED", "1")
+    monkeypatch.setenv("MIRROR_EQUITY", "10000")
+    monkeypatch.delenv("MIRROR_CONTRACT_UNITS_PER_LOT", raising=False)
+    handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+    assert handle.error is not None
+    assert "MIRROR_CONTRACT_UNITS_PER_LOT" in handle.error
+
+
+def test_an_unusable_start_point_is_refused_before_the_thread_starts(monkeypatch,
+                                                                    tmp_path):
+    monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
+    monkeypatch.setenv("MIRROR_START_AT", "0")
+    handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+    assert handle.error is not None
+    assert "MIRROR_START_AT" in handle.error
+    assert handle.thread is None
+
+
+def test_a_negative_start_point_is_refused(monkeypatch, tmp_path):
+    monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
+    monkeypatch.setenv("MIRROR_START_AT", "-5")
+    handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+    assert handle.error is not None
+    assert handle.thread is None
 
 
 def test_no_listener_is_expected_when_it_is_switched_off(monkeypatch, tmp_path):

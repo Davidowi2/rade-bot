@@ -40,10 +40,15 @@ begin
 end $$;
 
 -- Backfill the rows written by the old code, where "ok" was the only record
--- of the outcome. A row the new code has touched has attempts > 0 and is
--- left alone.
+-- of the outcome. That code wrote ok=true *before* the send, so a row saying
+-- ok=true proves only that the slot was claimed - not that Telegram accepted
+-- the message. Those rows are therefore backfilled as 'failed', so the retry
+-- pass re-sends them: a duplicate phone message is a smaller problem than a
+-- silently lost one.
 update public.notification_log
-   set status = case when ok then 'sent' else 'failed' end
+   set status = 'failed',
+       detail = coalesce(detail,
+           'legacy row: the slot was recorded before the send, so delivery is unconfirmed')
  where status = 'pending' and attempts = 0;
 
 create index if not exists ix_notification_log_status

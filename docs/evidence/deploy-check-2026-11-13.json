@@ -6,10 +6,10 @@
   "configuration": {
     "MIRROR_RUN_LISTENER": "1",
     "MIRROR_START_AT": "latest",
-    "MIRROR_CONTRACT_UNITS_PER_LOT": "100",
+    "MIRROR_CONTRACT_UNITS_PER_LOT": "not set",
     "MIRROR_CONTRACT_UNITS_CONFIRMED": "not set",
+    "MIRROR_EQUITY": "not set",
     "MIRROR_QUOTE_PROVIDER": "none",
-    "MIRROR_EQUITY": "10000",
     "MIRROR_API_TOKEN": "a throwaway token for this check",
     "store": "SQLiteIntentLedger (local file; a hosted run would use Supabase)",
     "notifier": "none configured (no BotFather token), so nothing was sent to any chat"
@@ -47,13 +47,20 @@
         "paper_only": true,
         "exit_policy": "unresolved"
       }
+    },
+    "refusals_measured": {
+      "MIRROR_START_AT=0": "exit 3: MIRROR_START_AT='0' is not usable; it must be 'latest', 'history' or a positive message id",
+      "MIRROR_START_AT=-7": "exit 3: MIRROR_START_AT='-7' is not usable; it must be 'latest', 'history' or a positive message id",
+      "hosted without Supabase": "exit 3: hosted mode requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY",
+      "confirmed contract size without a value": "exit 3: MIRROR_CONTRACT_UNITS_PER_LOT is required once the contract size is confirmed"
     }
   },
   "what_this_proves": [
     "A first activation imports none of the channel's history: the newest message id was 18799, the cursor was set to it, and 0 events were imported. Before the fix the same start would have fetched the whole archive and turned every old call into a paper intent.",
     "The start point survives an ephemeral disk: it is written to the state file and to the mirror_cursor table in the store.",
     "The listener thread runs beside the HTTP service, and /healthz reports its state rather than just the process's.",
-    "An unconfirmed contract size is refused rather than used: MIRROR_CONTRACT_UNITS_CONFIRMED was not set, so nothing was sized."
+    "The service starts with no sizing inputs at all: MIRROR_CONTRACT_UNITS_PER_LOT and MIRROR_EQUITY were both unset and the contract size was unconfirmed, and the mirror still came up, connected, set its baseline and archived nothing. Nothing was sized, because an unconfirmed contract size is refused.",
+    "A start point of 0 or a negative id is refused at startup with exit 3 rather than being accepted as a message id."
   ],
   "what_this_does_not_prove": [
     "No message was delivered during the check, so the live push path is still unobserved (the soak recorded one edit, never a new-message update).",

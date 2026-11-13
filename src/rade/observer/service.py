@@ -142,6 +142,11 @@ class MirrorService:
         phase = state.get("phase")
         if phase == "stopped":
             return False, "listener stopped"
+        if phase == "degraded":
+            # The process is up but the Telegram connection is not: a reconnect
+            # failed and has not succeeded again. Saying "listening" here would
+            # keep the health check green through an outage.
+            return False, "listener reconnect failed"
         if phase == "connecting":
             # Still working on it: not a failure, but not listening either.
             return True, "listener is connecting"
@@ -300,16 +305,38 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
     heartbeat = Path(os.getenv("MIRROR_HEARTBEAT", "data/mirror_listener.heartbeat.json"))
     handle = ListenerHandle(expected=True, heartbeat_path=heartbeat)
 
-    equity = os.getenv("MIRROR_EQUITY", "").strip()
-    units = os.getenv("MIRROR_CONTRACT_UNITS_PER_LOT", "").strip()
-    if not equity:
-        handle.error = "MIRROR_EQUITY is not set; the paper size would be a guess"
-    elif not units:
-        handle.error = ("MIRROR_CONTRACT_UNITS_PER_LOT is not set; the contract "
-                        "size would be a guess")
+    equity_raw = os.getenv("MIRROR_EQUITY", "").strip()
+    units_raw = os.getenv("MIRROR_CONTRACT_UNITS_PER_LOT", "").strip()
+    confirmed = _truthy(os.getenv("MIRROR_CONTRACT_UNITS_CONFIRMED"))
+
+    # The sizing inputs are required only when sizing is possible. While the
+    # contract size is unconfirmed the listener still starts and records every
+    # message as blocked, which is worth more than refusing to start and
+    # archiving nothing at all.
+    if confirmed and not units_raw:
+        handle.error = ("MIRROR_CONTRACT_UNITS_PER_LOT is required once the "
+                        "contract size is confirmed; it is never guessed")
+    elif confirmed and not equity_raw:
+        handle.error = ("MIRROR_EQUITY is required once the contract size is "
+                        "confirmed; it is never guessed")
     if handle.error:
         log(f"listener not started: {handle.error}")
         return handle
+
+    # Validate the start point before the thread exists, so a bad value is a
+    # startup failure with a readable reason rather than a thread that dies
+    # silently a second later. The runtime refuses it too.
+    start_at = os.getenv("MIRROR_START_AT", "latest").strip()
+    if start_at.lower() not in {"latest", "now", "", "history", "all"}:
+        try:
+            usable = int(start_at) > 0
+        except ValueError:
+            usable = False
+        if not usable:
+            handle.error = (f"MIRROR_START_AT={start_at!r} is not usable; it must be "
+                            "'latest', 'history' or a positive message id")
+            log(f"listener not started: {handle.error}")
+            return handle
 
     try:
         from rade.config.settings import get_settings
@@ -328,7 +355,8 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
         # The contract size is only used when a human has confirmed it. Until
         # then every signal is blocked instead of sized from a number nobody
         # has checked.
-        confirmed = _truthy(os.getenv("MIRROR_CONTRACT_UNITS_CONFIRMED"))
+        units = float(units_raw) if units_raw else 0.0
+        equity = float(equity_raw) if equity_raw else 0.0
         if not confirmed:
             log("MIRROR_CONTRACT_UNITS_CONFIRMED is not set: signals will be "
                 "recorded as blocked, not sized")
@@ -336,9 +364,9 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
         listener = MirrorListener(
             channel=channel,
             ledger=ledger,
-            instrument=InstrumentSpec("XAUUSD", float(units), 0.01, 0.01, 50.0,
+            instrument=InstrumentSpec("XAUUSD", units, 0.01, 0.01, 50.0,
                                       units_confirmed=confirmed),
-            risk=RiskConfig(float(equity), 0.005,
+            risk=RiskConfig(equity, 0.005,
                             float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2"))),
             notifier=notifier_from_env(),
             quote_provider=quote_provider,
@@ -352,7 +380,7 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
             reconnect_every=float(os.getenv("MIRROR_RECONNECT_S", "900")),
             heartbeat_path=heartbeat,
             log=log,
-            start_at=os.getenv("MIRROR_START_AT", "latest"),
+            start_at=start_at,
             allow_history_import=_truthy(os.getenv("MIRROR_ALLOW_HISTORY_IMPORT")),
             notify_retry_every=float(os.getenv("MIRROR_NOTIFY_RETRY_S", "300")),
         )

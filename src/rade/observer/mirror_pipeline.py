@@ -331,22 +331,23 @@ def evaluate_message(
             note=f"Edited signal {message.message_id} rev {message.revision}: review before any action.",
         )
 
+    if not instrument.units_confirmed:
+        # The contract size was never checked against the broker's own
+        # specification. Any lot count derived from it would look right and be
+        # wrong, so nothing is sized. This is checked first, because it is the
+        # reason a message is blocked even when the equity is also missing.
+        return _result(
+            key, STATUS_BLOCKED,
+            "contract units per lot are not confirmed against the broker "
+            "specification; no size is computed",
+            signal=parsed,
+        )
     if risk.equity <= 0 or not math.isfinite(risk.equity):
         return _result(key, STATUS_BLOCKED, "account equity is missing or invalid", signal=parsed)
     if not 0 < risk.risk_fraction <= MAX_RISK_FRACTION:
         return _result(
             key, STATUS_BLOCKED,
             f"risk configuration is invalid (per-trade risk must be in (0, {MAX_RISK_FRACTION:.1%}])",
-            signal=parsed,
-        )
-    if not instrument.units_confirmed:
-        # The contract size was never checked against the broker's own
-        # specification. Any lot count derived from it would look right and be
-        # wrong, so nothing is sized.
-        return _result(
-            key, STATUS_BLOCKED,
-            "contract units per lot are not confirmed against the broker "
-            "specification; no size is computed",
             signal=parsed,
         )
     if (instrument.contract_units_per_lot <= 0 or instrument.lot_step <= 0
@@ -568,6 +569,19 @@ class SQLiteIntentLedger:
         ):
             if column not in have_notif:
                 con.execute(f"ALTER TABLE notification_log ADD COLUMN {column} {decl}")
+
+        # Rows from the old code carry ok=true but were written *before* the
+        # send, so they prove the slot was claimed, not that the message
+        # arrived. They are backfilled as failed so the retry pass picks them
+        # up: a duplicate notification is a smaller problem than a lost one.
+        # attempts = 0 marks a row the new code has never touched.
+        con.execute(
+            "UPDATE notification_log "
+            "SET status='failed', detail=coalesce(detail, ?) "
+            "WHERE status='pending' AND attempts=0",
+            ("legacy row: the slot was recorded before the send, so delivery "
+             "is unconfirmed",),
+        )
 
     def claim(self, message: MessageEnvelope, result: PipelineResult) -> str:
         digest = text_hash(message.text)

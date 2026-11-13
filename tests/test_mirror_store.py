@@ -382,6 +382,42 @@ def test_a_delivered_notification_is_never_sent_again(tmp_path):
     assert len(notifier.sent) == 1
 
 
+def test_a_permanent_error_is_not_resent_by_the_later_retry_pass(tmp_path):
+    """A 4xx will fail again for the same reason; it must not be retried."""
+    from rade.observer.notify import retry_failed_notifications
+
+    ledger, result = _stored_intent(tmp_path)
+    broken = CountingNotifier(fail_times=99, detail="HTTP 400: chat not found")
+    notify_result(result, broken, ledger=ledger, attempts=1, sleep=lambda *_: None)
+    assert ledger.notification_status(result.event_key, "accepted") == "failed"
+
+    working = RecordingNotifier()
+    summary = retry_failed_notifications(ledger, working, attempts=2)
+    assert summary == {"considered": 1, "sent": 0, "failed": 0, "skipped": 1}
+    assert len(working.sent) == 0
+
+
+def test_a_legacy_row_is_backfilled_as_unconfirmed_not_sent(tmp_path):
+    """The old code recorded the slot before sending, so delivery is unknown."""
+    import sqlite3
+
+    path = tmp_path / "legacy.sqlite"
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE notification_log (event_key TEXT NOT NULL, kind TEXT NOT NULL, "
+        "ok INTEGER NOT NULL, detail TEXT, sent_at TEXT NOT NULL DEFAULT (datetime('now')), "
+        "PRIMARY KEY (event_key, kind))")
+    con.execute("INSERT INTO notification_log (event_key, kind, ok) VALUES ('k', 'accepted', 1)")
+    con.commit()
+    con.close()
+
+    ledger = SQLiteIntentLedger(path)          # runs the local migration
+    assert ledger.notification_status("k", "accepted") == "failed"
+    failed = ledger.failed_notifications()
+    assert len(failed) == 1
+    assert "delivery is unconfirmed" in (failed[0]["detail"] or "")
+
+
 def test_the_supabase_adapter_records_the_real_outcome():
     fake = FakePostgrest()
     ledger = SupabaseLedger(fake)

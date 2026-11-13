@@ -289,6 +289,13 @@ def retry_failed_notifications(ledger: Any, notifier: Notifier, *,
     rows = ledger.failed_notifications(limit=limit) or []
     summary["considered"] = len(rows)
     for row in rows:
+        detail = str(row.get("detail") or "")
+        if detail and not _retryable(detail):
+            # A permanent Bot API error (a 4xx other than 429) will fail again
+            # for the same reason. Repeating it every cycle would bury the
+            # failures that a retry could actually fix.
+            summary["skipped"] += 1
+            continue
         result = result_from_row(row)
         text = build_notification(result) if result is not None else None
         if text is None:

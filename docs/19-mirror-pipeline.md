@@ -83,7 +83,7 @@ All commands run from the repository root. The first row was measured on
 
 | Check | Command | Result |
 |---|---|---|
-| Full test suite | `python -m pytest tests/ -q` | **226 passed** in 82s (was 198 after the pipeline landed, 126 before it) |
+| Full test suite | `python -m pytest tests/ -q` | **241 passed** in 50s (was 228 after the first review round, 198 after the pipeline landed, 126 before it) |
 | Simulation matrix | `python scripts/simulate_mirror_pipeline.py --message-id 18048` | **16/16 PASS**, exit 0, evidence `docs/evidence/mirror-simulation.json` |
 | Dashboard proxy | `node --test web/test/proxy.test.js` | **6/6 pass** |
 | Service over HTTP | started on `:8099`, called with `curl` | `/healthz` 200 with a `listener` block, `/api/status` 401 without token, 200 with, `paper_only: true`, `broker_writes: false` |
@@ -412,3 +412,84 @@ Two things this check does **not** establish: the live push path (no message
 arrived during the window, so it is still unobserved) and the hosted path (the
 durable-store refusal and the health endpoint were verified locally and by unit
 test, not against a real Supabase or Render).
+
+---
+
+## 10. The second review round (2026-11-13)
+
+A second review, of the commits that fixed §9, found five more gaps — places
+where the first round's fix could be reached around. All five are fixed, each
+with a test.
+
+### 10.1 The history-import safeguard could be bypassed
+
+`MIRROR_START_AT=0` — or any negative number — was accepted as a message id.
+Zero is the "no cursor" sentinel, so the cursor stayed at zero and the gap
+fill read the entire archive, without the history-import switch ever being
+involved.
+
+Now a start point must be a positive message id. `establish_baseline()` raises
+on zero or a negative value, and the service validates `MIRROR_START_AT`
+*before* the listener thread exists, so the failure is a startup refusal
+(exit 3) with a readable reason rather than a thread that dies a second later.
+A start point beyond the newest message is accepted but warned about, because
+it silently imports nothing until the channel catches up.
+
+### 10.2 The migration preserved false "sent" records
+
+Migration `0002` backfilled the old rows as `sent` when their `ok` flag was
+true. But the old code wrote `ok=True` *before* the send, so that flag proves
+only that the slot was claimed — not that Telegram accepted the message. Those
+notifications would never have been retried, which is exactly the failure the
+state machine was added to fix.
+
+Legacy rows are now backfilled as `failed`, with a detail saying the delivery
+is unconfirmed, so the retry pass picks them up. A duplicate phone message is
+a smaller problem than a silently lost one. The same backfill runs in the local
+SQLite migration.
+
+### 10.3 Permanent Bot API errors were retried forever
+
+The immediate retry path skipped permanent errors (a 4xx other than 429), but
+the five-minute retry pass re-sent every failed notification without looking at
+why it had failed. A revoked token would have been retried every cycle, burying
+the failures a retry could actually fix.
+
+The pass now checks the stored error: a permanent one is counted as `skipped`
+and left alone; a transient one is re-sent.
+
+### 10.4 A failed reconnect could still look healthy
+
+After a reconnect failed, the runtime kept reporting a `listening` heartbeat
+while it waited out the reconnect interval, so `/healthz` stayed green through
+a Telegram disconnect.
+
+A failed reconnect now sets a `degraded` phase, which the service reports as
+**503 "listener reconnect failed"**. The heartbeat carries `reconnect_failed`
+and `last_reconnect_error`, and the next attempt is scheduled in 30 s rather
+than after the whole interval. A successful reconnect clears the state.
+
+### 10.5 The listener still needed a contract size to start
+
+The service refused to start when `MIRROR_CONTRACT_UNITS_PER_LOT` was empty —
+including while the contract size was explicitly unconfirmed, which is the
+configuration the Render blueprint ships. It exited before it could record a
+single blocked signal, so the archive stayed empty for a reason that had
+nothing to do with the mirror's health.
+
+The sizing inputs are now required only when sizing is possible: the contract
+size and the equity are needed once `MIRROR_CONTRACT_UNITS_CONFIRMED=1`, and
+not before. While the size is unconfirmed the listener starts, connects, and
+records every message as `blocked`. The same applies to the CLI. The pipeline
+now checks the confirmation *before* the equity, so the reason names the real
+blocker.
+
+### The deployment check, rerun with the new configuration
+
+The check was rerun with `MIRROR_CONTRACT_UNITS_PER_LOT` **and**
+`MIRROR_EQUITY` both unset and the contract size unconfirmed — the
+configuration the Render blueprint actually ships. The service came up, the
+listener connected, the baseline was set to `latest:18799`, 0 events were
+imported, and `/healthz` answered 200. The refusals were measured too:
+`MIRROR_START_AT=0` and `MIRROR_START_AT=-7` both exit 3 with a readable
+reason.

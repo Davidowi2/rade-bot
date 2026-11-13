@@ -61,10 +61,12 @@ services:
       # The contract size is NOT committed here. It was read once from a
       # broker response and has never been confirmed by a fill, so a preset
       # number here would silently size every intent with an unverified
-      # value. Set it in the dashboard, and only set
-      # MIRROR_CONTRACT_UNITS_CONFIRMED=1 once it has been checked against
-      # the broker's own specification. Until then every signal is recorded
-      # as blocked rather than sized.
+      # value. The value may be left empty: while the contract size is
+      # unconfirmed the listener still starts and records every message as
+      # blocked rather than sized. It becomes required the moment
+      # MIRROR_CONTRACT_UNITS_CONFIRMED=1 is set, and it must be entered in
+      # the dashboard after being checked against the broker's own
+      # specification.
       - key: MIRROR_CONTRACT_UNITS_PER_LOT
         sync: false
       - key: MIRROR_CONTRACT_UNITS_CONFIRMED

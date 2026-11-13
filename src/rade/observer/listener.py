@@ -46,6 +46,10 @@ from rade.observer.notify import (
 
 HEARTBEAT_INTERVAL_S = 30.0
 
+#: How soon to try again after a failed reconnect, instead of waiting out the
+#: whole reconnect interval with the intake disconnected.
+RECONNECT_RETRY_DELAY_S = 30.0
+
 #: The default first-activation start point: the newest message in the channel
 #: at the moment of the first connect. Nothing older is imported.
 START_FROM_LATEST = "latest"
@@ -212,6 +216,11 @@ class Runtime:
         self._stop = False
         self._last_beat = 0.0
         self.baseline = 0
+        # A failed reconnect leaves the process alive but not connected to
+        # Telegram. Reporting "listening" then would keep the health check
+        # green through an outage.
+        self.reconnect_failed = False
+        self.last_reconnect_error: str | None = None
 
     def request_stop(self) -> None:
         self._stop = True
@@ -276,8 +285,26 @@ class Runtime:
                     "MIRROR_START_AT must be 'latest', 'history' or a message id, "
                     f"not {setting!r}"
                 )
+            if floor <= 0:
+                # Zero is the "no cursor" sentinel, so accepting it would leave
+                # the cursor at zero and let the gap fill read the whole
+                # archive - the one thing the history switch exists to prevent.
+                raise RuntimeError(
+                    f"MIRROR_START_AT={setting!r} is not a usable message id; "
+                    "it must be positive. Importing the channel history needs "
+                    "MIRROR_START_AT=history together with "
+                    "MIRROR_ALLOW_HISTORY_IMPORT=1"
+                )
             self.listener.state.start_source = f"id:{floor}"
             self.log(f"first activation: importing messages posted after id {floor}")
+            try:
+                latest = await self.latest_message_id()
+            except Exception:
+                latest = 0
+            if latest and floor > latest:
+                self.log(f"WARNING: the start point {floor} is beyond the newest "
+                         f"message ({latest}); nothing will be imported until the "
+                         "channel passes it")
             return floor
 
         latest = await self.latest_message_id()
@@ -359,7 +386,17 @@ class Runtime:
         await self.connect()
         self.reconnects += 1
         await self.gap_fill()
+        self.reconnect_failed = False
+        self.last_reconnect_error = None
         self.log("reconnected; gap filled")
+
+    def phase(self) -> str:
+        """What monitoring is told about the intake.
+
+        'degraded' means the process is up but not connected to Telegram: the
+        reconnect failed and has not yet succeeded again.
+        """
+        return "degraded" if self.reconnect_failed else "listening"
 
     # -- heartbeat --------------------------------------------------------
     def heartbeat(self, phase: str) -> None:
@@ -380,6 +417,8 @@ class Runtime:
             "start_source": self.listener.state.start_source,
             "events": self.events,
             "reconnects": self.reconnects,
+            "reconnect_failed": self.reconnect_failed,
+            "last_reconnect_error": self.last_reconnect_error,
             "errors": self.errors[-3:],
         }, indent=2), encoding="utf-8")
 
@@ -411,7 +450,7 @@ class Runtime:
         deadline = None if seconds is None else time.monotonic() + seconds
         next_reconnect = time.monotonic() + self.reconnect_every
         next_notify_retry = time.monotonic() + self.notify_retry_every
-        self.heartbeat("listening")
+        self.heartbeat(self.phase())
         self.log(f"listening; reconnect every {self.reconnect_every:.0f}s; "
                  "no broker write path exists in this process")
 
@@ -423,15 +462,21 @@ class Runtime:
                 try:
                     await self.reconnect()
                 except Exception as exc:
+                    self.reconnect_failed = True
+                    self.last_reconnect_error = f"{type(exc).__name__}: {exc}"
                     self.errors.append(f"reconnect: {type(exc).__name__}: {exc}")
                     self.log(f"reconnect failed: {type(exc).__name__}")
+                    # Do not sit out the whole interval disconnected: try
+                    # again shortly, and report the intake as degraded until
+                    # a reconnect succeeds.
+                    next_reconnect = time.monotonic() + RECONNECT_RETRY_DELAY_S
             if self.notify_retry_every > 0 and time.monotonic() >= next_notify_retry:
                 next_notify_retry = time.monotonic() + self.notify_retry_every
                 try:
                     self.listener.retry_notifications()
                 except Exception as exc:
                     self.errors.append(f"notify retry: {type(exc).__name__}: {exc}")
-            self.heartbeat("listening")
+            self.heartbeat(self.phase())
             await asyncio.sleep(0.5)
 
         self.heartbeat("stopped")
