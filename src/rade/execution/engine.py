@@ -79,6 +79,24 @@ STATE_REVIEW = "review"
 #: States that still need managing or reconciling.
 ACTIVE_STATES = (STATE_VALIDATED, STATE_SUBMITTED, STATE_ACCEPTED, STATE_OPEN, STATE_PARTIAL)
 
+
+class _Unreadable:
+    """The broker could not be read.
+
+    Distinct from ``None``, which means the broker answered and there is no
+    position. Conflating the two closed a live position: the demo API answered
+    HTTP 429 on ``/positions``, the read returned ``None``, and the manager
+    recorded the trade as ``closed`` and told the operator the position had
+    closed at the broker - while the position was still open and protected.
+    A failed read is not evidence of anything.
+    """
+
+    def __repr__(self) -> str:
+        return "POSITIONS_UNREADABLE"
+
+
+POSITIONS_UNREADABLE = _Unreadable()
+
 #: The correlation tag length the broker accepts. The documented limit is 31
 #: characters; the SDK rejects anything longer.
 MAX_STRATEGY_ID_LEN = 31
@@ -754,12 +772,18 @@ class ExecutionEngine:
                 return order
         return None
 
-    def _position_for(self, trade_id: str) -> BrokerPosition | None:
+    def _position_for(self, trade_id: str):
+        """The broker's position for this trade, or ``POSITIONS_UNREADABLE``.
+
+        ``None`` is an answer - the broker was read and there is no position.
+        A read failure is not an answer, and is returned as itself so no caller
+        can mistake it for one.
+        """
         try:
             positions = self.broker.positions()
         except BrokerError as exc:
             self.log(f"could not read the broker's positions: {exc}")
-            return None
+            return POSITIONS_UNREADABLE
         for position in positions:
             if position.strategy_id == trade_id:
                 return position
@@ -774,7 +798,10 @@ class ExecutionEngine:
         never filled is not a trade.
         """
         position = self._position_for(trade.trade_id)
-        if position is None:
+        if position is POSITIONS_UNREADABLE or position is None:
+            # An unreadable position list still leaves the order feed as
+            # evidence: a filled order is a fill. It is not evidence of a
+            # *close*, which is why nothing is finished here.
             order = self._existing_order(trade.trade_id)
             if order is not None and order.is_filled and order.avg_price:
                 trade.fill_price = float(order.avg_price)
@@ -853,7 +880,9 @@ class ExecutionEngine:
                 self.log(f"management error for {trade.trade_id}: "
                          f"{type(exc).__name__}: {exc}")
                 continue
-            if outcome.get("closed"):
+            if outcome.get("error"):
+                summary["errors"] += 1
+            elif outcome.get("closed"):
                 summary["closed"] += 1
             elif outcome.get("partial"):
                 summary["partial"] += 1
@@ -899,6 +928,14 @@ class ExecutionEngine:
             trade = ManagedTrade.from_row(self.ledger.get_trade(trade.trade_id)) or trade
 
         position = self._position_for(trade.trade_id)
+        if position is POSITIONS_UNREADABLE:
+            # The trade is left exactly as it is: still open in the ledger, still
+            # protected by the stop and target attached at the broker. Closing it
+            # here would abandon a live position and tell the operator it was
+            # over. The next pass asks again.
+            return {"error": True, "trade_id": trade.trade_id,
+                    "reason": "the broker's positions could not be read; the trade "
+                              "is left open and retried on the next pass"}
         if position is None:
             # The position is gone. Which leg took it out matters: a position
             # that closed before any step ran was taken out by the broker's
@@ -973,8 +1010,16 @@ class ExecutionEngine:
             self._save(trade)
             return {"error": True, "trade_id": trade.trade_id}
 
-        # Verify the close actually happened.
+        # Verify the close actually happened. If the positions cannot be read
+        # the close is unverified, which is not the same as failed - but it is
+        # certainly not "closed", so the ladder does not advance past it.
         after = self._position_for(trade.trade_id)
+        if after is POSITIONS_UNREADABLE:
+            self._transition(trade, leg.label, "close_unverified",
+                             "the positions could not be read after the close "
+                             "request; the ladder does not advance until it can")
+            self._save(trade)
+            return {"error": True, "trade_id": trade.trade_id}
         if after is not None and after.qty > remaining - closed_qty + 1e-6:
             self._transition(trade, leg.label, "close_unverified",
                              f"the position still shows {after.qty:g} lots after "
@@ -988,7 +1033,11 @@ class ExecutionEngine:
                          f"closed {closed_qty:g} lots at {leg.target:g}",
                          payload={"closed_qty": closed_qty, "target": leg.target})
         self._save(trade)
-        self._notify(trade.trade_id, "partial",
+        # The kind carries the leg. The notification ledger dedupes on
+        # (trade, kind), so a bare "partial" made TP2's close look like a
+        # repeat of TP1's and silently drop it - the live test-channel run
+        # showed TP1 notified and TP2 not.
+        self._notify(trade.trade_id, f"partial:{leg.label}",
                      f"[{leg.label.upper()} HIT] Closed {closed_qty:g} lot(s) of "
                      f"{trade.symbol} at {leg.target:g} "
                      f"(position {position.id}). Remaining "
@@ -1045,7 +1094,7 @@ class ExecutionEngine:
                          f"the stop moved to {new_stop:g}",
                          payload={"stop": new_stop, "previous_stop": old_stop})
         self._save(trade)
-        self._notify(trade.trade_id, "stop",
+        self._notify(trade.trade_id, f"stop:{leg.label}",
                      f"[STOP MOVED] {leg.label.upper()} done: the broker-side stop "
                      f"moved to {new_stop:g} on position {position.id}.")
         return self._ensure_final_target(trade, position)
@@ -1252,12 +1301,62 @@ class ExecutionEngine:
         # They are counted so a restart reports them instead of passing over
         # them in silence.
         summary["awaiting_review"] = len(self.ledger.list_trades(states=(STATE_REVIEW,)))
+        # The other direction of divergence: a position the broker still holds
+        # for a trade the ledger has already finished. Reconciliation above
+        # cannot find it, because it only walks trades that are still active.
+        orphans = self.orphaned_positions()
+        summary["orphaned"] = len(orphans)
+        for orphan in orphans:
+            self.log(
+                f"ORPHANED POSITION: the broker still holds {orphan['qty']:g} lots "
+                f"(position {orphan['position_id']}) for trade "
+                f"{orphan['trade_id']}, which the ledger records as "
+                f"{orphan['state']!r}. Nothing is managing it.")
         return summary
+
+    def orphaned_positions(self) -> list[dict]:
+        """Broker positions whose trade the ledger already holds as finished.
+
+        The ledger is the record and the broker is the fact. When they disagree
+        in this direction a live position has been abandoned: it is still open,
+        still exposed, and nothing is watching its ladder. No correct sequence
+        of transitions produces that state, so it is reported rather than
+        repaired - deciding which side is right is a human's job, and a repair
+        that guessed would be worse than the alarm.
+        """
+        try:
+            positions = self.broker.positions()
+        except BrokerError as exc:
+            self.log(f"could not read the broker's positions: {exc}")
+            return []
+        finished = {STATE_CLOSED, STATE_NOT_COPIED, STATE_BLOCKED,
+                    STATE_REJECTED, STATE_REVIEW}
+        rows = self.ledger.list_trades(states=tuple(finished))
+        by_id = {row["trade_id"]: row for row in rows}
+        orphans = []
+        for position in positions:
+            trade_id = getattr(position, "strategy_id", None)
+            row = by_id.get(trade_id)
+            if row is None:
+                continue
+            orphans.append({
+                "trade_id": trade_id,
+                "position_id": position.id,
+                "qty": float(position.qty),
+                "state": row["state"],
+            })
+        return orphans
 
     def reconcile_trade(self, trade: ManagedTrade) -> dict:
         """Reconcile one trade against the broker's orders and positions."""
         position = self._position_for(trade.trade_id)
         order = self._existing_order(trade.trade_id)
+
+        if position is POSITIONS_UNREADABLE:
+            # Reconciliation is the last place a live trade could be written
+            # off by a failed read. Leave it exactly as it is.
+            return {"state": trade.state, "trade_id": trade.trade_id,
+                    "unreadable": True}
 
         if position is None:
             if order is not None and order.is_filled:

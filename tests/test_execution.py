@@ -120,6 +120,9 @@ class FakeBroker:
         self.fail_modify = False
         self.fail_orders = False
         self.fail_equity = False
+        #: A read failure, not an empty account. The two must never be
+        #: confused: one is evidence, the other is the absence of evidence.
+        self.fail_positions = False
         #: What ``equity()`` reports. The guards compare it against the day's
         #: opening balance and the peak, so tests move it to trip them.
         self.account_equity = 10_000.0
@@ -162,6 +165,10 @@ class FakeBroker:
         return self.account_equity
 
     def positions(self) -> list[BrokerPosition]:
+        if self.fail_positions:
+            raise BrokerError(
+                "reading positions failed: HTTPError: 429 Client Error: "
+                "Too Many Requests")
         return list(self.position_book)
 
     def orders(self, *, history: bool = False) -> list[BrokerOrder]:
@@ -782,6 +789,92 @@ def test_reconciliation_closes_a_trade_that_ended_while_the_process_was_down(tmp
     assert trade.state == STATE_CLOSED
 
 
+def test_a_failed_position_read_does_not_close_an_open_trade(tmp_path):
+    """A 429 on /positions must not be read as "the position is gone".
+
+    The demo API does return 429 under load. Treating that as a close marks a
+    live position finished, sends the operator a notification saying so, and
+    abandons the ladder - while the position is still open at the broker with
+    its stop and target attached.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade = ManagedTrade.from_row(ledger.get_trade(trade_id_for(result.event_key)))
+    engine.confirm_fill(trade)
+    trade = ManagedTrade.from_row(ledger.get_trade(trade.trade_id))
+    assert trade.state == STATE_OPEN
+
+    broker.fail_positions = True
+    outcome = engine.manage_trade(trade)
+    assert outcome.get("error") is True
+    assert not outcome.get("closed")
+
+    trade = ManagedTrade.from_row(ledger.get_trade(trade.trade_id))
+    assert trade.state == STATE_OPEN, "a failed read closed a live trade"
+    assert not any("closed" in str(kind) for kind in engine.notifier.sent), \
+        "a failed read told the operator the position had closed"
+
+    # And the pass counts it as an error, not as a close.
+    summary = engine.manage()
+    assert summary["closed"] == 0
+    assert summary["errors"] == 1
+
+
+def test_a_position_left_behind_by_a_wrong_close_is_reported(tmp_path):
+    """The divergence a false close leaves: the ledger says finished, the
+    broker still holds the position, and reconciliation cannot see it because
+    it only walks active trades."""
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade = ManagedTrade.from_row(ledger.get_trade(trade_id_for(result.event_key)))
+    engine.confirm_fill(trade)
+
+    # Write the trade off as closed while the position is still there.
+    trade = ManagedTrade.from_row(ledger.get_trade(trade.trade_id))
+    trade.state = STATE_CLOSED
+    engine._save(trade)
+
+    summary = engine.reconcile()
+    assert summary["orphaned"] == 1
+    orphans = engine.orphaned_positions()
+    assert orphans[0]["trade_id"] == trade.trade_id
+    assert orphans[0]["state"] == STATE_CLOSED
+
+
+def test_reconciliation_does_not_write_off_a_trade_it_cannot_read(tmp_path):
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    engine.confirm_fill(ManagedTrade.from_row(
+        ledger.get_trade(trade_id_for(result.event_key))))
+
+    broker.fail_positions = True
+    summary = engine.reconcile()
+    assert summary.get("closed", 0) == 0
+    trade = ManagedTrade.from_row(ledger.get_trade(trade_id_for(result.event_key)))
+    assert trade.state == STATE_OPEN
+
+
+def test_a_failed_position_read_does_not_block_a_confirmed_fill(tmp_path):
+    """The order feed is separate evidence, so a fill is still recorded."""
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+
+    broker.fail_positions = True
+    outcome = engine.confirm_fill(ManagedTrade.from_row(
+        ledger.get_trade(trade_id_for(result.event_key))))
+    assert outcome["filled"] is True
+    trade = ManagedTrade.from_row(ledger.get_trade(trade_id_for(result.event_key)))
+    assert trade.state == STATE_OPEN
+
+
 def test_reconciliation_stops_management_when_the_target_is_not_the_plan(tmp_path):
     broker = FakeBroker()
     engine, ledger, _ = engine_for(tmp_path, broker)
@@ -870,6 +963,18 @@ def test_each_lifecycle_event_gets_its_own_notification(tmp_path):
     assert "FILLED" in kinds
     assert "TP1 HIT" in kinds
     assert "STOP MOVED" in kinds
+
+    # TP2 is a separate lifecycle event from TP1, and the notification ledger
+    # dedupes on (trade, kind). With a bare "partial" kind the second leg was
+    # silently swallowed: the live test-channel run showed TP1 notified and TP2
+    # not, so the operator would have seen one of two closes.
+    broker.bid, broker.ask = 3904.8, 3905.0
+    engine.manage_trade(ManagedTrade.from_row(ledger.get_trade(
+        trade_id_for(result.event_key))))
+
+    kinds = [text.split("]")[0].strip("[") for text in notifier.sent]
+    assert "TP2 HIT" in kinds
+    assert kinds.count("STOP MOVED") == 2, kinds
 
 
 def test_the_correlation_tag_is_stable_and_bounded():
