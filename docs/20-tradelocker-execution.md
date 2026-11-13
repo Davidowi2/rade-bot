@@ -818,3 +818,39 @@ target attached at the broker.
 
 The asymmetry is deliberate: a control read that *fails* does not stop
 management, because management is risk-reducing work; it only stops entries.
+
+### 11.6 The controls run against the live account, proved without an order
+
+The unit tests prove the arithmetic against a broker double. They cannot prove
+that the numbers being compared can be read from the real account, or that the
+state they depend on can be written where it will survive a restart. So
+`scripts/probe_guards.py` does exactly that against the demo account and is
+built so that it cannot place an order:
+
+* The signal it drives is **synthetic and labelled as such**. It exists to carry
+  the guards, not to claim a signal was copied.
+* Each case is configured so a guard must refuse before submission — the pause
+  case at the first check, the spread case at the sixth. Anything other than a
+  blocked outcome is reported as a failure, because it would mean a control did
+  not fire.
+* The ledger is a throwaway file, and it checks the broker afterwards for
+  positions and orders it must not have created.
+
+The run on 2026-11-13 (`docs/evidence/guard-probe-2026-11-13T16-09-39Z.json`)
+reported:
+
+```
+live quote: bid 3878.36 ask 3878.9; equity 101,034.17
+open positions: 0; open orders: 0
+
+paused:  blocked, "execution is paused: probe: pause switch check"
+spread:  blocked, "the spread is 0.16, wider than the 0.0001 limit"
+risk state persisted: {'day': '2026-11-13',
+                       'day_start_equity': 101034.17, 'peak_equity': 101034.17}
+broker order id: None   position id: None   positions after: 0
+```
+
+That is the first time the day's opening equity and the peak were written from
+the real account rather than from a fixture, and the first time a guard refusal
+was recorded against a trade row built by the real pipeline. It is still not
+evidence that a signal was copied: no signal was.

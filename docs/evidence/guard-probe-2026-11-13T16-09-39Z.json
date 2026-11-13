@@ -1,0 +1,97 @@
+{
+  "read_at": "2026-11-13T16:09:39.255109+00:00",
+  "environment": "demo",
+  "quote": {
+    "bid": 3878.36,
+    "ask": 3878.9
+  },
+  "equity": 101034.17,
+  "cases": [
+    {
+      "case": "paused: the switch must refuse before anything else",
+      "blocked": true,
+      "reason": "execution is paused: probe: pause switch check",
+      "state": "blocked",
+      "broker_order_id": null,
+      "broker_position_id": null,
+      "signal_text": "XAUUSD SELL NOW 3878.39\nSl : 3887.39\nTp : 3872.39\nTp : 3867.39\nTp : 3862.39",
+      "risk_state_persisted": {
+        "day": "2026-11-13",
+        "day_start_equity": 101034.17,
+        "peak_equity": 101034.17
+      },
+      "control": {
+        "paused": true,
+        "reason": "probe: pause switch check",
+        "changed_at": "2026-11-13T16:09:16.449172+00:00",
+        "changed_by": "probe"
+      },
+      "guard_checks": [
+        {
+          "check": "pause",
+          "ok": false,
+          "detail": "probe: pause switch check"
+        }
+      ],
+      "notifications": [
+        "[BLOCKED] execution is paused: probe: pause switch check"
+      ]
+    },
+    {
+      "case": "spread limit set below the live spread: must refuse",
+      "blocked": true,
+      "reason": "the spread is 0.16, wider than the 0.0001 limit",
+      "state": "blocked",
+      "broker_order_id": null,
+      "broker_position_id": null,
+      "signal_text": "XAUUSD SELL NOW 3878.35\nSl : 3887.35\nTp : 3872.35\nTp : 3867.35\nTp : 3862.35",
+      "risk_state_persisted": {
+        "day": "2026-11-13",
+        "day_start_equity": 101034.17,
+        "peak_equity": 101034.17
+      },
+      "control": {
+        "paused": false,
+        "reason": "probe: not paused",
+        "changed_at": "2026-11-13T16:09:27.040716+00:00",
+        "changed_by": "probe"
+      },
+      "guard_checks": [
+        {
+          "check": "pause",
+          "ok": true,
+          "detail": "not paused"
+        },
+        {
+          "check": "equity",
+          "ok": true,
+          "detail": "equity 101034"
+        },
+        {
+          "check": "max_drawdown",
+          "ok": true,
+          "detail": "equity 101034 against a floor of 95982.5 (peak 101034, limit 5.00%)"
+        },
+        {
+          "check": "daily_loss",
+          "ok": true,
+          "detail": "equity 101034 against a floor of 99013.5 (day start 101034, limit 2.00%)"
+        },
+        {
+          "check": "max_open_positions",
+          "ok": true,
+          "detail": "0 open against a limit of 3"
+        },
+        {
+          "check": "max_spread",
+          "ok": false,
+          "detail": "spread 0.16 against a limit of 0.0001"
+        }
+      ],
+      "notifications": [
+        "[BLOCKED] the spread is 0.16, wider than the 0.0001 limit"
+      ]
+    }
+  ],
+  "failures": []
+}
