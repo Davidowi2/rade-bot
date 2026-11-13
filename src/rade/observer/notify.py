@@ -176,22 +176,23 @@ def send_with_retry(notifier: Notifier, text: str, *,
     return False, detail, min(tries_allowed, attempt)
 
 
-def notify_result(result: PipelineResult, notifier: Notifier, *,
-                  ledger=None, source: str = "",
-                  attempts: int = DEFAULT_ATTEMPTS,
-                  backoff_s: float = RETRY_BASE_DELAY_S,
-                  sleep: Callable[[float], None] = time.sleep) -> dict:
-    """Send at most one notification per event, if the disposition warrants it.
+def notify_event(event_key: str, kind: str, text: str, notifier: Notifier, *,
+                 ledger=None, source: str = "",
+                 attempts: int = DEFAULT_ATTEMPTS,
+                 backoff_s: float = RETRY_BASE_DELAY_S,
+                 sleep: Callable[[float], None] = time.sleep) -> dict:
+    """Send one lifecycle notification under the same slot rules.
 
     The slot is reserved as *pending* before the send and completed with the
-    real outcome afterwards. A failed send is therefore recorded as failed and
-    stays eligible for a retry; it is never recorded as a success.
-    """
-    kind = NOTIFY_STATUSES.get(result.status)
-    text = build_notification(result)
-    if kind is None or text is None:
-        return {"notified": False, "kind": None, "reason": "disposition is silent"}
+    real outcome afterwards, exactly as :func:`notify_result` does. Only a
+    real ``sent`` suppresses a resend, so a failed notification stays
+    eligible for the retry pass.
 
+    This is the entry point for the execution lifecycle, where each stage has
+    its own message: the signal, the submission, the acceptance, the fill,
+    a partial close, a stop move and the close are separate notifications,
+    and a failure of one is retried without re-sending the others.
+    """
     if source:
         text = f"{text}\nsource: {source}"
 
@@ -199,7 +200,7 @@ def notify_result(result: PipelineResult, notifier: Notifier, *,
 
     if ledger is not None and hasattr(ledger, "notification_status"):
         try:
-            status = ledger.notification_status(result.event_key, kind)
+            status = ledger.notification_status(event_key, kind)
         except Exception as exc:  # store down: send anyway, record later
             status = None
             store_error = type(exc).__name__
@@ -210,7 +211,7 @@ def notify_result(result: PipelineResult, notifier: Notifier, *,
     attempt_no = 0
     if ledger is not None and hasattr(ledger, "begin_notification"):
         try:
-            attempt_no = int(ledger.begin_notification(result.event_key, kind))
+            attempt_no = int(ledger.begin_notification(event_key, kind))
         except Exception as exc:
             attempt_no = 0
             store_error = store_error or type(exc).__name__
@@ -220,7 +221,7 @@ def notify_result(result: PipelineResult, notifier: Notifier, *,
 
     if ledger is not None and hasattr(ledger, "complete_notification"):
         try:
-            ledger.complete_notification(result.event_key, kind, ok, detail)
+            ledger.complete_notification(event_key, kind, ok, detail)
         except Exception as exc:
             # The slot stays 'pending', which a later pass may resend. Losing
             # the notification outright is the worse failure.
@@ -237,6 +238,27 @@ def notify_result(result: PipelineResult, notifier: Notifier, *,
     if store_error:
         out["store_error"] = store_error
     return out
+
+
+def notify_result(result: PipelineResult, notifier: Notifier, *,
+                  ledger=None, source: str = "",
+                  attempts: int = DEFAULT_ATTEMPTS,
+                  backoff_s: float = RETRY_BASE_DELAY_S,
+                  sleep: Callable[[float], None] = time.sleep) -> dict:
+    """Send at most one notification per event, if the disposition warrants it.
+
+    The slot is reserved as *pending* before the send and completed with the
+    real outcome afterwards. A failed send is therefore recorded as failed and
+    stays eligible for a retry; it is never recorded as a success.
+    """
+    kind = NOTIFY_STATUSES.get(result.status)
+    text = build_notification(result)
+    if kind is None or text is None:
+        return {"notified": False, "kind": None, "reason": "disposition is silent"}
+
+    return notify_event(result.event_key, kind, text, notifier, ledger=ledger,
+                        source=source, attempts=attempts, backoff_s=backoff_s,
+                        sleep=sleep)
 
 
 def _as_json(value: Any) -> Any:

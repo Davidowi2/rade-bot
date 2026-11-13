@@ -1,0 +1,229 @@
+{
+  "trade_id": "RADE-2445692dc95ddb6312ba465c",
+  "orders_before_restart": 383,
+  "orders_after_restart": 383,
+  "resubmitted": false,
+  "reconcile_summary": {
+    "considered": 0,
+    "open": 0,
+    "closed": 0,
+    "review": 0,
+    "unknown": 0
+  },
+  "final_state": "closed",
+  "events": [
+    {
+      "at": "2026-11-13T15:23:04.315566+00:00",
+      "stage": "validated",
+      "detail": {
+        "status": "paper_intent",
+        "size": 0.5
+      }
+    },
+    {
+      "at": "2026-11-13T15:23:08.094567+00:00",
+      "stage": "submitted",
+      "detail": {
+        "executed": true,
+        "trade_id": "RADE-2445692dc95ddb6312ba465c",
+        "order_id": 216172782144395352,
+        "state": "accepted"
+      }
+    },
+    {
+      "at": "2026-11-13T15:23:09.977178+00:00",
+      "stage": "fill",
+      "detail": {
+        "stopped": true,
+        "state": "review",
+        "trade_id": "RADE-2445692dc95ddb6312ba465c",
+        "reason": "the fill at 3882.05 is already at or beyond the first target 3881.14 (published entry 3880.94, slippage 1.11); the published ladder cannot be walked as written, so automatic management did not start. The broker-side stop and target are still in place"
+      }
+    },
+    {
+      "at": "2026-11-13T15:23:13.852655+00:00",
+      "stage": "before_restart",
+      "detail": {
+        "orders": 383,
+        "positions": 1
+      }
+    },
+    {
+      "at": "2026-11-13T15:23:15.793480+00:00",
+      "stage": "after_restart",
+      "detail": {
+        "reconcile": {
+          "considered": 0,
+          "open": 0,
+          "closed": 0,
+          "review": 0,
+          "unknown": 0
+        },
+        "orders": 383,
+        "order_delta": 0,
+        "state": "review",
+        "position_id": 216172782118679595,
+        "legs_done": 0
+      }
+    },
+    {
+      "at": "2026-11-13T15:23:19.398186+00:00",
+      "stage": "cleanup",
+      "detail": {
+        "closed": true
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "id": 57,
+      "trade_id": "RADE-2445692dc95ddb6312ba465c",
+      "event_key": "2445692dc95ddb6312ba465cc4379fa0e6688019b1cdb2bf3d80591713c8172a",
+      "stage": "validated",
+      "status": "validated",
+      "detail": "ladder: close 0.16 at 3881.14, then stop to breakeven; close 0.16 at 3881.34, then stop to 3881.14; close (broker target) 0.18 at 3888.94",
+      "broker_order_id": null,
+      "broker_position_id": null,
+      "message_id": 1794583384,
+      "revision": 0,
+      "payload_json": "{\"plan\": {\"final_target\": 3888.94, \"ignored_targets\": [], \"legs\": [{\"expected_remaining_after\": 0.34, \"fraction\": 0.3333333333333333, \"label\": \"tp1\", \"managed\": true, \"quantity\": 0.16, \"stop_after_kind\": \"breakeven\", \"stop_after_value\": null, \"target\": 3881.14}, {\"expected_remaining_after\": 0.18, \"fraction\": 0.3333333333333333, \"label\": \"tp2\", \"managed\": true, \"quantity\": 0.16, \"stop_after_kind\": \"target\", \"stop_after_value\": 3881.14, \"target\": 3881.34}, {\"expected_remaining_after\": 0.0, \"fraction\": 0.3333333333333333, \"label\": \"tp3\", \"managed\": false, \"quantity\": 0.18, \"stop_after_kind\": \"none\", \"stop_after_value\": null, \"target\": 3888.94}], \"lot_step\": 0.01, \"min_lot\": 0.01, \"policy\": \"three_targets\"}}",
+      "created_at": "2026-11-13T15:23:04.340250+00:00",
+      "payload": {
+        "plan": {
+          "final_target": 3888.94,
+          "ignored_targets": [],
+          "legs": [
+            {
+              "expected_remaining_after": 0.34,
+              "fraction": 0.3333333333333333,
+              "label": "tp1",
+              "managed": true,
+              "quantity": 0.16,
+              "stop_after_kind": "breakeven",
+              "stop_after_value": null,
+              "target": 3881.14
+            },
+            {
+              "expected_remaining_after": 0.18,
+              "fraction": 0.3333333333333333,
+              "label": "tp2",
+              "managed": true,
+              "quantity": 0.16,
+              "stop_after_kind": "target",
+              "stop_after_value": 3881.14,
+              "target": 3881.34
+            },
+            {
+              "expected_remaining_after": 0.0,
+              "fraction": 0.3333333333333333,
+              "label": "tp3",
+              "managed": false,
+              "quantity": 0.18,
+              "stop_after_kind": "none",
+              "stop_after_value": null,
+              "target": 3888.94
+            }
+          ],
+          "lot_step": 0.01,
+          "min_lot": 0.01,
+          "policy": "three_targets"
+        }
+      }
+    },
+    {
+      "id": 58,
+      "trade_id": "RADE-2445692dc95ddb6312ba465c",
+      "event_key": "2445692dc95ddb6312ba465cc4379fa0e6688019b1cdb2bf3d80591713c8172a",
+      "stage": "submit",
+      "status": "submitted",
+      "detail": "market 0.5 lot buy with SL 3870.94 and TP 3888.94",
+      "broker_order_id": null,
+      "broker_position_id": null,
+      "message_id": 1794583384,
+      "revision": 0,
+      "payload_json": "{}",
+      "created_at": "2026-11-13T15:23:06.406568+00:00",
+      "payload": {}
+    },
+    {
+      "id": 59,
+      "trade_id": "RADE-2445692dc95ddb6312ba465c",
+      "event_key": "2445692dc95ddb6312ba465cc4379fa0e6688019b1cdb2bf3d80591713c8172a",
+      "stage": "accept",
+      "status": "accepted",
+      "detail": "the broker accepted order 216172782144395352",
+      "broker_order_id": 216172782144395352,
+      "broker_position_id": null,
+      "message_id": 1794583384,
+      "revision": 0,
+      "payload_json": "{\"request\": {\"qty\": 0.5, \"routeId\": \"816807\", \"side\": \"buy\", \"stopLoss\": 3870.94, \"stopLossType\": \"absolute\", \"strategyId\": \"RADE-2445692dc95ddb6312ba465c\", \"takeProfit\": 3888.94, \"takeProfitType\": \"absolute\", \"tradableInstrumentId\": 1808, \"type\": \"market\", \"validity\": \"IOC\"}}",
+      "created_at": "2026-11-13T15:23:08.002318+00:00",
+      "payload": {
+        "request": {
+          "qty": 0.5,
+          "routeId": "816807",
+          "side": "buy",
+          "stopLoss": 3870.94,
+          "stopLossType": "absolute",
+          "strategyId": "RADE-2445692dc95ddb6312ba465c",
+          "takeProfit": 3888.94,
+          "takeProfitType": "absolute",
+          "tradableInstrumentId": 1808,
+          "type": "market",
+          "validity": "IOC"
+        }
+      }
+    },
+    {
+      "id": 60,
+      "trade_id": "RADE-2445692dc95ddb6312ba465c",
+      "event_key": "2445692dc95ddb6312ba465cc4379fa0e6688019b1cdb2bf3d80591713c8172a",
+      "stage": "fill",
+      "status": "open",
+      "detail": "position 216172782118679595 open at 3882.05",
+      "broker_order_id": 216172782144395352,
+      "broker_position_id": 216172782118679595,
+      "message_id": 1794583384,
+      "revision": 0,
+      "payload_json": "{\"fill_price\": 3882.05, \"position_id\": 216172782118679595}",
+      "created_at": "2026-11-13T15:23:09.802935+00:00",
+      "payload": {
+        "fill_price": 3882.05,
+        "position_id": 216172782118679595
+      }
+    },
+    {
+      "id": 61,
+      "trade_id": "RADE-2445692dc95ddb6312ba465c",
+      "event_key": "2445692dc95ddb6312ba465cc4379fa0e6688019b1cdb2bf3d80591713c8172a",
+      "stage": "management",
+      "status": "review",
+      "detail": "the fill at 3882.05 is already at or beyond the first target 3881.14 (published entry 3880.94, slippage 1.11); the published ladder cannot be walked as written, so automatic management did not start. The broker-side stop and target are still in place",
+      "broker_order_id": 216172782144395352,
+      "broker_position_id": 216172782118679595,
+      "message_id": 1794583384,
+      "revision": 0,
+      "payload_json": "{}",
+      "created_at": "2026-11-13T15:23:09.884992+00:00",
+      "payload": {}
+    },
+    {
+      "id": 62,
+      "trade_id": "RADE-2445692dc95ddb6312ba465c",
+      "event_key": "2445692dc95ddb6312ba465cc4379fa0e6688019b1cdb2bf3d80591713c8172a",
+      "stage": "cleanup",
+      "status": "closed_by_script",
+      "detail": "the reconciliation check ended; the position was closed deliberately",
+      "broker_order_id": 216172782144395352,
+      "broker_position_id": 216172782118679595,
+      "message_id": 1794583384,
+      "revision": 0,
+      "payload_json": "{}",
+      "created_at": "2026-11-13T15:23:19.344684+00:00",
+      "payload": {}
+    }
+  ],
+  "environment": "demo",
+  "mode": "reconcile",
+  "finished_at": "2026-11-13T15:23:19.406665+00:00"
+}

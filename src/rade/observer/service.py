@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -49,6 +50,59 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY
 
 
+def _trade_view(row: dict, *, full: bool = False) -> dict:
+    """Shape one trade row for the dashboard.
+
+    The view carries the broker's own state - the order and position ids, the
+    size, the entry, the stop the broker holds and the targets - rather than a
+    reconstruction from the signal. A dashboard that showed what the signal
+    asked for instead of what the broker has would be a dashboard that lies.
+    """
+    plan = row.get("plan") or {}
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except ValueError:
+            plan = {}
+    targets = row.get("targets") or []
+    if isinstance(targets, str):
+        try:
+            targets = json.loads(targets)
+        except ValueError:
+            targets = []
+
+    view = {
+        "trade_id": row.get("trade_id"),
+        "state": row.get("state"),
+        "symbol": row.get("symbol"),
+        "side": row.get("side"),
+        "size_lots": row.get("size"),
+        "published_entry": row.get("entry"),
+        "fill_price": row.get("fill_price"),
+        "initial_stop": row.get("stop"),
+        "current_stop": row.get("current_stop"),
+        "targets": targets,
+        "final_target": plan.get("final_target"),
+        "ignored_targets": plan.get("ignored_targets") or [],
+        "policy": plan.get("policy"),
+        "legs_done": row.get("legs_done"),
+        "legs_total": len(plan.get("legs") or []),
+        "broker_order_id": row.get("broker_order_id"),
+        "broker_position_id": row.get("broker_position_id"),
+        "management_stopped": bool(row.get("management_stopped")),
+        "note": row.get("note") or "",
+        "message_id": row.get("message_id"),
+        "revision": row.get("revision"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+    if full:
+        view["plan"] = plan
+        view["event_key"] = row.get("event_key")
+        view["channel"] = row.get("channel")
+    return view
+
+
 @dataclass
 class ListenerHandle:
     """What the Telegram half of the service is doing.
@@ -70,7 +124,10 @@ class MirrorService:
                  heartbeat_path: str | Path | None = None,
                  listener_expected: bool = False,
                  listener_thread: Any = None,
-                 listener_error: str | None = None):
+                 listener_error: str | None = None,
+                 executor: Any = None,
+                 broker_spec: Any = None,
+                 execution_error: str | None = None):
         self.ledger = ledger
         self.token = token
         self.heartbeat_path = Path(heartbeat_path) if heartbeat_path else None
@@ -78,6 +135,11 @@ class MirrorService:
         self.listener_expected = bool(listener_expected)
         self.listener_thread = listener_thread
         self.listener_error = listener_error
+        #: The demo execution engine, when it is wired. ``None`` means this
+        #: process is the paper mirror and nothing else.
+        self.executor = executor
+        self.broker_spec = broker_spec
+        self.execution_error = execution_error
         self.health_max_age_s = float(os.getenv("MIRROR_HEALTH_MAX_AGE_S",
                                                 DEFAULT_HEALTH_MAX_AGE_S))
         self.startup_grace_s = float(os.getenv("MIRROR_STARTUP_GRACE_S",
@@ -155,15 +217,48 @@ class MirrorService:
     def config_summary(self) -> dict:
         """Presence only. Never a value, never a prefix of a value."""
         supabase = bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+        executing = self.executor is not None
         return {
             "supabase": supabase,
             "durable_store": supabase or not hosted_mode(),
             "notifier": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_NOTIFY_CHAT_ID")),
             "contract_units_confirmed": _truthy(os.getenv("MIRROR_CONTRACT_UNITS_CONFIRMED")),
-            "broker_writes": False,
-            "paper_only": True,
-            "exit_policy": "unresolved",
+            # The paper mirror and the demo executor are different states and
+            # the status says which one this process is in. There is no live
+            # account path either way.
+            "broker_writes": executing,
+            "paper_only": not executing,
+            "account_scope": "demo" if executing else "none",
+            "live_trading": False,
+            "exit_policy": "tp_ladder" if executing else "unresolved",
         }
+
+    def execution_state(self) -> dict:
+        """What the demo execution path is doing, for the dashboard."""
+        state: dict[str, Any] = {
+            "enabled": self.executor is not None,
+            "account_scope": "demo",
+            "live_trading": False,
+        }
+        if self.execution_error:
+            state["error"] = self.execution_error
+        spec = self.broker_spec
+        if spec is not None:
+            state["broker"] = {
+                "environment": spec.environment,
+                "symbol": spec.symbol,
+                "instrument_id": spec.instrument_id,
+                "trade_route_id": spec.trade_route_id,
+                "account_number": spec.account_number,
+                "contract_units_per_lot": spec.contract_units_per_lot,
+                "lot_step": spec.lot_step,
+                "min_lot": spec.min_lot,
+                "max_lot": spec.max_lot,
+                "symbol_status": spec.symbol_status,
+                "verified": spec.verified,
+                "unconfirmed_reason": spec.unconfirmed_reason,
+            }
+        return state
 
     def counts(self) -> dict:
         try:
@@ -199,16 +294,28 @@ class MirrorService:
             listener = self.listener_state()
             return 200, {
                 "service": "rade-mirror",
-                "paper_only": True,
-                "broker_writes": False,
-                "exit_policy": "unresolved",
+                "paper_only": self.executor is None,
+                "broker_writes": self.executor is not None,
+                "account_scope": "demo" if self.executor is not None else "none",
+                "live_trading": False,
+                "exit_policy": "tp_ladder" if self.executor is not None else "unresolved",
                 "uptime_s": round(time.time() - self.started_at, 1),
                 "time": _now_iso(),
                 "counts": self.counts(),
                 "listener": listener,
+                "execution": self.execution_state(),
                 "config": self.config_summary(),
                 "store": type(self.ledger).__name__,
             }
+
+        if path == "/api/trades":
+            return 200, {"trades": self._trades(limit)}
+
+        if path.startswith("/api/trades/"):
+            trade_id = path[len("/api/trades/"):].strip()
+            if not trade_id:
+                return 404, {"error": "not found"}
+            return self._trade_detail(trade_id)
 
         if path == "/api/events":
             return 200, {"events": self._recent(limit, statuses)}
@@ -228,6 +335,49 @@ class MirrorService:
             return self.ledger.recent(limit=limit, statuses=statuses)
         except Exception as exc:
             return [{"error": type(exc).__name__, "detail": str(exc)[:200]}]
+
+    # -- trades -----------------------------------------------------------
+    #
+    # These read the trade rows the execution engine writes. Nothing here can
+    # change a trade: the service is still read-only.
+
+    def _trades(self, limit: int) -> list[dict]:
+        if not hasattr(self.ledger, "list_trades"):
+            return []
+        try:
+            rows = self.ledger.list_trades()
+        except Exception as exc:
+            return [{"error": type(exc).__name__, "detail": str(exc)[:200]}]
+        # Newest first, so the dashboard shows the live trade at the top.
+        rows = sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
+        return [_trade_view(row) for row in rows[:limit]]
+
+    def _trade_detail(self, trade_id: str) -> tuple[int, dict]:
+        if not hasattr(self.ledger, "get_trade"):
+            return 404, {"error": "not found"}
+        try:
+            row = self.ledger.get_trade(trade_id)
+        except Exception as exc:
+            return 500, {"error": "internal error", "detail": type(exc).__name__}
+        if row is None:
+            return 404, {"error": "not found"}
+        transitions = []
+        if hasattr(self.ledger, "transitions"):
+            try:
+                transitions = [
+                    {
+                        "stage": item.get("stage"),
+                        "status": item.get("status"),
+                        "detail": item.get("detail"),
+                        "broker_order_id": item.get("broker_order_id"),
+                        "broker_position_id": item.get("broker_position_id"),
+                        "created_at": item.get("created_at"),
+                    }
+                    for item in self.ledger.transitions(trade_id)
+                ]
+            except Exception as exc:
+                transitions = [{"error": type(exc).__name__}]
+        return 200, {"trade": _trade_view(row, full=True), "transitions": transitions}
 
 
 def make_handler(service: MirrorService, *, log: Any = None):
@@ -292,7 +442,8 @@ def make_handler(service: MirrorService, *, log: Any = None):
     return Handler
 
 
-def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandle:
+def start_listener_if_configured(ledger: Any, log: Any = print,
+                                 executor: Any = None) -> ListenerHandle:
     """Start the Telegram listener beside the API when MIRROR_RUN_LISTENER=1.
 
     The handle says what happened. A listener that was requested but did not
@@ -316,7 +467,9 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
     if confirmed and not units_raw:
         handle.error = ("MIRROR_CONTRACT_UNITS_PER_LOT is required once the "
                         "contract size is confirmed; it is never guessed")
-    elif confirmed and not equity_raw:
+    elif confirmed and not equity_raw and executor is None:
+        # With the execution path running the equity is the broker's, so the
+        # configured value is not required and is not used.
         handle.error = ("MIRROR_EQUITY is required once the contract size is "
                         "confirmed; it is never guessed")
     if handle.error:
@@ -342,14 +495,25 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
         from rade.config.settings import get_settings
         from rade.ingestion.telegram.client import make_client
         from rade.observer.listener import MirrorListener, MirrorState, start_listener_thread
-        from rade.observer.mirror_pipeline import InstrumentSpec, RiskConfig
+        from rade.observer.mirror_pipeline import InstrumentSpec, MarketQuote, RiskConfig
         from rade.observer.notify import notifier_from_env
         from rade.observer.quotes import tradelocker_quote_provider
 
         settings = get_settings()
         channel = os.getenv("MIRROR_CHANNEL") or settings.telegram_channel
         quote_provider = None
-        if os.getenv("MIRROR_QUOTE_PROVIDER", "none").strip() == "tradelocker":
+        if executor is not None and getattr(executor, "broker", None) is not None:
+            # One client, one session: the listener asks the execution
+            # gateway for the quote so the price a signal is sized against is
+            # the same price the order will be sent into.
+            gateway = executor.broker
+
+            def _gateway_quote() -> MarketQuote:
+                current = gateway.quote()
+                return MarketQuote(current.bid, current.ask, current.quoted_at)
+
+            quote_provider = _gateway_quote
+        elif os.getenv("MIRROR_QUOTE_PROVIDER", "none").strip() == "tradelocker":
             quote_provider = tradelocker_quote_provider()
 
         # The contract size is only used when a human has confirmed it. Until
@@ -361,17 +525,43 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
             log("MIRROR_CONTRACT_UNITS_CONFIRMED is not set: signals will be "
                 "recorded as blocked, not sized")
 
+        # With the execution path running, the lot step, the minimum and the
+        # maximum come from the broker rather than from literals in this file.
+        # A hardcoded step cannot notice that the broker changed it.
+        if executor is not None and getattr(executor, "broker", None) is not None:
+            broker_spec = executor.broker.spec()
+            instrument = InstrumentSpec(
+                broker_spec.symbol,
+                broker_spec.contract_units_per_lot,
+                broker_spec.lot_step,
+                broker_spec.min_lot,
+                broker_spec.max_lot,
+                units_confirmed=broker_spec.verified,
+            )
+            # The equity a new trade is sized against is the account's, read
+            # from the broker. It is read once at startup: a large drift in
+            # P&L is not re-read, which is recorded as a limitation.
+            try:
+                equity = executor.broker.equity()
+                log(f"sizing equity from the broker: {equity:.2f}")
+            except Exception as exc:
+                equity = 0.0
+                log(f"could not read the account equity: {type(exc).__name__}")
+        else:
+            instrument = InstrumentSpec("XAUUSD", units, 0.01, 0.01, 50.0,
+                                        units_confirmed=confirmed)
+
         listener = MirrorListener(
             channel=channel,
             ledger=ledger,
-            instrument=InstrumentSpec("XAUUSD", units, 0.01, 0.01, 50.0,
-                                      units_confirmed=confirmed),
+            instrument=instrument,
             risk=RiskConfig(equity, 0.005,
                             float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2"))),
             notifier=notifier_from_env(),
             quote_provider=quote_provider,
             state=MirrorState(os.getenv("MIRROR_STATE", "data/mirror_state.json")),
             log=log,
+            executor=executor,
         )
         handle.thread = start_listener_thread(
             client_factory=make_client,
@@ -388,6 +578,90 @@ def start_listener_if_configured(ledger: Any, log: Any = print) -> ListenerHandl
         handle.error = f"{type(exc).__name__}: {exc}"
         log(f"listener not started: {handle.error}")
     return handle
+
+
+def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHandle":
+    """Start the demo execution path when MIRROR_EXECUTE=1.
+
+    Three things happen in this order, and the order is the point:
+
+    1. The broker specification is resolved and **verified**. An unconfirmed
+       contract size stops the executor here: the service says why instead of
+       starting something that would block every signal.
+    2. The trades in the store are reconciled against the broker *before* the
+       listener is allowed to act. A restart therefore adopts what the broker
+       already has instead of placing a second order.
+    3. Only then does the management loop start.
+    """
+    handle = ExecutorHandle()
+    if not _truthy(os.getenv("MIRROR_EXECUTE")):
+        return handle
+
+    try:
+        from rade.execution.engine import ExecutionEngine
+        from rade.execution.gateway import tradelocker_gateway_from_env
+        from rade.observer.notify import notifier_from_env
+
+        confirmed = _truthy(os.getenv("MIRROR_CONTRACT_UNITS_CONFIRMED"))
+        units_raw = os.getenv("MIRROR_CONTRACT_UNITS_PER_LOT", "").strip()
+        confirmed_units = float(units_raw) if (confirmed and units_raw) else None
+
+        gateway = tradelocker_gateway_from_env(
+            confirmed_contract_units=confirmed_units, log=log)
+        handle.spec = gateway.spec()
+        if not handle.spec.verified:
+            handle.error = (
+                "the broker specification is not verified: "
+                f"{handle.spec.unconfirmed_reason}")
+            log(f"executor not started: {handle.error}")
+            return handle
+
+        engine = ExecutionEngine(
+            broker=gateway,
+            ledger=ledger,
+            notifier=notifier_from_env(),
+            log=log,
+            manage_every_s=float(os.getenv("MIRROR_MANAGE_EVERY_S", "5")),
+            fill_timeout_s=float(os.getenv("MIRROR_FILL_TIMEOUT_S", "300")),
+        )
+        log(f"execution reconciliation on startup: {engine.reconcile()}")
+        handle.executor = engine
+        handle.stop_event = threading.Event()
+        handle.thread = threading.Thread(
+            target=_management_loop,
+            args=(engine, handle.stop_event, log, engine.manage_every_s),
+            name="rade-execution-manager",
+            daemon=True,
+        )
+        handle.thread.start()
+        log("demo execution path started; account scope is demo only")
+    except Exception as exc:
+        handle.error = f"{type(exc).__name__}: {exc}"
+        log(f"executor not started: {handle.error}")
+    return handle
+
+
+@dataclass
+class ExecutorHandle:
+    """What the execution half of the service is doing."""
+
+    executor: Any = None
+    spec: Any = None
+    error: str | None = None
+    thread: Any = None
+    stop_event: Any = None
+
+
+def _management_loop(engine: Any, stop_event: Any, log: Any, interval_s: float) -> None:
+    """Manage open trades on a timer until the process stops."""
+    while not stop_event.wait(max(1.0, float(interval_s))):
+        try:
+            summary = engine.manage()
+        except Exception as exc:
+            log(f"management pass failed: {type(exc).__name__}: {exc}")
+            continue
+        if summary.get("closed") or summary.get("partial") or summary.get("errors"):
+            log(f"management: {summary}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -408,7 +682,15 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 3
 
-    handle = start_listener_if_configured(ledger)
+    # The execution path is started *before* the listener, so that a restart
+    # reconciles against the broker before a new signal can act on anything.
+    execution = start_executor_if_configured(ledger)
+    if _truthy(os.getenv("MIRROR_EXECUTE")) and execution.error:
+        print(f"execution was requested but did not start: {execution.error}",
+              file=sys.stderr)
+        return 3
+
+    handle = start_listener_if_configured(ledger, executor=execution.executor)
     if handle.expected and handle.error:
         print(f"the listener was requested but did not start: {handle.error}",
               file=sys.stderr)
@@ -417,7 +699,10 @@ def main(argv: list[str] | None = None) -> int:
     service = MirrorService(ledger, token=token, heartbeat_path=heartbeat,
                              listener_expected=handle.expected,
                              listener_thread=handle.thread,
-                             listener_error=handle.error)
+                             listener_error=handle.error,
+                             executor=execution.executor,
+                             broker_spec=execution.spec,
+                             execution_error=execution.error)
     handler = make_handler(service, log=lambda line: print(line, flush=True))
     httpd = ThreadingHTTPServer(("0.0.0.0", port), handler)
     print(f"listening on :{port}; read-only; store={type(service.ledger).__name__}",

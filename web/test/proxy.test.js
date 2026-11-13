@@ -11,7 +11,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const http = require("node:http");
 
-const { proxy, buildQuery } = require("../lib/proxy");
+const { proxy, buildQuery, tradePath } = require("../lib/proxy");
 
 function fakeRes() {
   const res = { statusCode: 0, headers: {}, body: "", jsonBody: null };
@@ -105,4 +105,28 @@ test("reports an unreachable backend without leaking its address", async () => {
   assert.equal(res.jsonBody.error, "backend unreachable");
   assert.ok(!res.body.includes("backend-secret"));
   assert.ok(!res.body.includes("127.0.0.1"));
+});
+
+// --- trade paths -----------------------------------------------------------
+//
+// The trade id arrives from the browser and ends up in the upstream path, so
+// the only ids that may pass are the ones the backend could have generated.
+
+test("a generated trade id becomes a trade path", () => {
+  assert.equal(tradePath("RADE-b135f8fd83f05c6c8ea0e88b"),
+               "/api/trades/RADE-b135f8fd83f05c6c8ea0e88b");
+});
+
+test("a trade id cannot escape the trades prefix", () => {
+  for (const bad of ["../status", "a/b", "RADE-1?x=1", "", "a".repeat(65), null]) {
+    assert.equal(tradePath(bad), null, `accepted ${JSON.stringify(bad)}`);
+  }
+});
+
+test("the trade detail route refuses an invalid id before calling upstream", () => {
+  const handler = require("../api/trades/[id].js");
+  const res = fakeRes();
+  handler({ query: { id: "../../status" }, headers: {} }, res);
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.jsonBody, { error: "invalid trade id" });
 });

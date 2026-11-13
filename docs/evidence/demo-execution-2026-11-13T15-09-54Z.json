@@ -1,0 +1,72 @@
+{
+  "mode": "run",
+  "aborted": "validation produced blocked",
+  "reason": "broker quote is invalid",
+  "events": [
+    {
+      "at": "2026-11-13T15:09:20.963240+00:00",
+      "stage": "spec",
+      "detail": {
+        "environment": "demo",
+        "base_url": "https://demo.tradelocker.com",
+        "account_id": 2509174,
+        "account_number": 2,
+        "symbol": "XAUUSD",
+        "instrument_id": 1808,
+        "trade_route_id": "816807",
+        "contract_units_per_lot": 100.0,
+        "lot_step": 0.01,
+        "min_lot": 0.01,
+        "max_lot": 50.0,
+        "tick_size": 0.01,
+        "symbol_status": "FULLY_OPEN",
+        "confirmed_contract_units": 100.0,
+        "verified": true,
+        "unconfirmed_reason": null
+      }
+    },
+    {
+      "at": "2026-11-13T15:09:24.306527+00:00",
+      "stage": "equity",
+      "detail": {
+        "equity": 100845.27,
+        "source": "the broker's projectedBalance"
+      }
+    },
+    {
+      "at": "2026-11-13T15:09:51.254331+00:00",
+      "stage": "drift",
+      "detail": {
+        "side": "buy",
+        "moved_points": 1.04,
+        "purpose": "choose the side the price is already travelling, so the ladder is reachable in one window; this is not a strategy"
+      }
+    },
+    {
+      "at": "2026-11-13T15:09:54.768982+00:00",
+      "stage": "quote",
+      "detail": {
+        "bid": 3884.44,
+        "ask": 3884.29
+      }
+    },
+    {
+      "at": "2026-11-13T15:09:54.769344+00:00",
+      "stage": "signal",
+      "detail": {
+        "text": "XAUUSD BUY NOW 3884.29\nSl : 3874.29\nTp : 3884.49\nTp : 3884.89\nTp : 3894.29"
+      }
+    },
+    {
+      "at": "2026-11-13T15:09:54.770100+00:00",
+      "stage": "validated",
+      "detail": {
+        "status": "blocked",
+        "reason": "broker quote is invalid",
+        "intent": null
+      }
+    }
+  ],
+  "environment": "demo",
+  "finished_at": "2026-11-13T15:09:54.770222+00:00"
+}

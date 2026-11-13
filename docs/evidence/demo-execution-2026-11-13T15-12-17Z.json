@@ -1,0 +1,412 @@
+{
+  "mode": "run",
+  "trade_id": "RADE-b67019cb072866975c3f9ef0",
+  "closed_by_script": true,
+  "events": [
+    {
+      "at": "2026-11-13T15:10:24.122140+00:00",
+      "stage": "spec",
+      "detail": {
+        "environment": "demo",
+        "base_url": "https://demo.tradelocker.com",
+        "account_id": 2509174,
+        "account_number": 2,
+        "symbol": "XAUUSD",
+        "instrument_id": 1808,
+        "trade_route_id": "816807",
+        "contract_units_per_lot": 100.0,
+        "lot_step": 0.01,
+        "min_lot": 0.01,
+        "max_lot": 50.0,
+        "tick_size": 0.01,
+        "symbol_status": "FULLY_OPEN",
+        "confirmed_contract_units": 100.0,
+        "verified": true,
+        "unconfirmed_reason": null
+      }
+    },
+    {
+      "at": "2026-11-13T15:10:27.570089+00:00",
+      "stage": "equity",
+      "detail": {
+        "equity": 100845.27,
+        "source": "the broker's projectedBalance"
+      }
+    },
+    {
+      "at": "2026-11-13T15:10:54.757017+00:00",
+      "stage": "drift",
+      "detail": {
+        "side": "buy",
+        "moved_points": 0.62,
+        "purpose": "choose the side the price is already travelling, so the ladder is reachable in one window; this is not a strategy"
+      }
+    },
+    {
+      "at": "2026-11-13T15:10:58.150823+00:00",
+      "stage": "quote",
+      "detail": {
+        "bid": 3887.4,
+        "ask": 3887.59,
+        "crossed_retries": 0
+      }
+    },
+    {
+      "at": "2026-11-13T15:10:58.150910+00:00",
+      "stage": "signal",
+      "detail": {
+        "text": "XAUUSD BUY NOW 3887.59\nSl : 3877.59\nTp : 3887.79\nTp : 3888.19\nTp : 3897.59"
+      }
+    },
+    {
+      "at": "2026-11-13T15:10:58.151208+00:00",
+      "stage": "validated",
+      "detail": {
+        "status": "paper_intent",
+        "reason": "validated; simulation only",
+        "intent": {
+          "mode": "paper_only",
+          "broker_write": false,
+          "filled": false,
+          "order_state": "would_fill_market",
+          "symbol": "XAUUSD",
+          "side": "buy",
+          "type": "market",
+          "price": null,
+          "effective_entry_for_sizing": 3887.59,
+          "size_lots": 0.5,
+          "stop_loss": 3877.59,
+          "take_profits": [
+            3887.79,
+            3888.19,
+            3897.59
+          ],
+          "risk_fraction": 0.005,
+          "risk_budget": 504.23,
+          "estimated_stop_risk_before_slippage_and_fees": 500.0,
+          "quote": {
+            "bid": 3887.4,
+            "ask": 3887.59,
+            "quoted_at": "2026-11-13T15:10:58.150807+00:00",
+            "age_ms": 0.1
+          },
+          "idempotency_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b"
+        }
+      }
+    },
+    {
+      "at": "2026-11-13T15:11:01.993778+00:00",
+      "stage": "submitted",
+      "detail": {
+        "executed": true,
+        "trade_id": "RADE-b67019cb072866975c3f9ef0",
+        "order_id": 216172782144390674,
+        "state": "accepted"
+      }
+    },
+    {
+      "at": "2026-11-13T15:11:04.011068+00:00",
+      "stage": "fill",
+      "detail": {
+        "filled": true,
+        "trade_id": "RADE-b67019cb072866975c3f9ef0",
+        "position_id": 216172782118678877
+      }
+    },
+    {
+      "at": "2026-11-13T15:11:37.118013+00:00",
+      "stage": "manage",
+      "detail": {
+        "partial": true,
+        "trade_id": "RADE-b67019cb072866975c3f9ef0",
+        "closed_qty": 0.16,
+        "error": true,
+        "retry": true,
+        "reason": "a stop at 3888.33 is not below the market price 3888.11",
+        "attempt": 1
+      }
+    },
+    {
+      "at": "2026-11-13T15:11:57.107243+00:00",
+      "stage": "manage",
+      "detail": {
+        "partial": true,
+        "trade_id": "RADE-b67019cb072866975c3f9ef0",
+        "stop_retried": "tp1"
+      }
+    },
+    {
+      "at": "2026-11-13T15:12:11.942843+00:00",
+      "stage": "manage",
+      "detail": {
+        "partial": true,
+        "trade_id": "RADE-b67019cb072866975c3f9ef0",
+        "closed_qty": 0.16,
+        "stopped": true,
+        "state": "review",
+        "reason": "the tp2 stop move was refused: moving the stop from 3888.33 to 3887.79 would widen the risk on a long position"
+      }
+    },
+    {
+      "at": "2026-11-13T15:12:13.951634+00:00",
+      "stage": "watch",
+      "detail": {
+        "passes": 5,
+        "quotes": [
+          {
+            "at": "2026-11-13T15:11:07.431553+00:00",
+            "bid": 3887.96,
+            "ask": 3888.34,
+            "legs_done": 0
+          },
+          {
+            "at": "2026-11-13T15:11:17.916890+00:00",
+            "bid": 3887.2,
+            "ask": 3887.57,
+            "legs_done": 0
+          },
+          {
+            "at": "2026-11-13T15:11:28.429955+00:00",
+            "bid": 3888.2,
+            "ask": 3889.07,
+            "legs_done": 0
+          },
+          {
+            "at": "2026-11-13T15:11:42.599242+00:00",
+            "bid": 3888.11,
+            "ask": 3889.39,
+            "legs_done": 1
+          },
+          {
+            "at": "2026-11-13T15:12:02.970059+00:00",
+            "bid": 3889.68,
+            "ask": 3890.05,
+            "legs_done": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-11-13T15:12:13.962254+00:00",
+      "stage": "final",
+      "detail": {
+        "state": "review",
+        "legs_done": 2,
+        "note": "the tp2 stop move was refused: moving the stop from 3888.33 to 3887.79 would widen the risk on a long position"
+      }
+    },
+    {
+      "at": "2026-11-13T15:12:17.717222+00:00",
+      "stage": "cleanup",
+      "detail": {
+        "closed_by_script": true
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "id": 38,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "validated",
+      "status": "validated",
+      "detail": "ladder: close 0.16 at 3887.79, then stop to breakeven; close 0.16 at 3888.19, then stop to 3887.79; close (broker target) 0.18 at 3897.59",
+      "broker_order_id": null,
+      "broker_position_id": null,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{\"plan\": {\"final_target\": 3897.59, \"ignored_targets\": [], \"legs\": [{\"expected_remaining_after\": 0.34, \"fraction\": 0.3333333333333333, \"label\": \"tp1\", \"managed\": true, \"quantity\": 0.16, \"stop_after_kind\": \"breakeven\", \"stop_after_value\": null, \"target\": 3887.79}, {\"expected_remaining_after\": 0.18, \"fraction\": 0.3333333333333333, \"label\": \"tp2\", \"managed\": true, \"quantity\": 0.16, \"stop_after_kind\": \"target\", \"stop_after_value\": 3887.79, \"target\": 3888.19}, {\"expected_remaining_after\": 0.0, \"fraction\": 0.3333333333333333, \"label\": \"tp3\", \"managed\": false, \"quantity\": 0.18, \"stop_after_kind\": \"none\", \"stop_after_value\": null, \"target\": 3897.59}], \"lot_step\": 0.01, \"min_lot\": 0.01, \"policy\": \"three_targets\"}}",
+      "created_at": "2026-11-13T15:10:58.171031+00:00",
+      "payload": {
+        "plan": {
+          "final_target": 3897.59,
+          "ignored_targets": [],
+          "legs": [
+            {
+              "expected_remaining_after": 0.34,
+              "fraction": 0.3333333333333333,
+              "label": "tp1",
+              "managed": true,
+              "quantity": 0.16,
+              "stop_after_kind": "breakeven",
+              "stop_after_value": null,
+              "target": 3887.79
+            },
+            {
+              "expected_remaining_after": 0.18,
+              "fraction": 0.3333333333333333,
+              "label": "tp2",
+              "managed": true,
+              "quantity": 0.16,
+              "stop_after_kind": "target",
+              "stop_after_value": 3887.79,
+              "target": 3888.19
+            },
+            {
+              "expected_remaining_after": 0.0,
+              "fraction": 0.3333333333333333,
+              "label": "tp3",
+              "managed": false,
+              "quantity": 0.18,
+              "stop_after_kind": "none",
+              "stop_after_value": null,
+              "target": 3897.59
+            }
+          ],
+          "lot_step": 0.01,
+          "min_lot": 0.01,
+          "policy": "three_targets"
+        }
+      }
+    },
+    {
+      "id": 39,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "submit",
+      "status": "submitted",
+      "detail": "market 0.5 lot buy with SL 3877.59 and TP 3897.59",
+      "broker_order_id": null,
+      "broker_position_id": null,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{}",
+      "created_at": "2026-11-13T15:11:00.297523+00:00",
+      "payload": {}
+    },
+    {
+      "id": 40,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "accept",
+      "status": "accepted",
+      "detail": "the broker accepted order 216172782144390674",
+      "broker_order_id": 216172782144390674,
+      "broker_position_id": null,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{\"request\": {\"qty\": 0.5, \"routeId\": \"816807\", \"side\": \"buy\", \"stopLoss\": 3877.59, \"stopLossType\": \"absolute\", \"strategyId\": \"RADE-b67019cb072866975c3f9ef0\", \"takeProfit\": 3897.59, \"takeProfitType\": \"absolute\", \"tradableInstrumentId\": 1808, \"type\": \"market\", \"validity\": \"IOC\"}}",
+      "created_at": "2026-11-13T15:11:01.887790+00:00",
+      "payload": {
+        "request": {
+          "qty": 0.5,
+          "routeId": "816807",
+          "side": "buy",
+          "stopLoss": 3877.59,
+          "stopLossType": "absolute",
+          "strategyId": "RADE-b67019cb072866975c3f9ef0",
+          "takeProfit": 3897.59,
+          "takeProfitType": "absolute",
+          "tradableInstrumentId": 1808,
+          "type": "market",
+          "validity": "IOC"
+        }
+      }
+    },
+    {
+      "id": 41,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "fill",
+      "status": "open",
+      "detail": "position 216172782118678877 open at 3888.33",
+      "broker_order_id": 216172782144390674,
+      "broker_position_id": 216172782118678877,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{\"fill_price\": 3888.33, \"position_id\": 216172782118678877}",
+      "created_at": "2026-11-13T15:11:03.690683+00:00",
+      "payload": {
+        "fill_price": 3888.33,
+        "position_id": 216172782118678877
+      }
+    },
+    {
+      "id": 42,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "tp1",
+      "status": "partial_closed",
+      "detail": "closed 0.16 lots at 3887.79",
+      "broker_order_id": 216172782144390674,
+      "broker_position_id": 216172782118678877,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{\"closed_qty\": 0.16, \"target\": 3887.79}",
+      "created_at": "2026-11-13T15:11:36.977730+00:00",
+      "payload": {
+        "closed_qty": 0.16,
+        "target": 3887.79
+      }
+    },
+    {
+      "id": 43,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "tp1",
+      "status": "stop_deferred",
+      "detail": "attempt 1: a stop at 3888.33 is not below the market price 3888.11",
+      "broker_order_id": 216172782144390674,
+      "broker_position_id": 216172782118678877,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{}",
+      "created_at": "2026-11-13T15:11:37.080311+00:00",
+      "payload": {}
+    },
+    {
+      "id": 44,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "tp1",
+      "status": "stop_updated",
+      "detail": "the stop moved to 3888.33",
+      "broker_order_id": 216172782144390674,
+      "broker_position_id": 216172782118678877,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{\"previous_stop\": 3877.59, \"stop\": 3888.33}",
+      "created_at": "2026-11-13T15:11:54.929466+00:00",
+      "payload": {
+        "previous_stop": 3877.59,
+        "stop": 3888.33
+      }
+    },
+    {
+      "id": 45,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "tp2",
+      "status": "partial_closed",
+      "detail": "closed 0.16 lots at 3888.19",
+      "broker_order_id": 216172782144390674,
+      "broker_position_id": 216172782118678877,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{\"closed_qty\": 0.16, \"target\": 3888.19}",
+      "created_at": "2026-11-13T15:12:11.778320+00:00",
+      "payload": {
+        "closed_qty": 0.16,
+        "target": 3888.19
+      }
+    },
+    {
+      "id": 46,
+      "trade_id": "RADE-b67019cb072866975c3f9ef0",
+      "event_key": "b67019cb072866975c3f9ef0cc89d064c465c0d46064cdcd36a23e302415194b",
+      "stage": "management",
+      "status": "review",
+      "detail": "the tp2 stop move was refused: moving the stop from 3888.33 to 3887.79 would widen the risk on a long position",
+      "broker_order_id": 216172782144390674,
+      "broker_position_id": 216172782118678877,
+      "message_id": 1794582658,
+      "revision": 0,
+      "payload_json": "{}",
+      "created_at": "2026-11-13T15:12:11.837345+00:00",
+      "payload": {}
+    }
+  ],
+  "final_state": "closed",
+  "environment": "demo",
+  "finished_at": "2026-11-13T15:12:17.717311+00:00"
+}

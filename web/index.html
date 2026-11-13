@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rade mirror — paper only</title>
+<title>Rade mirror — demo account</title>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #5c6370;
@@ -66,12 +66,10 @@
 <header>
   <div>
     <h1>Rade mirror</h1>
-    <div class="sub">Telegram → validation → paper intents. Read-only view.</div>
+    <div class="sub">Telegram → validation → demo execution. Read-only view.</div>
   </div>
-  <div class="badges">
-    <span class="badge ok">paper only</span>
-    <span class="badge">broker writes disabled</span>
-    <span class="badge warn">exit policy unresolved</span>
+  <div class="badges" id="badges">
+    <span class="badge">loading</span>
   </div>
 </header>
 
@@ -94,6 +92,22 @@
 
   <section id="dash" class="hidden">
     <div class="grid" id="cards"></div>
+
+    <div class="panel">
+      <h2>Broker position — demo account</h2>
+      <div id="broker"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Trades</h2>
+      <div id="trades"></div>
+    </div>
+
+    <div class="panel hidden" id="detail-panel">
+      <h2>Trade detail <button type="button" class="ghost" id="detail-close"
+            style="float:right;padding:2px 10px;font-size:12px">close</button></h2>
+      <div id="detail"></div>
+    </div>
 
     <div class="panel">
       <h2>Paper intents</h2>
@@ -161,7 +175,7 @@ function renderCards(status) {
   const listenerValue = !listener.known ? "unknown"
     : listener.stale ? "stale" : (listener.phase || "unknown");
   const cards = [
-    { label: "Service", value: status.paper_only ? "paper" : "unknown",
+    { label: "Mode", value: status.paper_only ? "paper" : "demo execution",
       note: `store: ${esc(status.store || "?")}` },
     { label: "Listener", value: listenerValue,
       note: listener.heartbeat_age_s != null ? `heartbeat ${listener.heartbeat_age_s}s ago` : "no heartbeat file",
@@ -178,6 +192,113 @@ function renderCards(status) {
       <div class="value">${esc(c.value)}</div>
       <div class="note">${c.note}</div>
     </div>`).join("");
+}
+
+function renderBadges(status) {
+  const exec = status.execution || {};
+  const broker = exec.broker || {};
+  const items = [];
+  if (exec.enabled) {
+    items.push('<span class="badge ok">demo execution</span>');
+    items.push(`<span class="badge ${broker.verified ? "ok" : "bad"}">broker spec ${broker.verified ? "verified" : "unverified"}</span>`);
+    items.push(`<span class="badge">${esc(broker.symbol || "?")} · instrument ${esc(broker.instrument_id)}</span>`);
+  } else {
+    items.push('<span class="badge ok">paper only</span>');
+    items.push('<span class="badge">broker writes disabled</span>');
+  }
+  items.push('<span class="badge bad">live trading disabled</span>');
+  items.push(`<span class="badge ${status.exit_policy === "tp_ladder" ? "ok" : "warn"}">exit policy ${esc(status.exit_policy || "unresolved")}</span>`);
+  if (exec.error) items.push('<span class="badge bad">execution error</span>');
+  document.getElementById("badges").innerHTML = items.join("");
+}
+
+function stateBadge(state) {
+  const cls = (state === "open" || state === "partial") ? "ok"
+    : (state === "blocked" || state === "rejected" || state === "review") ? "bad"
+    : state === "closed" ? "" : "warn";
+  return `<span class="badge ${cls}">${esc(state)}</span>`;
+}
+
+function renderBroker(status, trades) {
+  const exec = status.execution || {};
+  const el = document.getElementById("broker");
+  if (!exec.enabled) {
+    el.innerHTML = '<div class="empty">The execution path is not enabled. ' +
+      'This service is the paper mirror: it sizes and records intents, and writes nothing to a broker.</div>';
+    return;
+  }
+  const active = trades.find(t => t.state === "open" || t.state === "partial");
+  if (!active) {
+    el.innerHTML = '<div class="empty">No open position in the demo account.</div>';
+    return;
+  }
+  const rows = [
+    { label: "Position", value: active.broker_position_id, note: `order ${active.broker_order_id}` },
+    { label: "Side / size", value: `${(active.side || "").toUpperCase()} ${active.size_lots}`, note: active.symbol },
+    { label: "Fill", value: active.fill_price, note: `published ${active.published_entry}` },
+    { label: "Stop (broker)", value: active.current_stop, note: `initial ${active.initial_stop}` },
+    { label: "Final target", value: active.final_target, note: `policy ${active.policy}` },
+    { label: "Ladder", value: `${active.legs_done} / ${active.legs_total}`, note: active.management_stopped ? "management stopped" : "managing" },
+  ];
+  el.innerHTML = `<div class="grid" style="padding:14px 16px;margin:0">` + rows.map(r => `
+    <div class="card">
+      <div class="label">${esc(r.label)}</div>
+      <div class="value">${esc(r.value)}</div>
+      <div class="note">${esc(r.note)}</div>
+    </div>`).join("") + `</div>`;
+}
+
+function renderTrades(rows) {
+  const el = document.getElementById("trades");
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty">No trades yet.</div>';
+    return;
+  }
+  el.innerHTML = table(rows, [
+    { label: "Created", render: r => esc(shortTime(r.created_at)) },
+    { label: "Trade", render: r => `<code>${esc(r.trade_id)}</code>` },
+    { label: "Side", render: r => `${esc((r.side || "").toUpperCase())} ${esc(r.symbol || "")}` },
+    { label: "State", render: r => stateBadge(r.state) },
+    { label: "Size", render: r => `${esc(r.size_lots)} lot` },
+    { label: "Entry", render: r => esc(r.fill_price || r.published_entry) },
+    { label: "Stop", render: r => esc(r.current_stop || r.initial_stop) },
+    { label: "Broker", render: r =>
+        `pos <code>${esc(r.broker_position_id || "—")}</code><br>
+         <span class="sub">order ${esc(r.broker_order_id || "—")}</span>` },
+    { label: "Note", render: r => `<span class="sub">${esc(r.note)}</span>` },
+  ]);
+  // The rows are clickable so the transition history is one click away.
+  Array.from(el.querySelectorAll("tbody tr")).forEach((tr, index) => {
+    tr.style.cursor = "pointer";
+    tr.addEventListener("click", () => showTradeDetail(rows[index].trade_id));
+  });
+}
+
+async function showTradeDetail(tradeId) {
+  const panel = document.getElementById("detail-panel");
+  const el = document.getElementById("detail");
+  panel.classList.remove("hidden");
+  el.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const body = await api(`/api/trades/${encodeURIComponent(tradeId)}`);
+    const trade = body.trade || {};
+    const transitions = body.transitions || [];
+    el.innerHTML = table(transitions, [
+      { label: "When", render: t => esc(shortTime(t.created_at)) },
+      { label: "Stage", render: t => `<code>${esc(t.stage)}</code>` },
+      { label: "Status", render: t => stateBadge(t.status) },
+      { label: "Detail", render: t => `<span class="sub">${esc(t.detail)}</span>` },
+      { label: "Broker", render: t =>
+          `pos <code>${esc(t.broker_position_id || "—")}</code> order <code>${esc(t.broker_order_id || "—")}</code>` },
+    ]) + `<div class="sub" style="padding:10px 16px">
+      ${esc(trade.side || "").toUpperCase()} ${esc(trade.symbol || "")} ·
+      policy ${esc(trade.policy || "—")} ·
+      final target ${esc(trade.final_target)} ·
+      ignored ${esc((trade.ignored_targets || []).join(", ") || "none")}
+    </div>`;
+  } catch (err) {
+    el.innerHTML = `<div class="err" style="padding:12px 16px">${esc(err.message)}</div>`;
+  }
 }
 
 function renderIntents(rows) {
@@ -212,16 +333,22 @@ async function refresh() {
   try {
     const status = await api("/api/status");
     renderCards(status);
-    const [intents, review, events] = await Promise.all([
+    renderBadges(status);
+    const [intents, review, events, trades] = await Promise.all([
       api("/api/intents?limit=25"),
       api("/api/review?limit=25"),
       api("/api/events?limit=40"),
+      api("/api/trades?limit=25"),
     ]);
+    const tradeRows = trades.trades || [];
+    renderBroker(status, tradeRows);
+    renderTrades(tradeRows);
     renderIntents(intents.events || []);
     renderEvents(review.events || [], { target: "review" });
     renderEvents(events.events || [], { target: "events" });
     document.getElementById("foot").textContent =
       `Updated ${new Date().toLocaleTimeString()} · refresh every 30s · ` +
+      `account scope: ${status.account_scope || "none"} · ` +
       `exit policy: ${status.exit_policy || "unresolved"}`;
     document.getElementById("gate").classList.add("hidden");
     document.getElementById("dash").classList.remove("hidden");
@@ -258,6 +385,10 @@ document.getElementById("forget").addEventListener("click", () => {
   if (timer) clearInterval(timer);
   document.getElementById("dash").classList.add("hidden");
   document.getElementById("gate").classList.remove("hidden");
+});
+
+document.getElementById("detail-close").addEventListener("click", () => {
+  document.getElementById("detail-panel").classList.add("hidden");
 });
 
 start();

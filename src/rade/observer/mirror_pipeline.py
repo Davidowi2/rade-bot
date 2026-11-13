@@ -253,6 +253,57 @@ def as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
+def _opt_float(value: Any) -> float | None:
+    """A float, or ``None`` when the value is absent or not a number."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _trade_row_to_dict(row: dict) -> dict:
+    """Normalise a stored trade row into the shape the engine reads.
+
+    The targets and the plan are stored as JSON text and come back as
+    objects, so the engine does not have to know which store it is talking
+    to.
+    """
+    item = dict(row)
+    targets = item.get("targets_json")
+    if isinstance(targets, str):
+        try:
+            item["targets"] = json.loads(targets)
+        except ValueError:
+            item["targets"] = []
+    elif targets is not None:
+        item["targets"] = targets
+    else:
+        item["targets"] = []
+    plan = item.get("plan_json")
+    if isinstance(plan, str):
+        try:
+            item["plan"] = json.loads(plan)
+        except ValueError:
+            item["plan"] = {}
+    elif plan is not None:
+        item["plan"] = plan
+    else:
+        item["plan"] = {}
+    item["management_stopped"] = bool(item.get("management_stopped"))
+    return item
+
+
 def _result(key: str, status: str, reason: str,
             signal: dict[str, Any] | None = None,
             intent: dict[str, Any] | None = None,
@@ -509,6 +560,46 @@ CREATE TABLE IF NOT EXISTS mirror_cursor (
     start_source    TEXT NOT NULL DEFAULT '',
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS mirror_trades (
+    trade_id           TEXT PRIMARY KEY,
+    event_key          TEXT NOT NULL,
+    channel            TEXT NOT NULL DEFAULT '',
+    message_id         INTEGER NOT NULL DEFAULT 0,
+    revision           INTEGER NOT NULL DEFAULT 0,
+    symbol             TEXT NOT NULL DEFAULT '',
+    side               TEXT NOT NULL DEFAULT '',
+    size               REAL NOT NULL DEFAULT 0,
+    entry              REAL NOT NULL DEFAULT 0,
+    stop               REAL NOT NULL DEFAULT 0,
+    current_stop       REAL,
+    targets_json       TEXT NOT NULL DEFAULT '[]',
+    plan_json          TEXT NOT NULL DEFAULT '{}',
+    state              TEXT NOT NULL DEFAULT 'validated',
+    legs_done          INTEGER NOT NULL DEFAULT 0,
+    broker_order_id    INTEGER,
+    broker_position_id INTEGER,
+    fill_price         REAL,
+    management_stopped INTEGER NOT NULL DEFAULT 0,
+    note               TEXT NOT NULL DEFAULT '',
+    created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_mirror_trades_state ON mirror_trades(state);
+CREATE TABLE IF NOT EXISTS mirror_transitions (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id           TEXT NOT NULL,
+    event_key          TEXT NOT NULL DEFAULT '',
+    stage              TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    detail             TEXT NOT NULL DEFAULT '',
+    broker_order_id    INTEGER,
+    broker_position_id INTEGER,
+    message_id         INTEGER,
+    revision           INTEGER,
+    payload_json       TEXT,
+    created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_mirror_transitions_trade ON mirror_transitions(trade_id);
 """
 
 
@@ -739,6 +830,127 @@ class SQLiteIntentLedger:
                 (channel, int(message_id), source or ""),
             )
         return True
+
+    # -- trades ------------------------------------------------------------
+    #
+    # A trade is a different thing from an event. An event is a Telegram
+    # message and exists once; a trade spans many broker interactions and
+    # changes state. The trade row is the current state, and every change to
+    # it also writes an append-only transition, so the history is never lost
+    # by an overwrite.
+
+    def open_trade(self, row: dict) -> str:
+        """Create a trade once. Returns ``inserted`` or ``existing``."""
+        with self._connect() as con:
+            cur = con.execute(
+                """INSERT OR IGNORE INTO mirror_trades
+                   (trade_id, event_key, channel, message_id, revision, symbol, side,
+                    size, entry, stop, current_stop, targets_json, plan_json, state,
+                    legs_done, broker_order_id, broker_position_id, fill_price,
+                    management_stopped, note, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (row["trade_id"], row["event_key"], row.get("channel", ""),
+                 int(row.get("message_id", 0) or 0), int(row.get("revision", 0) or 0),
+                 row.get("symbol", ""), row.get("side", ""),
+                 float(row.get("size", 0) or 0), float(row.get("entry", 0) or 0),
+                 float(row.get("stop", 0) or 0),
+                 _opt_float(row.get("current_stop")),
+                 json.dumps(row.get("targets") or [], sort_keys=True),
+                 json.dumps(row.get("plan") or {}, sort_keys=True),
+                 row.get("state", "validated"), int(row.get("legs_done", 0) or 0),
+                 _opt_int(row.get("broker_order_id")),
+                 _opt_int(row.get("broker_position_id")),
+                 _opt_float(row.get("fill_price")),
+                 1 if row.get("management_stopped") else 0,
+                 row.get("note", ""),
+                 row.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                 row.get("updated_at") or datetime.now(timezone.utc).isoformat()),
+            )
+            return CLAIM_INSERTED if cur.rowcount == 1 else CLAIM_DUPLICATE
+
+    def update_trade(self, row: dict) -> bool:
+        """Overwrite the current state of a trade."""
+        with self._connect() as con:
+            cur = con.execute(
+                """UPDATE mirror_trades SET
+                     state=?, legs_done=?, broker_order_id=?, broker_position_id=?,
+                     fill_price=?, current_stop=?, management_stopped=?, note=?,
+                     updated_at=?
+                   WHERE trade_id=?""",
+                (row.get("state", "validated"), int(row.get("legs_done", 0) or 0),
+                 _opt_int(row.get("broker_order_id")),
+                 _opt_int(row.get("broker_position_id")),
+                 _opt_float(row.get("fill_price")),
+                 _opt_float(row.get("current_stop")),
+                 1 if row.get("management_stopped") else 0,
+                 row.get("note", ""),
+                 row.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+                 row["trade_id"]),
+            )
+            return cur.rowcount > 0
+
+    def get_trade(self, trade_id: str) -> dict | None:
+        with self._connect() as con:
+            cursor = con.execute(
+                "SELECT * FROM mirror_trades WHERE trade_id=?", (trade_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            columns = [d[0] for d in cursor.description]
+        return _trade_row_to_dict(dict(zip(columns, row)))
+
+    def list_trades(self, *, states: tuple[str, ...] | None = None) -> list[dict]:
+        sql = "SELECT * FROM mirror_trades"
+        params: list[Any] = []
+        if states:
+            sql += f" WHERE state IN ({','.join('?' * len(states))})"
+            params.extend(states)
+        sql += " ORDER BY created_at ASC"
+        with self._connect() as con:
+            cursor = con.execute(sql, params)
+            rows = cursor.fetchall()
+            columns = [d[0] for d in cursor.description]
+        return [_trade_row_to_dict(dict(zip(columns, row))) for row in rows]
+
+    def record_transition(self, transition: dict) -> None:
+        """Append one state transition. Transitions are never overwritten."""
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO mirror_transitions
+                   (trade_id, event_key, stage, status, detail, broker_order_id,
+                    broker_position_id, message_id, revision, payload_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (transition["trade_id"], transition.get("event_key", ""),
+                 transition.get("stage", ""), transition.get("status", ""),
+                 transition.get("detail", ""),
+                 _opt_int(transition.get("broker_order_id")),
+                 _opt_int(transition.get("broker_position_id")),
+                 _opt_int(transition.get("message_id")),
+                 _opt_int(transition.get("revision")),
+                 json.dumps(transition.get("payload") or {}, sort_keys=True),
+                 transition.get("created_at") or datetime.now(timezone.utc).isoformat()),
+            )
+
+    def transitions(self, trade_id: str) -> list[dict]:
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT * FROM mirror_transitions WHERE trade_id=? ORDER BY id ASC",
+                (trade_id,),
+            ).fetchall()
+            columns = [d[0] for d in con.execute(
+                "SELECT * FROM mirror_transitions WHERE trade_id=? ORDER BY id ASC",
+                (trade_id,),
+            ).description]
+        out = []
+        for row in rows:
+            item = dict(zip(columns, row))
+            if item.get("payload_json"):
+                try:
+                    item["payload"] = json.loads(item["payload_json"])
+                except ValueError:
+                    item["payload"] = None
+            out.append(item)
+        return out
 
     def recent(self, *, limit: int = 50, statuses: list[str] | None = None) -> list[dict]:
         """Newest events first, shaped like the Supabase adapter's rows."""

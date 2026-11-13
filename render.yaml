@@ -99,3 +99,28 @@ services:
         value: "/tmp/mirror_state.json"
       - key: MIRROR_HEARTBEAT
         value: "/tmp/mirror_listener.heartbeat.json"
+
+      # --- demo execution path ---
+      # 0 keeps this a paper mirror. 1 places real orders in the TradeLocker
+      # DEMO account: the gateway refuses any other environment, and there is
+      # no live-account code path to switch on. It also requires
+      # MIRROR_CONTRACT_UNITS_CONFIRMED=1 with a contract size that matches
+      # the broker's own lotSize; otherwise the service refuses to start
+      # rather than run an executor that could only block every signal.
+      - key: MIRROR_EXECUTE
+        value: "0"
+      - key: MIRROR_MANAGE_EVERY_S
+        value: "5"
+      - key: MIRROR_FILL_TIMEOUT_S
+        value: "300"
+      # The TradeLocker demo credentials, when the execution path is enabled.
+      - key: TRADELOCKER_EMAIL
+        sync: false
+      - key: TRADELOCKER_PASSWORD
+        sync: false
+      - key: TRADELOCKER_SERVER
+        sync: false
+      - key: TRADELOCKER_ACCOUNT_ID
+        sync: false
+      - key: TRADELOCKER_ENV
+        value: "demo"

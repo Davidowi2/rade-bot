@@ -36,6 +36,8 @@ from rade.observer.mirror_pipeline import (
 TABLE = "mirror_events"
 NOTIFICATION_TABLE = "notification_log"
 CURSOR_TABLE = "mirror_cursor"
+TRADE_TABLE = "mirror_trades"
+TRANSITION_TABLE = "mirror_transitions"
 
 
 class StorageError(RuntimeError):
@@ -333,6 +335,131 @@ class SupabaseLedger:
             prefer="resolution=merge-duplicates,return=representation",
         )
         return True
+
+
+    # -- trades -----------------------------------------------------------
+    #
+    # The trade row is the current state; every change also appends to
+    # ``mirror_transitions``, so the history survives the overwrite. The
+    # primary key on ``trade_id`` is what makes "open once" safe across a
+    # restart and across two overlapping processes.
+
+    def open_trade(self, row: dict) -> str:
+        """Create a trade once. Returns ``inserted`` or ``existing``."""
+        payload = {
+            "trade_id": row["trade_id"],
+            "event_key": row["event_key"],
+            "channel": row.get("channel", ""),
+            "message_id": int(row.get("message_id", 0) or 0),
+            "revision": int(row.get("revision", 0) or 0),
+            "symbol": row.get("symbol", ""),
+            "side": row.get("side", ""),
+            "size": float(row.get("size", 0) or 0),
+            "entry": float(row.get("entry", 0) or 0),
+            "stop": float(row.get("stop", 0) or 0),
+            "current_stop": row.get("current_stop"),
+            "targets_json": row.get("targets") or [],
+            "plan_json": row.get("plan") or {},
+            "state": row.get("state", "validated"),
+            "legs_done": int(row.get("legs_done", 0) or 0),
+            "broker_order_id": row.get("broker_order_id"),
+            "broker_position_id": row.get("broker_position_id"),
+            "fill_price": row.get("fill_price"),
+            "management_stopped": bool(row.get("management_stopped")),
+            "note": row.get("note", ""),
+            "created_at": row.get("created_at") or _now_iso(),
+            "updated_at": row.get("updated_at") or _now_iso(),
+        }
+        _, body = self.transport.request(
+            "POST", TRADE_TABLE,
+            params={"on_conflict": "trade_id", "select": "trade_id"},
+            json_body=payload,
+            prefer="resolution=ignore-duplicates,return=representation",
+        )
+        if isinstance(body, list) and body:
+            return CLAIM_INSERTED
+        return CLAIM_DUPLICATE
+
+    def update_trade(self, row: dict) -> bool:
+        """Overwrite the current state of a trade."""
+        _, body = self.transport.request(
+            "PATCH", TRADE_TABLE,
+            params={"trade_id": f"eq.{row['trade_id']}"},
+            json_body={
+                "state": row.get("state", "validated"),
+                "legs_done": int(row.get("legs_done", 0) or 0),
+                "broker_order_id": row.get("broker_order_id"),
+                "broker_position_id": row.get("broker_position_id"),
+                "fill_price": row.get("fill_price"),
+                "current_stop": row.get("current_stop"),
+                "management_stopped": bool(row.get("management_stopped")),
+                "note": row.get("note", ""),
+                "updated_at": row.get("updated_at") or _now_iso(),
+            },
+            prefer="return=representation",
+        )
+        return bool(isinstance(body, list) and body)
+
+    def get_trade(self, trade_id: str) -> dict | None:
+        _, body = self.transport.request(
+            "GET", TRADE_TABLE,
+            params={"trade_id": f"eq.{trade_id}", "select": "*", "limit": "1"},
+        )
+        if isinstance(body, list) and body:
+            return _normalise_trade_row(body[0])
+        return None
+
+    def list_trades(self, *, states: tuple[str, ...] | None = None) -> list[dict]:
+        params: dict[str, Any] = {"select": "*", "order": "created_at.asc"}
+        if states:
+            params["state"] = f"in.({','.join(states)})"
+        _, body = self.transport.request("GET", TRADE_TABLE, params=params)
+        return [_normalise_trade_row(row) for row in (body or [])]
+
+    def record_transition(self, transition: dict) -> None:
+        """Append one state transition. Transitions are never overwritten."""
+        self.transport.request(
+            "POST", TRANSITION_TABLE,
+            json_body={
+                "trade_id": transition["trade_id"],
+                "event_key": transition.get("event_key", ""),
+                "stage": transition.get("stage", ""),
+                "status": transition.get("status", ""),
+                "detail": transition.get("detail", ""),
+                "broker_order_id": transition.get("broker_order_id"),
+                "broker_position_id": transition.get("broker_position_id"),
+                "message_id": transition.get("message_id"),
+                "revision": transition.get("revision"),
+                "payload_json": transition.get("payload") or {},
+                "created_at": transition.get("created_at") or _now_iso(),
+            },
+        )
+
+    def transitions(self, trade_id: str) -> list[dict]:
+        _, body = self.transport.request(
+            "GET", TRANSITION_TABLE,
+            params={"trade_id": f"eq.{trade_id}", "select": "*", "order": "id.asc"},
+        )
+        out = []
+        for row in body or []:
+            item = dict(row)
+            item["payload"] = item.get("payload_json")
+            out.append(item)
+        return out
+
+
+def _normalise_trade_row(row: dict) -> dict:
+    """Give a PostgREST trade row the shape the engine reads.
+
+    PostgREST returns jsonb already decoded, so ``targets_json`` and
+    ``plan_json`` arrive as objects; they are aliased to the names the engine
+    uses so both stores present one shape.
+    """
+    item = dict(row)
+    item["targets"] = item.get("targets_json") or []
+    item["plan"] = item.get("plan_json") or {}
+    item["management_stopped"] = bool(item.get("management_stopped"))
+    return item
 
 
 def hosted_mode() -> bool:

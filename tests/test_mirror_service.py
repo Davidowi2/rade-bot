@@ -358,3 +358,137 @@ def test_no_listener_is_expected_when_it_is_switched_off(monkeypatch, tmp_path):
     handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
     assert handle.expected is False
     assert handle.error is None
+
+
+# ---------------------------------------------------------------------------
+# the execution path's read surface
+# ---------------------------------------------------------------------------
+
+
+def seed_trade(ledger, trade_id="RADE-abc"):
+    """Write one trade and two transitions, the way the engine would."""
+    ledger.open_trade({
+        "trade_id": trade_id,
+        "event_key": "k" * 64,
+        "channel": "@source",
+        "message_id": 7,
+        "revision": 0,
+        "symbol": "XAUUSD",
+        "side": "sell",
+        "size": 0.05,
+        "entry": 3915.0,
+        "stop": 3925.0,
+        "current_stop": 3915.0,
+        "targets": [3910.0, 3905.0, 3900.0],
+        "plan": {"policy": "three_targets", "final_target": 3900.0,
+                 "ignored_targets": [],
+                 "legs": [{"label": "tp1", "target": 3910.0, "fraction": 0.3333,
+                           "quantity": 0.01, "managed": True,
+                           "stop_after_kind": "breakeven", "stop_after_value": None,
+                           "expected_remaining_after": 0.04}]},
+        "state": "open",
+        "legs_done": 1,
+        "broker_order_id": 1000,
+        "broker_position_id": 5000,
+        "fill_price": 3915.0,
+        "management_stopped": False,
+        "note": "",
+    })
+    ledger.record_transition({
+        "trade_id": trade_id, "event_key": "k" * 64, "stage": "fill",
+        "status": "open", "detail": "position 5000 open at 3915",
+        "broker_order_id": 1000, "broker_position_id": 5000,
+        "message_id": 7, "revision": 0, "payload": {},
+    })
+    return trade_id
+
+
+class _Spec:
+    environment = "demo"
+    symbol = "XAUUSD"
+    instrument_id = 1808
+    trade_route_id = "1869"
+    account_number = 2
+    contract_units_per_lot = 100.0
+    lot_step = 0.01
+    min_lot = 0.01
+    max_lot = 50.0
+    symbol_status = "FULLY_OPEN"
+    verified = True
+    unconfirmed_reason = None
+
+
+@pytest.fixture()
+def live_exec(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    seed(ledger)
+    seed_trade(ledger)
+    heartbeat = tmp_path / "hb.json"
+    heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat,
+                             executor=object(), broker_spec=_Spec())
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield httpd.server_address[1]
+    httpd.shutdown()
+    httpd.server_close()
+    thread.join(timeout=5)
+
+
+def test_trades_are_served_with_the_broker_state(live_exec):
+    status, body = call(live_exec, "/api/trades", token=TOKEN)
+    assert status == 200
+    trade = body["trades"][0]
+    # The broker's own numbers, not a reconstruction from the signal.
+    assert trade["broker_position_id"] == 5000
+    assert trade["broker_order_id"] == 1000
+    assert trade["fill_price"] == 3915.0
+    assert trade["current_stop"] == 3915.0
+    assert trade["state"] == "open"
+    assert trade["legs_done"] == 1
+
+
+def test_one_trade_can_be_read_with_its_transitions(live_exec):
+    status, body = call(live_exec, "/api/trades/RADE-abc", token=TOKEN)
+    assert status == 200
+    assert body["trade"]["trade_id"] == "RADE-abc"
+    assert body["trade"]["plan"]["final_target"] == 3900.0
+    assert [t["stage"] for t in body["transitions"]] == ["fill"]
+
+
+def test_an_unknown_trade_is_404(live_exec):
+    status, body = call(live_exec, "/api/trades/RADE-nope", token=TOKEN)
+    assert status == 404
+
+
+def test_the_trade_endpoints_require_a_token(live_exec):
+    status, _ = call(live_exec, "/api/trades")
+    assert status == 401
+
+
+def test_the_trade_endpoints_refuse_a_write(live_exec):
+    status, body = call(live_exec, "/api/trades", token=TOKEN, method="POST")
+    assert status == 405
+
+
+def test_status_reports_the_demo_execution_path(live_exec):
+    status, body = call(live_exec, "/api/status", token=TOKEN)
+    assert status == 200
+    assert body["account_scope"] == "demo"
+    assert body["live_trading"] is False
+    assert body["broker_writes"] is True
+    assert body["paper_only"] is False
+    assert body["exit_policy"] == "tp_ladder"
+    assert body["execution"]["enabled"] is True
+    assert body["execution"]["broker"]["verified"] is True
+    assert body["execution"]["broker"]["instrument_id"] == 1808
+
+
+def test_no_executor_is_configured_by_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("MIRROR_EXECUTE", raising=False)
+    from rade.observer.service import start_executor_if_configured
+
+    handle = start_executor_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+    assert handle.executor is None
+    assert handle.error is None

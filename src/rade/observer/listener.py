@@ -115,6 +115,9 @@ class MirrorListener:
     state: MirrorState = field(default_factory=lambda: MirrorState(None))
     log: Callable[[str], None] = print
     notify_attempts: int = DEFAULT_ATTEMPTS
+    #: Optional demo execution engine. When absent the listener is exactly the
+    #: paper mirror it was before: it produces intents and nothing else.
+    executor: Any = None
 
     # -- per message ------------------------------------------------------
     def process_message(self, message: Any, *, revision: int | None = None,
@@ -153,6 +156,20 @@ class MirrorListener:
             notification = notify_result(result, self.notifier, ledger=self.ledger,
                                          source=source, attempts=self.notify_attempts)
 
+        # Execution happens only for a newly stored event. A redelivery is a
+        # duplicate and has already been acted on; re-running it would be the
+        # one path that could double a position.
+        execution: dict | None = None
+        if self.executor is not None and not result.duplicate:
+            try:
+                execution = self.executor.execute(result, envelope)
+            except Exception as exc:
+                # A broker failure must not lose the message: the event is
+                # already stored, and the engine's ledger records the failure.
+                execution = {"executed": False,
+                             "error": f"{type(exc).__name__}: {exc}"}
+                self.log(f"execution error for id={mid}: {execution['error']}")
+
         payload = {
             **result.to_dict(),
             "channel": self.channel,
@@ -160,6 +177,8 @@ class MirrorListener:
             "quote_error": quote_error,
             "notification": notification,
         }
+        if execution is not None:
+            payload["execution"] = execution
         self.state.advance(mid)
         self.log(
             f"{source} id={mid} rev={revision} -> {result.status}"
