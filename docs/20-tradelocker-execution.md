@@ -635,16 +635,18 @@ cannot be read on restart, management stops and the trade is flagged rather than
 guessed at. The position is still protected; it is simply no longer managed
 automatically, and a human is expected to look.
 
-**Several controls from the research code are not enforced on this path.**
-Maximum hold time, a daily-loss breaker, a maximum number of open positions, a
-maximum drawdown stop, spread and slippage limits, and commission are absent
-from the execution path (audit §1.2). Session filters, news filters, cooldowns,
-a correlation cap and a volume filter do not exist anywhere in the repository
-(audit §1.3). The 0.5 % per-trade risk cap is enforced; nothing caps the day.
+**Some controls from the research code are still not enforced on this path.**
+A maximum hold time, commission and a correlation cap between instruments do
+not exist here (audit §1.2). Session filters, news filters, cooldowns and a
+volume filter do not exist anywhere in the repository (audit §1.3). The daily
+loss breaker, the open-position limit, the drawdown stop and the spread and
+slippage limits **are** now enforced (§11), and the 0.5 % per-trade cap was
+already enforced.
 
 **One instrument, one account, one position per signal.** XAUUSD only, the
-configured account only, and the correlation tag is derived from the Telegram
-event key, so two signals that arrive as one message are one trade.
+configured account only. The correlation tag is derived from the Telegram event
+key, so two signals that arrive as one message are one trade; the same signal
+posted twice as two messages is caught by the text-hash check in §11.4.
 
 **Notifications depend on the Telegram configuration.** Without it every event
 is still written to the ledger with its outcome; it is recorded as failed, and
@@ -713,3 +715,106 @@ A third finding was not a defect but a limit: the demo feed publishes a crossed
 book (bid above ask) for a moment, and intake blocks it. One validation run was
 recorded as `blocked: broker quote is invalid` for exactly that reason
 (`demo-execution-2026-11-13T15-09-54Z.json`), which is the safeguard working.
+
+---
+
+## 11. Pre-trade risk controls
+
+The per-trade cap answers one question: how much can *this* signal lose. It
+says nothing about the day, the account, or whether the market has moved since
+the channel posted. Section 1.2 recorded those as absent; this section is what
+closed them.
+
+Two rules shape all of it:
+
+* **A guard only ever prevents a new order.** It never closes a position, never
+  moves a stop, and never abandons an open trade. A daily-loss breaker that
+  also abandoned open risk would turn a bad day into an *unmanaged* bad day,
+  which is worse than the loss it is trying to cap. The broker-side stop and
+  target keep protecting the position either way.
+* **Unknown is not safe.** If the equity, the risk state, the pause flag or the
+  duplicate lookup cannot be read, the answer is "do not trade", with a reason
+  naming which read failed.
+
+### 11.1 What is enforced, and where
+
+| Control | Default | Measured against | Env |
+|---|---|---|---|
+| Open positions | 3 | trades in an active state, excluding the one being opened | `MIRROR_MAX_OPEN_POSITIONS` |
+| Daily loss | 2 % | the equity the UTC day opened at | `MIRROR_DAILY_LOSS_FRACTION` |
+| Drawdown stop | 5 % | the highest equity ever recorded | `MIRROR_MAX_DRAWDOWN_FRACTION` |
+| Spread | 5.0 | `ask − bid` at the moment of the order | `MIRROR_MAX_SPREAD` |
+| Slippage | 5.0 | the distance from the published entry to the price the order would get | `MIRROR_MAX_SLIPPAGE` |
+| Same call twice | 900 s | the text hash of every trade opened | `MIRROR_DUPLICATE_WINDOW_S` |
+
+The checks run in that order, most categorical first, so the reason recorded
+names the most serious problem rather than whichever ran first. A drawdown
+breach is reported before a daily-loss breach because it is the wider condition.
+
+**Set any of them to `0` to switch it off.** The service logs which are off at
+startup, and `/api/status` reports them under `limits.disabled` rather than
+omitting them, so a switched-off control cannot be read as a passing one. The
+dashboard renders each as "enforced" or "disabled by configuration" for the same
+reason.
+
+### 11.2 The state that has to survive a restart
+
+The daily breaker needs the equity the day opened at, and the drawdown stop
+needs the peak. Both are rows in `mirror_risk_state`, not process variables: on
+a host that restarts, a breaker that resets on every deploy is decorative.
+`mirror_control` holds the pause switch for the same reason.
+
+The day is UTC. The first evaluation after midnight opens the new day at
+whatever the equity is then; the peak is *not* reset, because drawdown is a
+property of the account and not of the calendar.
+
+### 11.3 Equity is read for every order
+
+`RiskConfig` now takes an `equity_provider`. With the executor running it is
+called for every signal, so a process that has been up for days sizes against
+the account as it is now. A provider that raises blocks the signal — the
+startup number is never substituted, because a stale balance silently changes
+the risk actually taken.
+
+### 11.4 The same call posted twice
+
+This one came from the channel, not from a test. Its two most recent signals
+were each posted **twice**, as two messages with two ids and identical text:
+
+```
+18760  XAUUSD SELL NOW 3926✅ ...      18761  (identical)
+18788  XAUUSD BUY NOW 3909️ ...        18789  (identical)
+```
+
+`event_key` is a hash of the channel, the message id and the revision, so the
+database's uniqueness constraint sees two distinct events — correctly, from its
+point of view. Nothing downstream would have noticed, and a live copier would
+have placed two orders for one idea, doubling the risk on a single view of the
+market.
+
+Every trade now records the `text_sha256` of the message it came from, and an
+identical text inside `MIRROR_DUPLICATE_WINDOW_S` is recorded as *not copied*
+with the trade it duplicates named. The check reads the trade table rather than
+the event table, so it works however `execute` was reached — through the
+listener or directly from a script — and a lookup that fails blocks rather than
+guesses.
+
+### 11.5 The pause switch
+
+Pausing has to survive a restart and has to be flippable without a redeploy, so
+it is a row (`mirror_control`), not a variable or a file on an ephemeral disk.
+
+* `POST /api/pause` requires a reason and sets it.
+* `POST /api/resume` clears it.
+* Both need the same bearer token as the read routes, and both are the *only*
+  writes the service accepts. Every other `POST`/`PUT`/`PATCH`/`DELETE` is still
+  `405`, and neither route can place, modify or close anything at the broker:
+  the entire surface is one boolean.
+
+A pause stops management as well as entries. An operator who pauses is
+intervening by hand, and having the manager move stops underneath them is the
+opposite of what they asked for. The position stays protected by the stop and
+target attached at the broker.
+
+The asymmetry is deliberate: a control read that *fails* does not stop
+management, because management is risk-reducing work; it only stops entries.

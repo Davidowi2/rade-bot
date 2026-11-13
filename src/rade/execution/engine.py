@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 
 from rade.execution.broker import (
@@ -36,6 +36,14 @@ from rade.execution.broker import (
     BrokerRefused,
     BrokerSpec,
     OrderAck,
+)
+from rade.execution.guards import (
+    GuardVerdict,
+    RiskLimits,
+    RiskSnapshot,
+    RiskState,
+    evaluate as evaluate_guards,
+    utc_day,
 )
 from rade.execution.ladder import (
     STOP_NONE,
@@ -52,6 +60,8 @@ from rade.observer.mirror_pipeline import (
     MessageEnvelope,
     PipelineResult,
     as_utc,
+    event_key,
+    text_hash,
 )
 
 #: Trade states. ``open`` and ``partial`` are the ones a manager acts on.
@@ -142,6 +152,9 @@ class ManagedTrade:
     fill_price: float | None = None
     management_stopped: bool = False
     note: str = ""
+    #: The hash of the message text this trade came from. Two message ids can
+    #: carry identical text, and the hash is what makes that visible.
+    text_sha256: str = ""
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 
@@ -186,6 +199,7 @@ class ManagedTrade:
             "fill_price": self.fill_price,
             "management_stopped": bool(self.management_stopped),
             "note": self.note,
+            "text_sha256": self.text_sha256,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -248,6 +262,7 @@ class ManagedTrade:
                             if row.get("fill_price") is not None else None),
                 management_stopped=bool(row.get("management_stopped")),
                 note=str(row.get("note", "") or ""),
+                text_sha256=str(row.get("text_sha256", "") or ""),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
@@ -261,7 +276,9 @@ class ExecutionEngine:
                  log: Callable[[str], None] = print,
                  manage_every_s: float = 5.0,
                  fill_timeout_s: float = 300.0,
-                 max_stop_attempts: int = 10):
+                 max_stop_attempts: int = 10,
+                 limits: RiskLimits | None = None,
+                 duplicate_window_s: float = 900.0):
         self.broker = broker
         self.ledger = ledger
         self.notifier = notifier
@@ -274,6 +291,48 @@ class ExecutionEngine:
         #: A refusal caused by the price moving is transient and is retried;
         #: one that persists is not.
         self.max_stop_attempts = int(max_stop_attempts)
+        #: The pre-trade limits. They gate new orders only; an open trade is
+        #: always still managed, because abandoning open risk is worse than
+        #: the loss the breaker is trying to cap.
+        self.limits = limits or RiskLimits()
+        #: The verdict of the most recent guard evaluation, for the status page.
+        self._last_guard: GuardVerdict | None = None
+        #: How far back to look for the same signal text posted again. The
+        #: channel re-posts calls as separate messages, so the id-based
+        #: uniqueness constraint cannot catch it. 0 disables the check.
+        self.duplicate_window_s = float(duplicate_window_s)
+
+    def guard_state(self) -> dict:
+        """What the pre-trade guards are enforcing, and the last verdict.
+
+        ``limits.describe()`` lists the checks that are switched off as well as
+        the ones in force, so a disabled control cannot read as a passing one.
+        """
+        return {
+            "limits": self.limits.describe(),
+            "last_verdict": (self._last_guard.to_dict()
+                             if self._last_guard is not None else None),
+        }
+
+    def pause(self, *, reason: str, changed_by: str) -> dict:
+        """Throw the switch. Writes the shared row, not a local flag."""
+        return self.ledger.set_paused(paused=True, reason=reason,
+                                      changed_by=changed_by)
+
+    def resume(self, *, reason: str, changed_by: str) -> dict:
+        return self.ledger.set_paused(paused=False, reason=reason,
+                                      changed_by=changed_by)
+
+    def pause_state(self) -> dict:
+        try:
+            control = self.ledger.control()
+        except Exception as exc:
+            return {"paused": None, "reason": f"unreadable: {type(exc).__name__}",
+                    "changed_at": None, "changed_by": ""}
+        if control is None:
+            return {"paused": False, "reason": "the pause switch has never been set",
+                    "changed_at": None, "changed_by": ""}
+        return control
 
     # -- helpers ----------------------------------------------------------
 
@@ -349,6 +408,18 @@ class ExecutionEngine:
             return self._not_copied(result, message, trade_id,
                                     "LIMIT orders excluded by current policy")
 
+        # The channel re-posts the same call as a second message with its own
+        # id, and the database's uniqueness constraint is keyed on the id, so
+        # it cannot see that the two are one idea. Copying both would double
+        # the risk on a single view of the market.
+        repeated = self._same_signal_recently(message, trade_id)
+        if repeated is not None:
+            reason = (f"an identical signal was already copied as trade "
+                      f"{repeated.get('trade_id')} (message "
+                      f"{repeated.get('message_id')}); this is the same call "
+                      "posted again, so it is not copied twice")
+            return self._not_copied(result, message, trade_id, reason)
+
         spec = self.broker.spec()
         if not spec.verified:
             return self._blocked_new(result, message, trade_id, spec.unconfirmed_reason or
@@ -381,6 +452,7 @@ class ExecutionEngine:
             plan=plan,
             current_stop=stop,
             state=STATE_VALIDATED,
+            text_sha256=text_hash(message.text),
         )
         outcome = self.ledger.open_trade(trade.to_row())
         if outcome != "inserted":
@@ -395,12 +467,139 @@ class ExecutionEngine:
                          f"ladder: {plan.description()}",
                          payload={"plan": trade.to_row()["plan"]})
         self._save(trade)
+
+        # The per-trade cap says how much this signal may lose. It says nothing
+        # about the day, the account, or whether the market has moved since the
+        # channel posted. Those are asked here, immediately before the order,
+        # against an equity read at this moment rather than at startup.
+        blocked = self._pre_trade_check(trade)
+        if blocked is not None:
+            return blocked
+
         self._notify(trade.trade_id, "signal",
                      f"[SIGNAL] {side.upper()} {spec.symbol} market {size:g} lot; "
                      f"SL {stop:g}, final TP {plan.final_target:g}. "
                      f"Plan: {plan.description()}")
 
         return self.submit(trade)
+
+    def _same_signal_recently(self, message: MessageEnvelope,
+                              trade_id: str) -> dict | None:
+        """A trade already opened from identical text, inside the window.
+
+        Fails closed in the direction that matters: if the lookup itself
+        fails, the signal is treated as a repeat and not copied, because the
+        alternative is placing an order the guard could not check.
+        """
+        if self.duplicate_window_s <= 0:
+            return None
+        since = (datetime.now(timezone.utc)
+                 - timedelta(seconds=self.duplicate_window_s)).isoformat()
+        try:
+            found = self.ledger.same_text_recently(
+                text_hash(message.text), since=since, exclude_trade_id=trade_id)
+        except Exception as exc:
+            self.log(f"could not check for a repeated signal: "
+                     f"{type(exc).__name__}: {exc}")
+            return {"trade_id": "unknown", "message_id": "unknown",
+                    "lookup_failed": True}
+        return found
+
+    def _pre_trade_check(self, trade: ManagedTrade) -> dict | None:
+        """Run the account-level guards. Returns an outcome when blocked.
+
+        Every read here fails closed. An equity that cannot be read, a risk
+        state that cannot be persisted, or a pause switch that cannot be
+        fetched all mean "do not place this order", with the reason recorded
+        against the trade so the dashboard says why instead of going quiet.
+        """
+        try:
+            quote = self.broker.quote()
+        except Exception as exc:
+            return self._guard_blocked(
+                trade, f"the quote could not be read: {type(exc).__name__}: {exc}")
+
+        try:
+            equity = float(self.broker.equity())
+        except Exception as exc:
+            return self._guard_blocked(
+                trade, "the account equity could not be read, so no size can be "
+                       f"computed safely: {type(exc).__name__}: {exc}")
+
+        try:
+            stored = RiskState.from_dict(self.ledger.risk_state())
+            state = stored or RiskState(day=utc_day(), day_start_equity=equity,
+                                        peak_equity=equity)
+            state = state.rolled(equity)
+            self.ledger.save_risk_state(**state.to_dict())
+        except Exception as exc:
+            return self._guard_blocked(
+                trade, "the daily-loss state could not be read or saved, so the "
+                       f"breaker cannot be evaluated: {type(exc).__name__}: {exc}")
+
+        try:
+            control = self.ledger.control()
+        except Exception as exc:
+            return self._guard_blocked(
+                trade, "the pause switch could not be read, so execution is "
+                       f"treated as paused: {type(exc).__name__}: {exc}")
+
+        paused: bool | None
+        pause_reason = ""
+        if control is None:
+            # No row yet is a known absence, not an unknown: the switch has
+            # never been thrown. It is still reported, not assumed silently.
+            paused, pause_reason = False, "the pause switch has never been set"
+        else:
+            paused = bool(control.get("paused"))
+            pause_reason = str(control.get("reason") or "")
+
+        spread = float(quote.ask) - float(quote.bid)
+        reference = float(quote.ask) if trade.side == "buy" else float(quote.bid)
+        slippage = abs(reference - float(trade.entry)) if trade.entry else 0.0
+
+        try:
+            others = [row for row in self.ledger.list_trades(states=ACTIVE_STATES)
+                      if row.get("trade_id") != trade.trade_id]
+        except Exception as exc:
+            return self._guard_blocked(
+                trade, "the open-position count could not be read: "
+                       f"{type(exc).__name__}: {exc}")
+
+        snapshot = RiskSnapshot(
+            equity=equity,
+            day_start_equity=state.day_start_equity,
+            peak_equity=state.peak_equity,
+            open_positions=len(others),
+            spread=spread,
+            slippage=slippage,
+            paused=paused,
+            pause_reason=pause_reason,
+        )
+        verdict: GuardVerdict = evaluate_guards(self.limits, snapshot)
+        self._last_guard = verdict
+        if verdict.allowed:
+            self._transition(trade, "risk", "guard_passed", verdict.reason,
+                             payload={"snapshot": snapshot.__dict__,
+                                      "checks": verdict.checks})
+            self._save(trade)
+            return None
+        return self._guard_blocked(trade, verdict.reason, verdict=verdict,
+                                   snapshot=snapshot)
+
+    def _guard_blocked(self, trade: ManagedTrade, reason: str, *,
+                       verdict: GuardVerdict | None = None,
+                       snapshot: RiskSnapshot | None = None) -> dict:
+        """Record a refusal by the account-level guards. Nothing is sent."""
+        trade.state = STATE_BLOCKED
+        trade.note = reason
+        self._transition(trade, "risk", "guard_blocked", reason,
+                         payload={"snapshot": getattr(snapshot, "__dict__", None),
+                                  "checks": getattr(verdict, "checks", None)})
+        self._save(trade)
+        self._notify(trade.trade_id, "blocked", f"[BLOCKED] {reason}")
+        return {"executed": False, "trade_id": trade.trade_id, "reason": reason,
+                "state": STATE_BLOCKED, "guard": True}
 
     def _not_copied(self, result: PipelineResult, message: MessageEnvelope,
                     trade_id: str, reason: str) -> dict:
@@ -636,6 +835,21 @@ class ExecutionEngine:
         """Advance one open trade by at most one ladder step."""
         if trade.management_stopped:
             return {"stopped": True, "trade_id": trade.trade_id}
+
+        # A pause stops management as well as entries. An operator who pauses
+        # is intervening by hand, and having this loop move stops underneath
+        # them is the opposite of what they asked for. The position is still
+        # protected by the stop and target attached at the broker.
+        try:
+            control = self.ledger.control()
+        except Exception as exc:
+            # Unlike an entry, management is risk-reducing work, so a control
+            # read that fails does not stop it. The failure is logged instead.
+            self.log(f"could not read the pause switch: {type(exc).__name__}: {exc}")
+            control = None
+        if control is not None and control.get("paused"):
+            return {"paused": True, "trade_id": trade.trade_id,
+                    "reason": control.get("reason") or "execution is paused"}
 
         # An accepted order that has not filled is not a position yet. Calling
         # it closed would lose the trade; it is confirmed instead, and only

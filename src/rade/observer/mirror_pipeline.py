@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 # ---------------------------------------------------------------------------
 # dispositions
@@ -193,9 +193,24 @@ class MarketQuote:
 
 @dataclass(frozen=True)
 class RiskConfig:
+    """How a signal is sized.
+
+    ``equity`` is the number used for sizing. When ``equity_provider`` is set
+    it is called for every signal and its answer wins, so a long-running
+    process sizes against the account as it is now rather than as it was at
+    startup. The provider is expected to raise when the equity cannot be read;
+    a stale number is never substituted for a fresh one.
+    """
+
     equity: float
     risk_fraction: float
     quote_max_age_seconds: float
+    equity_provider: Callable[[], float] | None = None
+
+    def current_equity(self) -> float:
+        if self.equity_provider is None:
+            return float(self.equity)
+        return float(self.equity_provider())
 
 
 @dataclass(frozen=True)
@@ -393,7 +408,18 @@ def evaluate_message(
             "specification; no size is computed",
             signal=parsed,
         )
-    if risk.equity <= 0 or not math.isfinite(risk.equity):
+    # The equity is read here, per signal, so a process that has been up for
+    # days does not size against the balance it started with. A provider that
+    # cannot answer blocks the signal rather than falling back to the startup
+    # number, because a stale balance silently changes the risk taken.
+    try:
+        equity = risk.current_equity()
+    except Exception as exc:
+        return _result(
+            key, STATUS_BLOCKED,
+            f"the account equity could not be read at sizing time: "
+            f"{type(exc).__name__}: {exc}", signal=parsed)
+    if equity <= 0 or not math.isfinite(equity):
         return _result(key, STATUS_BLOCKED, "account equity is missing or invalid", signal=parsed)
     if not 0 < risk.risk_fraction <= MAX_RISK_FRACTION:
         return _result(
@@ -446,7 +472,7 @@ def evaluate_message(
         order_type = "limit"
         order_price = entry
 
-    risk_budget = risk.equity * risk.risk_fraction
+    risk_budget = equity * risk.risk_fraction
     risk_per_lot = abs(effective_entry - stop) * instrument.contract_units_per_lot
     if risk_per_lot <= 0:
         return _result(key, STATUS_BLOCKED, "stop distance is zero", signal=parsed)
@@ -491,6 +517,7 @@ def evaluate_message(
         "stop_loss": stop,
         "take_profits": targets,
         "risk_fraction": risk.risk_fraction,
+        "equity_at_sizing": round(equity, 2),
         "risk_budget": round(risk_budget, 2),
         "estimated_stop_risk_before_slippage_and_fees": round(estimated_stop_risk, 2),
         "quote": quote_block,
@@ -581,6 +608,7 @@ CREATE TABLE IF NOT EXISTS mirror_trades (
     fill_price         REAL,
     management_stopped INTEGER NOT NULL DEFAULT 0,
     note               TEXT NOT NULL DEFAULT '',
+    text_sha256        TEXT NOT NULL DEFAULT '',
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -600,6 +628,20 @@ CREATE TABLE IF NOT EXISTS mirror_transitions (
     created_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_mirror_transitions_trade ON mirror_transitions(trade_id);
+CREATE TABLE IF NOT EXISTS mirror_risk_state (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    day              TEXT NOT NULL,
+    day_start_equity REAL NOT NULL DEFAULT 0,
+    peak_equity      REAL NOT NULL DEFAULT 0,
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS mirror_control (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    execution_paused INTEGER NOT NULL DEFAULT 0,
+    reason           TEXT NOT NULL DEFAULT '',
+    changed_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    changed_by       TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -660,6 +702,14 @@ class SQLiteIntentLedger:
         ):
             if column not in have_notif:
                 con.execute(f"ALTER TABLE notification_log ADD COLUMN {column} {decl}")
+
+        # The trade table gained the hash of the text it came from, so that the
+        # same call posted under two message ids can be recognised as one idea
+        # without depending on the event row being written first.
+        have_trades = {row[1] for row in con.execute("PRAGMA table_info(mirror_trades)")}
+        if "text_sha256" not in have_trades:
+            con.execute("ALTER TABLE mirror_trades ADD COLUMN text_sha256 "
+                        "TEXT NOT NULL DEFAULT ''")
 
         # Rows from the old code carry ok=true but were written *before* the
         # send, so they prove the slot was claimed, not that the message
@@ -847,8 +897,8 @@ class SQLiteIntentLedger:
                    (trade_id, event_key, channel, message_id, revision, symbol, side,
                     size, entry, stop, current_stop, targets_json, plan_json, state,
                     legs_done, broker_order_id, broker_position_id, fill_price,
-                    management_stopped, note, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    management_stopped, note, text_sha256, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (row["trade_id"], row["event_key"], row.get("channel", ""),
                  int(row.get("message_id", 0) or 0), int(row.get("revision", 0) or 0),
                  row.get("symbol", ""), row.get("side", ""),
@@ -863,6 +913,7 @@ class SQLiteIntentLedger:
                  _opt_float(row.get("fill_price")),
                  1 if row.get("management_stopped") else 0,
                  row.get("note", ""),
+                 row.get("text_sha256", ""),
                  row.get("created_at") or datetime.now(timezone.utc).isoformat(),
                  row.get("updated_at") or datetime.now(timezone.utc).isoformat()),
             )
@@ -951,6 +1002,89 @@ class SQLiteIntentLedger:
                     item["payload"] = None
             out.append(item)
         return out
+
+    # -- risk state and the pause switch ----------------------------------
+
+    def risk_state(self) -> dict | None:
+        """The persisted daily-loss and drawdown state, if there is one."""
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT day, day_start_equity, peak_equity FROM mirror_risk_state "
+                "WHERE id=1").fetchone()
+        if row is None:
+            return None
+        return {"day": row[0], "day_start_equity": row[1], "peak_equity": row[2]}
+
+    def save_risk_state(self, *, day: str, day_start_equity: float,
+                        peak_equity: float) -> None:
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO mirror_risk_state
+                   (id, day, day_start_equity, peak_equity, updated_at)
+                   VALUES (1, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       day=excluded.day,
+                       day_start_equity=excluded.day_start_equity,
+                       peak_equity=excluded.peak_equity,
+                       updated_at=excluded.updated_at""",
+                (day, float(day_start_equity), float(peak_equity),
+                 datetime.now(timezone.utc).isoformat()),
+            )
+
+    def control(self) -> dict | None:
+        """The pause switch. ``None`` means it has never been written."""
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT execution_paused, reason, changed_at, changed_by "
+                "FROM mirror_control WHERE id=1").fetchone()
+        if row is None:
+            return None
+        return {"paused": bool(row[0]), "reason": row[1] or "",
+                "changed_at": row[2], "changed_by": row[3] or ""}
+
+    def set_paused(self, *, paused: bool, reason: str, changed_by: str) -> dict:
+        """Write the pause switch. The row is the switch, not a copy of it."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as con:
+            con.execute(
+                """INSERT INTO mirror_control
+                   (id, execution_paused, reason, changed_at, changed_by)
+                   VALUES (1, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       execution_paused=excluded.execution_paused,
+                       reason=excluded.reason,
+                       changed_at=excluded.changed_at,
+                       changed_by=excluded.changed_by""",
+                (1 if paused else 0, reason or "", now, changed_by or ""),
+            )
+        return {"paused": bool(paused), "reason": reason or "",
+                "changed_at": now, "changed_by": changed_by or ""}
+
+    def same_text_recently(self, text_sha256: str, *, since: str,
+                           exclude_trade_id: str = "") -> dict | None:
+        """A trade already opened from identical text, if one is recent.
+
+        The channel posts the same signal twice as two messages with two ids
+        (observed: 18788 and 18789, identical text and timestamp). ``event_key``
+        includes the message id, so the database's uniqueness constraint cannot
+        see that they are the same call, and copying both would double the risk
+        on one idea. This is what notices.
+
+        The trade row carries the hash of the text it came from, so this works
+        however ``execute`` was reached — through the listener or directly.
+        """
+        with self._connect() as con:
+            row = con.execute(
+                """SELECT trade_id, message_id, created_at, state
+                   FROM mirror_trades
+                   WHERE text_sha256=? AND text_sha256<>'' AND trade_id<>?
+                     AND created_at>=?
+                   ORDER BY created_at ASC LIMIT 1""",
+                (text_sha256, exclude_trade_id, since)).fetchone()
+        if row is None:
+            return None
+        return {"trade_id": row[0], "message_id": row[1],
+                "received_at": row[2], "status": row[3]}
 
     def recent(self, *, limit: int = 50, statuses: list[str] | None = None) -> list[dict]:
         """Newest events first, shaped like the Supabase adapter's rows."""

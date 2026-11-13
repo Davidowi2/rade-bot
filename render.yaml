@@ -22,7 +22,7 @@ services:
     runtime: python
     plan: free
     region: frankfurt
-    branch: feature/paired-exit-replay
+    branch: feature/tradelocker-demo-execution
     buildCommand: pip install -r requirements-mirror.txt
     startCommand: python -m rade.observer.service
     healthCheckPath: /healthz
@@ -113,6 +113,29 @@ services:
         value: "5"
       - key: MIRROR_FILL_TIMEOUT_S
         value: "300"
+
+      # --- pre-trade risk controls ---
+      # These gate NEW orders only. An open trade is always still managed,
+      # because abandoning open risk is worse than the loss a breaker caps.
+      # Set any of them to 0 to switch that check off; the service logs which
+      # ones are off at startup and reports them on /api/status as "disabled",
+      # so a switched-off control cannot be mistaken for a passing one.
+      - key: MIRROR_MAX_OPEN_POSITIONS
+        value: "3"
+      - key: MIRROR_DAILY_LOSS_FRACTION   # of the day's opening equity
+        value: "0.02"
+      - key: MIRROR_MAX_DRAWDOWN_FRACTION # of the peak equity
+        value: "0.05"
+      - key: MIRROR_MAX_SPREAD            # price units; XAUUSD is ~0.2
+        value: "5"
+      - key: MIRROR_MAX_SLIPPAGE          # price units from the published entry
+        value: "5"
+      # The channel re-posts the same call as a second message with its own id,
+      # and the id-based uniqueness constraint cannot see that they are one
+      # idea. An identical text inside this window is copied once. 0 disables
+      # the check, which is not recommended: the channel demonstrably does it.
+      - key: MIRROR_DUPLICATE_WINDOW_S
+        value: "900"
       # The TradeLocker demo credentials, when the execution path is enabled.
       - key: TRADELOCKER_EMAIL
         sync: false

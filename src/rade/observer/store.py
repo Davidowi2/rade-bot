@@ -38,6 +38,8 @@ NOTIFICATION_TABLE = "notification_log"
 CURSOR_TABLE = "mirror_cursor"
 TRADE_TABLE = "mirror_trades"
 TRANSITION_TABLE = "mirror_transitions"
+RISK_STATE_TABLE = "mirror_risk_state"
+CONTROL_TABLE = "mirror_control"
 
 
 class StorageError(RuntimeError):
@@ -367,6 +369,7 @@ class SupabaseLedger:
             "fill_price": row.get("fill_price"),
             "management_stopped": bool(row.get("management_stopped")),
             "note": row.get("note", ""),
+            "text_sha256": row.get("text_sha256", ""),
             "created_at": row.get("created_at") or _now_iso(),
             "updated_at": row.get("updated_at") or _now_iso(),
         }
@@ -446,6 +449,86 @@ class SupabaseLedger:
             item["payload"] = item.get("payload_json")
             out.append(item)
         return out
+
+    # -- risk state and the pause switch ----------------------------------
+
+    def same_text_recently(self, text_sha256: str, *, since: str,
+                           exclude_trade_id: str = "") -> dict | None:
+        """A trade already opened from identical text, if one is recent.
+
+        The channel posts the same signal twice as two messages with two ids.
+        ``event_key`` includes the message id, so the unique constraint cannot
+        see that they are the same call; copying both would double the risk on
+        one idea. The trade row carries the hash of the text it came from, so
+        this works however ``execute`` was reached.
+        """
+        if not text_sha256:
+            return None
+        params: dict[str, Any] = {
+            "text_sha256": f"eq.{text_sha256}",
+            "created_at": f"gte.{since}",
+            "select": "trade_id,message_id,created_at,state",
+            "order": "created_at.asc",
+            "limit": "1",
+        }
+        if exclude_trade_id:
+            params["trade_id"] = f"neq.{exclude_trade_id}"
+        _, body = self.transport.request("GET", TRADE_TABLE, params=params)
+        if isinstance(body, list) and body:
+            row = body[0]
+            return {"trade_id": row.get("trade_id"),
+                    "message_id": row.get("message_id"),
+                    "received_at": row.get("created_at"),
+                    "status": row.get("state")}
+        return None
+
+    def risk_state(self) -> dict | None:
+        _, body = self.transport.request(
+            "GET", RISK_STATE_TABLE,
+            params={"id": "eq.1", "select": "day,day_start_equity,peak_equity",
+                    "limit": "1"},
+        )
+        if isinstance(body, list) and body:
+            return body[0]
+        return None
+
+    def save_risk_state(self, *, day: str, day_start_equity: float,
+                        peak_equity: float) -> None:
+        self.transport.request(
+            "POST", RISK_STATE_TABLE,
+            params={"on_conflict": "id"},
+            json_body={"id": 1, "day": day,
+                       "day_start_equity": float(day_start_equity),
+                       "peak_equity": float(peak_equity),
+                       "updated_at": _now_iso()},
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+
+    def control(self) -> dict | None:
+        _, body = self.transport.request(
+            "GET", CONTROL_TABLE,
+            params={"id": "eq.1", "select": "*", "limit": "1"},
+        )
+        if not (isinstance(body, list) and body):
+            return None
+        row = body[0]
+        return {"paused": bool(row.get("execution_paused")),
+                "reason": row.get("reason") or "",
+                "changed_at": row.get("changed_at"),
+                "changed_by": row.get("changed_by") or ""}
+
+    def set_paused(self, *, paused: bool, reason: str, changed_by: str) -> dict:
+        now = _now_iso()
+        self.transport.request(
+            "POST", CONTROL_TABLE,
+            params={"on_conflict": "id"},
+            json_body={"id": 1, "execution_paused": bool(paused),
+                       "reason": reason or "", "changed_at": now,
+                       "changed_by": changed_by or ""},
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+        return {"paused": bool(paused), "reason": reason or "",
+                "changed_at": now, "changed_by": changed_by or ""}
 
 
 def _normalise_trade_row(row: dict) -> dict:

@@ -119,6 +119,10 @@ class FakeBroker:
         self.fail_close = False
         self.fail_modify = False
         self.fail_orders = False
+        self.fail_equity = False
+        #: What ``equity()`` reports. The guards compare it against the day's
+        #: opening balance and the peak, so tests move it to trip them.
+        self.account_equity = 10_000.0
         self.reject_place = False
         self.next_order_id = 1000
         self.next_position_id = 5000
@@ -150,6 +154,12 @@ class FakeBroker:
 
     def quote(self) -> BrokerQuote:
         return BrokerQuote(self.bid, self.ask, datetime.now(timezone.utc))
+
+    def equity(self) -> float:
+        """The account equity the guards and sizing read. Matches ``RISK``."""
+        if self.fail_equity:
+            raise BrokerError("the account state could not be read")
+        return self.account_equity
 
     def positions(self) -> list[BrokerPosition]:
         return list(self.position_book)
@@ -995,10 +1005,14 @@ def test_a_fill_beyond_the_first_target_stops_before_any_leg(tmp_path):
     """
     broker = FakeBroker(bid=3915.0, ask=3915.2)
     engine, ledger, _ = engine_for(tmp_path, broker)
-    result = evaluated()          # a SELL: entry 3915, TP1 3910
-    # The broker fills the short at 3909.5, which is already past TP1 (3910).
-    broker.bid, broker.ask = 3909.4, 3909.6
-    engine.execute(result, envelope())
+    # A SELL whose TP1 sits close to the entry, so an adverse fill can pass it
+    # while still being inside the slippage limit. A gap wide enough to trip
+    # the slippage guard would test that guard instead of this one.
+    text = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3912\nTp : 3905\nTp : 3900"
+    result = evaluated(text)
+    # The broker fills the short at 3911.4, already past TP1 (3912).
+    broker.bid, broker.ask = 3911.4, 3911.6
+    engine.execute(result, envelope(text))
     trade_id = trade_id_for(result.event_key)
 
     outcome = engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(trade_id)))

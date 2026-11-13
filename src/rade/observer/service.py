@@ -30,6 +30,8 @@ from rade.observer.store import StorageError, hosted_mode, make_ledger
 REVIEW_STATUSES = [STATUS_MANUAL_REVIEW, STATUS_CONFLICT]
 INTENT_STATUSES = [STATUS_PAPER_INTENT]
 MAX_LIMIT = 200
+#: A pause request carries a reason and a name. Anything larger is not that.
+MAX_WRITE_BODY = 4096
 
 #: A heartbeat older than this means the listener is not ticking, even if the
 #: process is still up.
@@ -258,6 +260,21 @@ class MirrorService:
                 "verified": spec.verified,
                 "unconfirmed_reason": spec.unconfirmed_reason,
             }
+        if self.executor is not None:
+            # The guards are only meaningful when the executor runs; reporting
+            # them as "active" on a paper-only service would be a lie.
+            try:
+                state["guards"] = self.executor.guard_state()
+            except Exception as exc:
+                state["guards"] = {"error": type(exc).__name__}
+            try:
+                state["paused"] = self.executor.pause_state()
+            except Exception as exc:
+                state["paused"] = {"paused": None,
+                                   "reason": f"unreadable: {type(exc).__name__}"}
+        else:
+            state["guards"] = None
+            state["paused"] = None
         return state
 
     def counts(self) -> dict:
@@ -327,6 +344,44 @@ class MirrorService:
             return 200, {"events": self._recent(limit, statuses or INTENT_STATUSES)}
 
         return 404, {"error": "not found"}
+
+    def route_post(self, path: str, body: dict | None) -> tuple[int, dict]:
+        """The only writes this service accepts: pausing and resuming.
+
+        A pause has to survive a restart and has to be flippable without a
+        redeploy, so it cannot live in a process variable or on the ephemeral
+        disk. It is a row in the store, and these two endpoints are how it is
+        set. Neither can place, modify or close anything at the broker: the
+        whole surface is a boolean that gates new work.
+        """
+        if path not in {"/api/pause", "/api/resume"}:
+            return 405, {"error": "read-only service; only /api/pause and "
+                                  "/api/resume accept writes"}
+        if self.executor is None:
+            return 409, {"error": "the execution path is not running, so there "
+                                  "is nothing to pause"}
+
+        payload = body or {}
+        reason = str(payload.get("reason") or "").strip()
+        changed_by = str(payload.get("by") or "api").strip()[:64]
+
+        if path == "/api/pause":
+            if not reason:
+                return 400, {"error": "a reason is required to pause execution"}
+            try:
+                state = self.executor.pause(reason=reason, changed_by=changed_by)
+            except Exception as exc:
+                return 500, {"error": "the pause switch could not be written",
+                             "detail": type(exc).__name__}
+            return 200, {"paused": state}
+
+        try:
+            state = self.executor.resume(reason=reason or "resumed by an operator",
+                                         changed_by=changed_by)
+        except Exception as exc:
+            return 500, {"error": "the pause switch could not be written",
+                         "detail": type(exc).__name__}
+        return 200, {"paused": state}
 
     def _recent(self, limit: int, statuses: list[str] | None) -> list[dict]:
         if not hasattr(self.ledger, "recent"):
@@ -437,7 +492,51 @@ def make_handler(service: MirrorService, *, log: Any = None):
         def _reject_write(self) -> None:
             self._send(405, {"error": "read-only service; no write endpoints"})
 
-        do_POST = do_PUT = do_PATCH = do_DELETE = _reject_write  # noqa: N815
+        def do_POST(self) -> None:  # noqa: N802
+            """Pause and resume only. Everything else stays 405.
+
+            The body is read with a hard cap and parsed as JSON; a malformed
+            body is a 400 rather than an exception. Authorisation is the same
+            bearer token the read routes use, and it is checked before the
+            body is read at all.
+            """
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            if not self._authorised():
+                self._send(401, {"error": "unauthorised"})
+                return
+            if path not in {"/api/pause", "/api/resume"}:
+                self._reject_write()
+                return
+
+            length = 0
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length > MAX_WRITE_BODY:
+                self._send(413, {"error": "body too large"})
+                return
+            raw = self.rfile.read(length) if length > 0 else b""
+            body: dict = {}
+            if raw:
+                try:
+                    body = json.loads(raw.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    self._send(400, {"error": "the body must be a JSON object"})
+                    return
+                if not isinstance(body, dict):
+                    self._send(400, {"error": "the body must be a JSON object"})
+                    return
+
+            try:
+                code, payload = service.route_post(path, body)
+            except Exception as exc:  # never leak a traceback to a client
+                code, payload = 500, {"error": "internal error",
+                                      "detail": type(exc).__name__}
+            self._send(code, payload)
+
+        do_PUT = do_PATCH = do_DELETE = _reject_write  # noqa: N815
 
     return Handler
 
@@ -528,6 +627,7 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
         # With the execution path running, the lot step, the minimum and the
         # maximum come from the broker rather than from literals in this file.
         # A hardcoded step cannot notice that the broker changed it.
+        equity_provider = None
         if executor is not None and getattr(executor, "broker", None) is not None:
             broker_spec = executor.broker.spec()
             instrument = InstrumentSpec(
@@ -538,15 +638,23 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
                 broker_spec.max_lot,
                 units_confirmed=broker_spec.verified,
             )
-            # The equity a new trade is sized against is the account's, read
-            # from the broker. It is read once at startup: a large drift in
-            # P&L is not re-read, which is recorded as a limitation.
+
+            # The equity a new trade is sized against is read from the broker
+            # for every signal. Reading it once at startup meant a process up
+            # for days sized against a balance that no longer existed, which
+            # silently changes the risk actually taken.
+            def _live_equity() -> float:
+                return float(executor.broker.equity())
+
+            equity_provider = _live_equity
             try:
-                equity = executor.broker.equity()
-                log(f"sizing equity from the broker: {equity:.2f}")
+                equity = _live_equity()
+                log(f"sizing equity from the broker at startup: {equity:.2f} "
+                    "(re-read for every signal)")
             except Exception as exc:
                 equity = 0.0
-                log(f"could not read the account equity: {type(exc).__name__}")
+                log(f"could not read the account equity: {type(exc).__name__}; "
+                    "signals will be blocked at sizing time")
         else:
             instrument = InstrumentSpec("XAUUSD", units, 0.01, 0.01, 50.0,
                                         units_confirmed=confirmed)
@@ -556,7 +664,8 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
             ledger=ledger,
             instrument=instrument,
             risk=RiskConfig(equity, 0.005,
-                            float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2"))),
+                            float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2")),
+                            equity_provider=equity_provider),
             notifier=notifier_from_env(),
             quote_provider=quote_provider,
             state=MirrorState(os.getenv("MIRROR_STATE", "data/mirror_state.json")),
@@ -600,6 +709,7 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
     try:
         from rade.execution.engine import ExecutionEngine
         from rade.execution.gateway import tradelocker_gateway_from_env
+        from rade.execution.guards import RiskLimits
         from rade.observer.notify import notifier_from_env
 
         confirmed = _truthy(os.getenv("MIRROR_CONTRACT_UNITS_CONFIRMED"))
@@ -623,7 +733,13 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
             log=log,
             manage_every_s=float(os.getenv("MIRROR_MANAGE_EVERY_S", "5")),
             fill_timeout_s=float(os.getenv("MIRROR_FILL_TIMEOUT_S", "300")),
+            limits=RiskLimits.from_env(),
+            duplicate_window_s=float(os.getenv("MIRROR_DUPLICATE_WINDOW_S", "900")),
         )
+        log(f"pre-trade limits: {engine.limits.describe()}")
+        if engine.limits.describe()["disabled"]:
+            log("WARNING: these pre-trade checks are switched off by "
+                f"configuration: {engine.limits.describe()['disabled']}")
         log(f"execution reconciliation on startup: {engine.reconcile()}")
         handle.executor = engine
         handle.stop_event = threading.Event()

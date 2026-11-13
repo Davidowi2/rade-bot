@@ -65,14 +65,18 @@ def live(tmp_path):
     thread.join(timeout=5)
 
 
-def call(port, path, *, token=None, method="GET"):
+def call(port, path, *, token=None, method="GET", body=None):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    conn.request(method, path, headers=headers)
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    conn.request(method, path, body=payload, headers=headers)
     resp = conn.getresponse()
-    body = resp.read()
+    raw = resp.read()
     conn.close()
-    return resp.status, (json.loads(body) if body else None)
+    return resp.status, (json.loads(raw) if raw else None)
 
 
 def test_healthz_is_public_and_reports_the_listener_state(live):
@@ -492,3 +496,120 @@ def test_no_executor_is_configured_by_default(monkeypatch, tmp_path):
     handle = start_executor_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
     assert handle.executor is None
     assert handle.error is None
+
+
+# ---------------------------------------------------------------------------
+# the pause switch
+# ---------------------------------------------------------------------------
+
+
+class _PauseableExecutor:
+    """Just enough executor for the pause routes: the switch is the ledger row."""
+
+    def __init__(self, ledger):
+        self.ledger = ledger
+
+    def pause(self, *, reason, changed_by):
+        return self.ledger.set_paused(paused=True, reason=reason,
+                                      changed_by=changed_by)
+
+    def resume(self, *, reason, changed_by):
+        return self.ledger.set_paused(paused=False, reason=reason,
+                                      changed_by=changed_by)
+
+    def pause_state(self):
+        control = self.ledger.control()
+        if control is None:
+            return {"paused": False, "reason": "the pause switch has never been set",
+                    "changed_at": None, "changed_by": ""}
+        return control
+
+    def guard_state(self):
+        from rade.execution.guards import RiskLimits
+        return {"limits": RiskLimits().describe(), "last_verdict": None}
+
+
+@pytest.fixture()
+def live_pause(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "p.sqlite")
+    seed(ledger)
+    heartbeat = tmp_path / "hb.json"
+    heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat,
+                            executor=_PauseableExecutor(ledger), broker_spec=_Spec())
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield httpd.server_address[1]
+    httpd.shutdown()
+    httpd.server_close()
+    thread.join(timeout=5)
+
+
+def test_pausing_requires_a_reason(live_pause):
+    status, body = call(live_pause, "/api/pause", token=TOKEN, method="POST",
+                        body={"by": "operator"})
+    assert status == 400
+    assert "reason is required" in body["error"]
+
+
+def test_pause_and_resume_are_recorded_and_reported(live_pause):
+    status, body = call(live_pause, "/api/pause", token=TOKEN, method="POST",
+                        body={"reason": "checking the account", "by": "operator"})
+    assert status == 200
+    assert body["paused"]["paused"] is True
+    assert body["paused"]["changed_by"] == "operator"
+
+    _, status_body = call(live_pause, "/api/status", token=TOKEN)
+    assert status_body["execution"]["paused"]["paused"] is True
+    assert status_body["execution"]["paused"]["reason"] == "checking the account"
+
+    status, body = call(live_pause, "/api/resume", token=TOKEN, method="POST",
+                        body={"reason": "done", "by": "operator"})
+    assert status == 200
+    assert body["paused"]["paused"] is False
+
+
+def test_the_pause_routes_need_the_token(live_pause):
+    status, _ = call(live_pause, "/api/pause", method="POST",
+                     body={"reason": "no token"})
+    assert status == 401
+
+
+def test_a_malformed_body_is_a_400_not_a_crash(live_pause):
+    conn = http.client.HTTPConnection("127.0.0.1", live_pause, timeout=10)
+    conn.request("POST", "/api/pause",
+                 body=b"not json",
+                 headers={"Authorization": f"Bearer {TOKEN}",
+                          "Content-Type": "application/json"})
+    resp = conn.getresponse()
+    payload = json.loads(resp.read())
+    conn.close()
+    assert resp.status == 400
+    assert "JSON object" in payload["error"]
+
+
+def test_other_writes_are_still_rejected(live_pause):
+    for path in ("/api/events", "/api/trades", "/api/status"):
+        status, _ = call(live_pause, path, token=TOKEN, method="POST", body={})
+        assert status == 405, path
+
+
+def test_pausing_without_an_executor_is_a_conflict(monkeypatch, tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "n.sqlite")
+    seed(ledger)
+    heartbeat = tmp_path / "hb.json"
+    heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = call(httpd.server_address[1], "/api/pause", token=TOKEN,
+                            method="POST", body={"reason": "why not"})
+        assert status == 409
+        assert "nothing to pause" in body["error"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
