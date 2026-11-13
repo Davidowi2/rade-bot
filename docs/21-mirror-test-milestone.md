@@ -455,3 +455,7 @@ python scripts/post_test_signal.py --side buy --tp 3,6,9 --stop 9
 # the ledger, read-only
 python scripts/export_mirror_evidence.py --db data/test_b2.sqlite
 ```
+
+---
+
+Legacy
