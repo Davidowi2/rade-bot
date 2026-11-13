@@ -301,6 +301,8 @@ class ExecutionEngine:
         #: channel re-posts calls as separate messages, so the id-based
         #: uniqueness constraint cannot catch it. 0 disables the check.
         self.duplicate_window_s = float(duplicate_window_s)
+        #: The startup read of what the guards depend on, once it has been made.
+        self._preflight: dict | None = None
 
     def guard_state(self) -> dict:
         """What the pre-trade guards are enforcing, and the last verdict.
@@ -312,6 +314,7 @@ class ExecutionEngine:
             "limits": self.limits.describe(),
             "last_verdict": (self._last_guard.to_dict()
                              if self._last_guard is not None else None),
+            "preflight": self._preflight,
         }
 
     def pause(self, *, reason: str, changed_by: str) -> dict:
@@ -333,6 +336,33 @@ class ExecutionEngine:
             return {"paused": False, "reason": "the pause switch has never been set",
                     "changed_at": None, "changed_by": ""}
         return control
+
+    def guard_preflight(self) -> dict:
+        """Read what the guards need once, at startup, and report it.
+
+        A missing risk table or an unreadable equity fails closed at the first
+        signal, which is the right behaviour but is silent until a signal
+        arrives - and on a deployment that can be days. Reading the same three
+        things at boot turns a misconfigured deploy into a line in the log and a
+        field on /api/status instead of a copier that quietly never copies.
+
+        This reads; it never writes. Nothing here changes the state it checks.
+        """
+        report: dict = {"readable": True, "problems": []}
+        for name in ("risk_state", "control"):
+            try:
+                report[name] = getattr(self.ledger, name)()
+            except Exception as exc:
+                report["readable"] = False
+                report["problems"].append(f"{name}: {type(exc).__name__}: {exc}")
+        try:
+            report["equity"] = float(self.broker.equity())
+        except Exception as exc:
+            report["readable"] = False
+            report["problems"].append(f"equity: {type(exc).__name__}: {exc}")
+        report["limits"] = self.limits.describe()
+        self._preflight = report
+        return report
 
     # -- helpers ----------------------------------------------------------
 

@@ -740,6 +740,19 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
         if engine.limits.describe()["disabled"]:
             log("WARNING: these pre-trade checks are switched off by "
                 f"configuration: {engine.limits.describe()['disabled']}")
+        preflight = engine.guard_preflight()
+        if preflight["readable"]:
+            control = preflight.get("control") or {}
+            log(f"pre-trade state readable: equity {preflight.get('equity')}; "
+                f"risk state {preflight.get('risk_state') or 'empty'}; "
+                f"paused {bool(control.get('paused'))} "
+                f"({control.get('reason') or 'never set'})")
+        else:
+            # Fail closed is right, but silent is not: without this line a
+            # missing migration looks like a copier that never sees a signal.
+            log("WARNING: the pre-trade guards cannot read what they need, so "
+                "every new order will be refused: "
+                + "; ".join(preflight["problems"]))
         log(f"execution reconciliation on startup: {engine.reconcile()}")
         handle.executor = engine
         handle.stop_event = threading.Event()

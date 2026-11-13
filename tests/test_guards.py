@@ -426,3 +426,53 @@ def test_a_failed_duplicate_lookup_blocks_rather_than_guesses(tmp_path):
     outcome = engine.execute(evaluated(mid=892), envelope(mid=892))
     assert outcome.get("executed") is False
     assert broker.place_calls == []
+
+
+# ---------------------------------------------------------------------------
+# the startup read: a misconfigured deploy should say so before a signal
+# ---------------------------------------------------------------------------
+
+
+def test_the_startup_read_reports_what_the_guards_can_see(tmp_path):
+    engine, ledger, broker = engine_for(tmp_path, FakeBroker())
+    ledger.set_paused(paused=True, reason="reviewing by hand", changed_by="test")
+
+    report = engine.guard_preflight()
+
+    assert report["readable"] is True
+    assert report["problems"] == []
+    assert report["equity"] == pytest.approx(broker.account_equity)
+    # Never written: the switch is read, not reset.
+    assert report["control"]["paused"] is True
+    assert report["control"]["reason"] == "reviewing by hand"
+    assert report["limits"]["disabled"] == []
+    # The dashboard reads the same report through guard_state.
+    assert engine.guard_state()["preflight"] is report
+
+
+def test_the_startup_read_reports_an_unreadable_risk_table(tmp_path):
+    """A missing migration must not look like a healthy copier."""
+    engine, ledger, broker = engine_for(tmp_path, FakeBroker())
+
+    def missing(*args, **kwargs):
+        raise RuntimeError('no such table: mirror_risk_state')
+
+    ledger.risk_state = missing
+    report = engine.guard_preflight()
+
+    assert report["readable"] is False
+    assert any("mirror_risk_state" in problem for problem in report["problems"])
+    # The rest is still read, so one bad table does not hide the others.
+    assert report["control"] is None
+    assert report["equity"] == pytest.approx(broker.account_equity)
+
+
+def test_the_startup_read_reports_unreadable_equity(tmp_path):
+    broker = FakeBroker()
+    broker.fail_equity = True
+    engine, _, _ = engine_for(tmp_path, broker)
+
+    report = engine.guard_preflight()
+
+    assert report["readable"] is False
+    assert any("equity" in problem for problem in report["problems"])
