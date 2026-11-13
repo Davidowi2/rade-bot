@@ -88,6 +88,7 @@ All commands run from the repository root. The first row was measured on
 | Dashboard proxy | `node --test web/test/proxy.test.js` | **6/6 pass** |
 | Service over HTTP | started on `:8099`, called with `curl` | `/healthz` 200 with a `listener` block, `/api/status` 401 without token, 200 with, `paper_only: true`, `broker_writes: false` |
 | Hosted refusals | `RENDER=true python -m rade.observer.service` | exit **3** with "hosted mode requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"; exit **3** with "MIRROR_EQUITY is not set" when the listener cannot start |
+| Paper-only deployment check | service + live listener against the real channel | 0 events imported, cursor `latest:18799`, `/healthz` 200 with a healthy listener — evidence `docs/evidence/deploy-check-2026-11-13.json` |
 | Single-file test isolation | `python -m pytest tests/test_mirror_pipeline.py` | passes standalone (it did not before; see §3) |
 
 ### The simulation scenarios (real archived message 18048)
@@ -379,3 +380,33 @@ restarts the service when the intake dies. `MIRROR_RUN_LISTENER=0` keeps
 
 Broker order capability is still absent, the exit policy is still unresolved,
 the demo gate is still closed, and the frozen holdout is untouched.
+
+### The deployment check (2026-11-13)
+
+The review asked for a paper-only deployment check after the fixes. Hosting
+credentials do not exist in this session — no Supabase project, Render account,
+Vercel project or BotFather token — so the **hosted** deployment cannot be
+provisioned and no claim is made about it.
+
+What was possible was run: the same service, the same listener thread, the same
+durable store, against the real Telegram channel on this host
+(`docs/evidence/deploy-check-2026-11-13.json`).
+
+| Measurement | Result |
+|---|---|
+| Channel | `@XAUUSD_FOREX4` |
+| Newest message id at the first connect | 18799 |
+| Start point recorded | `latest:18799`, in the state file **and** in `mirror_cursor` |
+| Events imported | **0** — none of the channel's ~18,800 messages became an intent |
+| Listener | phase `listening`, thread alive, `/healthz` 200 with `listener.healthy: true` |
+| Notifications | none sent (no BotFather token), so nothing left the host |
+| Sizing | refused: `MIRROR_CONTRACT_UNITS_CONFIRMED` was not set, so nothing was sized |
+
+Before the fix, that same start would have fetched the whole archive and turned
+every old call in it into a paper intent, with notifications for the notable
+ones. That is the single largest behavioural difference in this work.
+
+Two things this check does **not** establish: the live push path (no message
+arrived during the window, so it is still unobserved) and the hosted path (the
+durable-store refusal and the health endpoint were verified locally and by unit
+test, not against a real Supabase or Render).

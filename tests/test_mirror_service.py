@@ -137,6 +137,28 @@ def test_healthz_is_ok_during_the_startup_grace(tmp_path):
     assert "starting" in body["listener"]["reason"]
 
 
+def test_healthz_reports_connecting_as_a_transient_state(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    beat = tmp_path / "hb.json"
+    beat.write_text(json.dumps({"phase": "connecting"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=beat,
+                             listener_expected=True)
+    status, body = service.route("/healthz", {})
+    assert status == 200
+    assert body["listener"]["reason"] == "listener is connecting"
+
+
+def test_healthz_is_503_when_the_listener_stopped(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    beat = tmp_path / "hb.json"
+    beat.write_text(json.dumps({"phase": "stopped"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=beat,
+                             listener_expected=True)
+    status, body = service.route("/healthz", {})
+    assert status == 503
+    assert body["listener"]["reason"] == "listener stopped"
+
+
 def test_api_requires_a_token(live):
     assert call(live, "/api/status")[0] == 401
     assert call(live, "/api/events")[0] == 401

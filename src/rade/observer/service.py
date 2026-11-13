@@ -139,8 +139,12 @@ class MirrorService:
             return False, "no listener heartbeat"
         if state.get("stale"):
             return False, "listener heartbeat is stale"
-        if state.get("phase") == "stopped":
+        phase = state.get("phase")
+        if phase == "stopped":
             return False, "listener stopped"
+        if phase == "connecting":
+            # Still working on it: not a failure, but not listening either.
+            return True, "listener is connecting"
         return True, "listener is listening"
 
     def config_summary(self) -> dict:

@@ -1,0 +1,64 @@
+{
+  "check": "paper-only deployment check of the mirror service",
+  "date": "2026-11-13",
+  "hosted": false,
+  "why_not_hosted": "no Supabase, Render, Vercel or BotFather credentials exist in this session, so the hosted path cannot be provisioned. The service was run locally against the real Telegram channel with the same code path the deployment uses (service process, listener thread, durable store, health endpoint).",
+  "configuration": {
+    "MIRROR_RUN_LISTENER": "1",
+    "MIRROR_START_AT": "latest",
+    "MIRROR_CONTRACT_UNITS_PER_LOT": "100",
+    "MIRROR_CONTRACT_UNITS_CONFIRMED": "not set",
+    "MIRROR_QUOTE_PROVIDER": "none",
+    "MIRROR_EQUITY": "10000",
+    "MIRROR_API_TOKEN": "a throwaway token for this check",
+    "store": "SQLiteIntentLedger (local file; a hosted run would use Supabase)",
+    "notifier": "none configured (no BotFather token), so nothing was sent to any chat"
+  },
+  "measured": {
+    "channel": "@XAUUSD_FOREX4",
+    "listener_phase": "listening",
+    "listener_thread_alive": true,
+    "start_source": "latest:18799",
+    "cursor_row_in_store": ["@XAUUSD_FOREX4", 18799, "latest:18799"],
+    "events_imported": 0,
+    "notification_attempts": 0,
+    "healthz": {
+      "http_status": 200,
+      "body": {
+        "status": "ok",
+        "listener": {
+          "expected": true,
+          "healthy": true,
+          "phase": "listening",
+          "heartbeat_age_s": 22.5,
+          "reason": "listener is listening"
+        }
+      }
+    },
+    "api_status": {
+      "counts": {},
+      "store": "SQLiteIntentLedger",
+      "config": {
+        "supabase": false,
+        "durable_store": true,
+        "notifier": false,
+        "contract_units_confirmed": false,
+        "broker_writes": false,
+        "paper_only": true,
+        "exit_policy": "unresolved"
+      }
+    }
+  },
+  "what_this_proves": [
+    "A first activation imports none of the channel's history: the newest message id was 18799, the cursor was set to it, and 0 events were imported. Before the fix the same start would have fetched the whole archive and turned every old call into a paper intent.",
+    "The start point survives an ephemeral disk: it is written to the state file and to the mirror_cursor table in the store.",
+    "The listener thread runs beside the HTTP service, and /healthz reports its state rather than just the process's.",
+    "An unconfirmed contract size is refused rather than used: MIRROR_CONTRACT_UNITS_CONFIRMED was not set, so nothing was sized."
+  ],
+  "what_this_does_not_prove": [
+    "No message was delivered during the check, so the live push path is still unobserved (the soak recorded one edit, never a new-message update).",
+    "No notification was sent, because no BotFather token exists: the notification state machine is tested against a mock transport only.",
+    "The hosted path (Supabase, Render, Vercel) is not exercised: the durable-store refusal and the health endpoint were verified locally and by unit test.",
+    "Nothing was sized and no order exists: broker order capability is absent, the demo gate is closed and the exit policy is unresolved."
+  ]
+}
