@@ -346,12 +346,32 @@ class Runtime:
         if floor:
             kwargs["min_id"] = floor
         async for message in self.client.iter_messages(self.entity, **kwargs):
-            payload = self.listener.process_message(message, source="catchup")
+            payload = self._process_safely(message, source="catchup")
             seen.append(int(message.id))
-            if payload["status"] not in {"duplicate"}:
+            if payload.get("status") not in {"duplicate"}:
                 self.events += 1
         self.save_cursor(self.listener.state.last_message_id)
         return seen
+
+    def _process_safely(self, message: Any, *, source: str,
+                        revision: int | None = None) -> dict:
+        """Process one message without letting it take the intake down.
+
+        An unexpected exception in one message - a rendering bug, a store
+        error - used to propagate out of the loop and stop the listener, which
+        means the copier silently stops copying until someone notices the
+        heartbeat. A message that cannot be processed is recorded as an error
+        and the next one is still handled; the message itself is left
+        unclaimed, so a later catch-up will retry it.
+        """
+        try:
+            return self.listener.process_message(
+                message, revision=revision, source=source)
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            self.errors.append(f"process id={getattr(message, 'id', '?')}: {detail}")
+            self.log(f"could not process id={getattr(message, 'id', '?')}: {detail}")
+            return {"status": "error", "error": detail}
 
     def save_cursor(self, message_id: int) -> None:
         """Persist the start point in the store.

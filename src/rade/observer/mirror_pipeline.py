@@ -489,6 +489,36 @@ def evaluate_message(
         return _result(key, STATUS_MANUAL_REVIEW,
                        "one or more targets are on the wrong side of entry", signal=parsed)
 
+    # An edit is never applied automatically: it may be a stop move, a partial
+    # close instruction, or a correction, and the exit policy is unresolved.
+    #
+    # ``edited_at`` is checked as well as ``revision`` because the two are not
+    # the same event. A live edit event arrives with revision + 1, but a message
+    # edited *before* the pipeline first saw it - after a restart, or while a
+    # catch-up was still behind - arrives with revision 0 and an edit timestamp.
+    # Trusting revision alone would copy the edited body as if it were the
+    # original call, which is the one thing an edit must never cause. This is
+    # checked before the age check: an edit is refused on principle, and saying
+    # only "stale" would suggest that a fresher copy of it would be acceptable.
+    if message.revision > 0 or message.edited_at is not None:
+        changed = parsed["entry_price"] != entry or parsed["stop_loss"] != stop
+        if message.revision > 0:
+            reason = ("edited signal; never amend an existing intent automatically"
+                      + (" (entry or stop changed)" if changed else ""))
+            note = (f"Edited signal {message.message_id} rev {message.revision}: "
+                    "review before any action.")
+        else:
+            # First sighting is already an edit: the original wording was never
+            # stored, so there is nothing to compare the current text against.
+            reason = (
+                "this message was edited after it was posted and was first seen "
+                f"in its edited form (posted {as_utc(message.posted_at).isoformat()}, "
+                f"edited {as_utc(message.edited_at).isoformat()}); the original "
+                "call is unknown, so it is not copied")
+            note = (f"Edited signal {message.message_id} seen for the first time at "
+                    f"rev 0 with an edit timestamp: review before any action.")
+        return _result(key, STATUS_MANUAL_REVIEW, reason, signal=parsed, note=note)
+
     # Age is checked before anything is sized or priced. A signal that is too
     # old is not made acceptable by a fresh quote, a wide stop, or a quiet
     # market: the instruction itself has expired. This runs for market signals
@@ -498,18 +528,6 @@ def evaluate_message(
         stale = stale_reason(message, risk, now=now)
         if stale is not None:
             return _result(key, STATUS_STALE, stale, signal=parsed)
-
-    # An edit is never applied automatically: it may be a stop move, a partial
-    # close instruction, or a correction, and the exit policy is unresolved.
-    if message.revision > 0:
-        changed = parsed["entry_price"] != entry or parsed["stop_loss"] != stop
-        return _result(
-            key, STATUS_MANUAL_REVIEW,
-            "edited signal; never amend an existing intent automatically"
-            + (" (entry or stop changed)" if changed else ""),
-            signal=parsed,
-            note=f"Edited signal {message.message_id} rev {message.revision}: review before any action.",
-        )
 
     if not instrument.units_confirmed:
         # The contract size was never checked against the broker's own
@@ -553,7 +571,13 @@ def evaluate_message(
                            "market signal needs a fresh broker quote", signal=parsed)
         if not (math.isfinite(quote.bid) and math.isfinite(quote.ask)
                 and quote.bid > 0 and quote.ask > 0 and quote.ask >= quote.bid):
-            return _result(key, STATUS_BLOCKED, "broker quote is invalid", signal=parsed)
+            # The numbers are in the reason on purpose: "invalid quote" with no
+            # values cannot be diagnosed after the fact, and a crossed book on
+            # the demo feed is a real, transient thing that looks like a bug.
+            return _result(
+                key, STATUS_BLOCKED,
+                f"broker quote is invalid (bid={quote.bid!r}, ask={quote.ask!r})",
+                signal=parsed)
 
         # A quote is stale when it is older than the budget *before* the
         # message arrived. The listener fetches the quote after receipt, so a

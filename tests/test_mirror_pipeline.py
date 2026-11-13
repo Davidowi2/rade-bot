@@ -103,6 +103,72 @@ def test_edits_are_never_automatically_ordered():
     assert result.order_intent is None
 
 
+# --------------------------------------------------------------------------
+# an edit seen for the first time: the revision counter only rises when the
+# pipeline saw the original, so catch-up and restart deliver an edited body
+# as revision 0. Trusting the revision alone copies the edited call.
+# --------------------------------------------------------------------------
+
+
+def _edited(*, posted_ago=timedelta(0), edit_after=timedelta(minutes=1)):
+    return MessageEnvelope(
+        "@source", 100, 0, NOW - posted_ago, NOW, VALID,
+        edited_at=NOW - posted_ago + edit_after)
+
+
+def test_an_edit_seen_for_the_first_time_is_not_copied():
+    result = evaluate_message(
+        _edited(), instrument=INSTRUMENT, risk=RISK,
+        quote=MarketQuote(3915, 3915, NOW),
+    )
+    assert result.status == "manual_review"
+    assert result.order_intent is None
+    assert "first seen in its edited form" in result.reason
+    assert "original call is unknown" in result.reason
+
+
+def test_a_first_sighting_edit_is_refused_as_an_edit_not_as_stale():
+    """The edit is the stronger fact: a fresher copy would still be an edit."""
+    result = evaluate_message(
+        _edited(posted_ago=timedelta(hours=3), edit_after=timedelta(minutes=2)),
+        instrument=INSTRUMENT, risk=RISK,
+        quote=MarketQuote(3915, 3915, NOW),
+    )
+    assert result.status == "manual_review"
+    assert "edited" in result.reason
+    assert result.signal is not None
+
+
+def test_a_first_sighting_edit_is_recorded_without_an_intent(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "observer.sqlite")
+    result = process_once(
+        _edited(), ledger=ledger, instrument=INSTRUMENT, risk=RISK,
+        quote=MarketQuote(3915, 3915, NOW),
+    )
+    assert result.status == "manual_review"
+    assert result.order_intent is None
+    assert ledger.list_trades() == []
+
+
+def test_the_adapter_carries_the_edit_timestamp():
+    """Without this the guard has nothing to see: the envelope is the only
+    place the pipeline learns that the body changed."""
+    from rade.observer.mirror_pipeline import envelope_from_telegram
+
+    class _Msg:
+        id = 7
+        date = NOW
+        message = VALID
+        edit_date = NOW + timedelta(seconds=30)
+
+    envelope = envelope_from_telegram(_Msg(), channel="@source")
+    assert envelope.edited_at == NOW + timedelta(seconds=30)
+    assert evaluate_message(
+        envelope, instrument=INSTRUMENT, risk=RISK,
+        quote=MarketQuote(3915, 3915, NOW),
+    ).status == "manual_review"
+
+
 def test_ledger_deduplicates_exact_message_revision(tmp_path):
     ledger = SQLiteIntentLedger(tmp_path / "observer.sqlite")
     first = process_once(

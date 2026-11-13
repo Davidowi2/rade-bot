@@ -24,7 +24,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from rade.observer.mirror_pipeline import STATUS_CONFLICT, STATUS_MANUAL_REVIEW, STATUS_PAPER_INTENT
+from rade.observer.mirror_pipeline import (
+    MAX_RISK_FRACTION,
+    STATUS_CONFLICT,
+    STATUS_MANUAL_REVIEW,
+    STATUS_PAPER_INTENT,
+)
 from rade.observer.store import StorageError, hosted_mode, make_ledger
 
 REVIEW_STATUSES = [STATUS_MANUAL_REVIEW, STATUS_CONFLICT]
@@ -50,6 +55,29 @@ def _now_iso() -> str:
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY
+
+
+def _risk_fraction() -> float:
+    """The per-trade risk fraction, capped by the pipeline's hard ceiling.
+
+    The default is the 0.5% the whole design is built around. The environment
+    can only lower it, never raise it: ``MAX_RISK_FRACTION`` is enforced again
+    in the pipeline, so a typo here cannot become a larger position. A lower
+    value is how a test run gets a minimum-lot position instead of a full-size
+    one.
+    """
+    raw = os.getenv("MIRROR_RISK_FRACTION", "").strip()
+    if not raw:
+        return MAX_RISK_FRACTION
+    try:
+        value = float(raw)
+    except ValueError:
+        raise SystemExit(
+            f"MIRROR_RISK_FRACTION={raw!r} is not a number") from None
+    if not 0 < value <= MAX_RISK_FRACTION:
+        raise SystemExit(
+            f"MIRROR_RISK_FRACTION={value} must be in (0, {MAX_RISK_FRACTION}]")
+    return value
 
 
 def _trade_view(row: dict, *, full: bool = False) -> dict:
@@ -229,9 +257,19 @@ class MirrorService:
             except (TypeError, ValueError):
                 return float(default)
 
+        signal_age = number("MIRROR_MAX_SIGNAL_AGE_S", "120")
+        reconnect = number("MIRROR_RECONNECT_S", "900")
         return {
-            "signal_max_age_seconds": number("MIRROR_MAX_SIGNAL_AGE_S", "120"),
+            "signal_max_age_seconds": signal_age,
             "quote_max_age_seconds": number("MIRROR_QUOTE_MAX_AGE_S", "2"),
+            "reconnect_seconds": reconnect,
+            # If a signal can only reach the pipeline through a catch-up, then
+            # the reconnect interval is its delivery latency, and an interval
+            # longer than the age limit means such a signal can never be copied.
+            # Live push normally beats this, but the coupling is worth seeing:
+            # it is the difference between "copies signals" and "never copies".
+            "catchup_can_exceed_age_limit": bool(
+                reconnect > 0 and signal_age > 0 and reconnect > signal_age),
         }
 
     def config_summary(self) -> dict:
@@ -682,7 +720,7 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
             channel=channel,
             ledger=ledger,
             instrument=instrument,
-            risk=RiskConfig(equity, 0.005,
+            risk=RiskConfig(equity, _risk_fraction(),
                             float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2")),
                             equity_provider=equity_provider,
                             signal_max_age_seconds=float(
@@ -854,6 +892,16 @@ def main(argv: list[str] | None = None) -> int:
                              broker_spec=execution.spec,
                              execution_error=execution.error)
     handler = make_handler(service, log=lambda line: print(line, flush=True))
+    intake = service.intake_limits()
+    print(f"intake limits: {intake}", flush=True)
+    if intake["catchup_can_exceed_age_limit"]:
+        # Not fatal - live push normally delivers first - but if it does not,
+        # this configuration copies nothing at all, and the symptom is silence.
+        print("WARNING: MIRROR_RECONNECT_S "
+              f"({intake['reconnect_seconds']:.0f}s) is longer than "
+              f"MIRROR_MAX_SIGNAL_AGE_S ({intake['signal_max_age_seconds']:.0f}s), "
+              "so a signal that only reaches the pipeline through a catch-up "
+              "will always be refused as stale", flush=True)
     httpd = ThreadingHTTPServer(("0.0.0.0", port), handler)
     print(f"listening on :{port}; read-only; store={type(service.ledger).__name__}",
           flush=True)

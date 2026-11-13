@@ -518,3 +518,32 @@ def test_a_successful_reconnect_clears_the_degraded_state(tmp_path):
     assert runtime.reconnect_failed is False
     assert runtime.last_reconnect_error is None
     assert runtime.phase() == "listening"
+
+
+def test_one_unprocessable_message_does_not_stop_the_intake(tmp_path):
+    """A message that raises is recorded and skipped; the rest still process.
+
+    The live test-channel run found this: a rendering bug raised KeyError on the
+    first stale signal, the exception escaped the loop, and the listener thread
+    stopped - so every later signal would have gone unread while the heartbeat
+    looked merely degraded. Losing one message is survivable; losing the intake
+    is not.
+    """
+    runtime = _runtime(tmp_path, [msg(1), msg(2), msg(3)])
+    real = runtime.listener.process_message
+    calls = []
+
+    def sometimes(message, **kwargs):
+        calls.append(message.id)
+        if message.id == 2:
+            raise KeyError("stale")
+        return real(message, **kwargs)
+
+    runtime.listener.process_message = sometimes
+    seen = asyncio.run(runtime.gap_fill())
+
+    assert seen == [1, 2, 3], "the loop must reach the messages after the bad one"
+    assert calls == [1, 2, 3]
+    assert any("stale" in error for error in runtime.errors)
+    stored = {row["message_id"] for row in runtime.listener.ledger.recent()}
+    assert {1, 3} <= stored

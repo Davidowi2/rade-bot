@@ -13,6 +13,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
 
 import requests
@@ -126,6 +127,7 @@ def build_notification(result: PipelineResult) -> str | None:
         "accepted": "PAPER INTENT",
         "review": "MANUAL REVIEW",
         "blocked": "BLOCKED",
+        "stale": "STALE",
     }[kind]
 
     lines = [f"[{header}] {result.status}", result.reason]
@@ -338,8 +340,54 @@ def retry_failed_notifications(ledger: Any, notifier: Notifier, *,
     return summary
 
 
+@dataclass
+class FileNotifier:
+    """Write each notification to a file instead of a chat.
+
+    A test transport, and only that. It exists because the alternative for
+    proving the notification path without a BotFather token is to assert on a
+    recorded list, which skips the transport, the failure handling and the
+    ledger slot that decide whether a real message is sent once.
+
+    It is refused on a hosted deployment: a process that quietly writes its
+    alerts to a file on a disk that is wiped looks identical to one that sends
+    them, and that is exactly the failure this whole design avoids.
+    """
+
+    path: str
+
+    def __post_init__(self) -> None:
+        if _hosted():
+            raise RuntimeError(
+                "MIRROR_NOTIFY_FILE is a test transport and is refused on a "
+                "hosted deployment; configure TELEGRAM_BOT_TOKEN instead")
+
+    def __repr__(self) -> str:
+        return f"FileNotifier(path={self.path!r})"
+
+    def send(self, text: str) -> tuple[bool, str]:
+        try:
+            with open(self.path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "text": text,
+                }, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+        return True, f"written to {self.path}"
+
+
+def _hosted() -> bool:
+    return (os.getenv("RENDER", "").strip().lower() in {"1", "true", "yes"}
+            or os.getenv("MIRROR_REQUIRE_DURABLE_STORE", "").strip().lower()
+            in {"1", "true", "yes"})
+
+
 def notifier_from_env() -> BotFatherNotifier | None:
     """Build a notifier when both secrets exist; otherwise report the gap."""
+    path = os.getenv("MIRROR_NOTIFY_FILE", "").strip()
+    if path:
+        return FileNotifier(path=path)
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_NOTIFY_CHAT_ID", "").strip()
     if not token or not chat_id:

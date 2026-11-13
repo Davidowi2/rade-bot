@@ -1,0 +1,289 @@
+{
+  "read_at": "2026-11-13T17:36:08.994537+00:00",
+  "environment": "demo",
+  "live_quote": {
+    "bid": 3882.92,
+    "ask": 3883.22
+  },
+  "account_before": {
+    "positions": 0,
+    "open_orders": 0
+  },
+  "account_after": {
+    "positions": 0,
+    "open_orders": 0
+  },
+  "cases": [
+    {
+      "case": "delayed signal (recovered 10 min after it was posted)",
+      "expected": "stale",
+      "status": "stale",
+      "reason": "the signal is stale: it was posted 10m before it reached the pipeline, beyond the 2m limit (MIRROR_MAX_SIGNAL_AGE_S); a late signal is not the trade that was published",
+      "ledger": {
+        "state": "stale",
+        "reason": "the signal is stale: it was posted 10m before it reached the pipeline, beyond the 2m limit (MIRROR_MAX_SIGNAL_AGE_S); a late signal is not the trade that was published",
+        "has_intent": false,
+        "size": null
+      },
+      "signal_text": "XAUUSD BUY NOW 3883.03\nSl : 3874.03\nTp : 3884.03\nTp : 3885.03\nTp : 3886.03",
+      "quote": {
+        "bid": 3883.03,
+        "ask": 3883.17,
+        "quoted_at": "2026-11-13T17:35:14.569790+00:00",
+        "age_s": 0.0
+      },
+      "problems": []
+    },
+    {
+      "case": "stale quote (60 s old, 5 s budget)",
+      "expected": "blocked",
+      "status": "blocked",
+      "reason": "broker quote is stale",
+      "ledger": {
+        "state": "blocked",
+        "reason": "broker quote is stale",
+        "has_intent": false,
+        "size": null
+      },
+      "signal_text": "XAUUSD BUY NOW 3883.01\nSl : 3874.01\nTp : 3884.01\nTp : 3885.01\nTp : 3886.01",
+      "quote": {
+        "bid": 3883.01,
+        "ask": 3883.37,
+        "quoted_at": "2026-11-13T17:34:18.344961+00:00",
+        "age_s": 60.0
+      },
+      "problems": []
+    },
+    {
+      "case": "crossed book (ask below bid)",
+      "expected": "blocked",
+      "status": "blocked",
+      "reason": "broker quote is invalid (bid=3903.11, ask=3863.4)",
+      "ledger": {
+        "state": "blocked",
+        "reason": "broker quote is invalid (bid=3903.11, ask=3863.4)",
+        "has_intent": false,
+        "size": null
+      },
+      "signal_text": "XAUUSD BUY NOW 3883.11\nSl : 3874.11\nTp : 3884.11\nTp : 3885.11\nTp : 3886.11",
+      "quote": {
+        "bid": 3903.11,
+        "ask": 3863.4,
+        "quoted_at": "2026-11-13T17:35:21.960698+00:00",
+        "age_s": -0.0
+      },
+      "problems": []
+    },
+    {
+      "case": "quote timestamp from the future",
+      "expected": "blocked",
+      "status": "blocked",
+      "reason": "quote timestamp is in the future beyond tolerance",
+      "ledger": {
+        "state": "blocked",
+        "reason": "quote timestamp is in the future beyond tolerance",
+        "has_intent": false,
+        "size": null
+      },
+      "signal_text": "XAUUSD BUY NOW 3883.23\nSl : 3874.23\nTp : 3884.23\nTp : 3885.23\nTp : 3886.23",
+      "quote": {
+        "bid": 3883.23,
+        "ask": 3883.46,
+        "quoted_at": "2026-11-13T17:45:25.929443+00:00",
+        "age_s": -600.0
+      },
+      "problems": []
+    },
+    {
+      "case": "market already through the published stop",
+      "expected": "blocked",
+      "status": "blocked",
+      "reason": "market has already crossed the published stop",
+      "ledger": {
+        "state": "blocked",
+        "reason": "market has already crossed the published stop",
+        "has_intent": false,
+        "size": null
+      },
+      "signal_text": "XAUUSD BUY NOW 3913.28\nSl : 3904.28\nTp : 3914.28\nTp : 3915.28\nTp : 3916.28",
+      "quote": {
+        "bid": 3883.28,
+        "ask": 3883.75,
+        "quoted_at": "2026-11-13T17:35:29.626512+00:00",
+        "age_s": 0.0
+      },
+      "problems": []
+    },
+    {
+      "case": "edited signal (revision 1)",
+      "expected": "manual_review",
+      "status": "manual_review",
+      "reason": "edited signal; never amend an existing intent automatically",
+      "ledger": {
+        "state": "manual_review",
+        "reason": "edited signal; never amend an existing intent automatically",
+        "has_intent": false,
+        "size": null
+      },
+      "signal_text": "XAUUSD BUY NOW 3883.35\nSl : 3874.35\nTp : 3884.35\nTp : 3885.35\nTp : 3886.35",
+      "quote": {
+        "bid": 3883.35,
+        "ask": 3883.69,
+        "quoted_at": "2026-11-13T17:35:33.550731+00:00",
+        "age_s": 0.0
+      },
+      "problems": []
+    },
+    {
+      "case": "malformed signal (no stop)",
+      "expected": "manual_review",
+      "status": "manual_review",
+      "reason": "entry, stop, and at least one target are required",
+      "ledger": {
+        "state": "manual_review",
+        "reason": "entry, stop, and at least one target are required",
+        "has_intent": false,
+        "size": null
+      },
+      "signal_text": "XAUUSD BUY NOW 3883.36\nTp : 3885.36",
+      "quote": {
+        "bid": 3883.36,
+        "ask": 3883.64,
+        "quoted_at": "2026-11-13T17:35:37.253630+00:00",
+        "age_s": 0.0
+      },
+      "problems": []
+    },
+    {
+      "case": "excessive spread (limit set below the live spread)",
+      "expected": "blocked",
+      "status": "blocked",
+      "reason": "the spread is 0.27, wider than the 0.0001 limit",
+      "ledger": {
+        "state": "blocked",
+        "broker_order_id": null,
+        "broker_position_id": null,
+        "note": "the spread is 0.27, wider than the 0.0001 limit",
+        "size": 0.03
+      },
+      "checks": [
+        {
+          "check": "pause",
+          "ok": true,
+          "detail": "not paused"
+        },
+        {
+          "check": "equity",
+          "ok": true,
+          "detail": "equity 101041"
+        },
+        {
+          "check": "max_drawdown",
+          "ok": true,
+          "detail": "equity 101041 against a floor of 95988.6 (peak 101041, limit 5.00%)"
+        },
+        {
+          "check": "daily_loss",
+          "ok": true,
+          "detail": "equity 101041 against a floor of 99019.9 (day start 101041, limit 2.00%)"
+        },
+        {
+          "check": "max_open_positions",
+          "ok": true,
+          "detail": "0 open against a limit of 3"
+        },
+        {
+          "check": "max_spread",
+          "ok": false,
+          "detail": "spread 0.27 against a limit of 0.0001"
+        }
+      ],
+      "notifications": [
+        "[BLOCKED] the spread is 0.27, wider than the 0.0001 limit"
+      ],
+      "signal_text": "XAUUSD BUY NOW 3883.41\nSl : 3874.41\nTp : 3884.41\nTp : 3885.41\nTp : 3886.41",
+      "problems": []
+    },
+    {
+      "case": "excessive slippage (entry 3.00 from the market, limit 0.01)",
+      "expected": "blocked",
+      "status": "blocked",
+      "reason": "the market is 3.02 away from the published entry, beyond the 0.01 slippage limit; the published risk geometry no longer applies",
+      "ledger": {
+        "state": "blocked",
+        "broker_order_id": null,
+        "broker_position_id": null,
+        "note": "the market is 3.02 away from the published entry, beyond the 0.01 slippage limit; the published risk geometry no longer applies",
+        "size": 0.05
+      },
+      "checks": [
+        {
+          "check": "pause",
+          "ok": true,
+          "detail": "not paused"
+        },
+        {
+          "check": "equity",
+          "ok": true,
+          "detail": "equity 101041"
+        },
+        {
+          "check": "max_drawdown",
+          "ok": true,
+          "detail": "equity 101041 against a floor of 95988.6 (peak 101041, limit 5.00%)"
+        },
+        {
+          "check": "daily_loss",
+          "ok": true,
+          "detail": "equity 101041 against a floor of 99019.9 (day start 101041, limit 2.00%)"
+        },
+        {
+          "check": "max_open_positions",
+          "ok": true,
+          "detail": "0 open against a limit of 3"
+        },
+        {
+          "check": "max_spread",
+          "ok": true,
+          "detail": "spread 0.23 against a limit of 5"
+        },
+        {
+          "check": "max_slippage",
+          "ok": false,
+          "detail": "the market is 3.02 from the published entry, against a limit of 0.01"
+        }
+      ],
+      "notifications": [
+        "[BLOCKED] the market is 3.02 away from the published entry, beyond the 0.01 slippage limit; the published risk geometry no longer applies"
+      ],
+      "signal_text": "XAUUSD BUY NOW 3886.16\nSl : 3877.16\nTp : 3887.16\nTp : 3888.16\nTp : 3889.16",
+      "problems": []
+    },
+    {
+      "case": "pause enabled (switch set before the signal)",
+      "expected": "blocked",
+      "status": "blocked",
+      "reason": "execution is paused: probe: pause switch",
+      "ledger": {
+        "state": "blocked",
+        "broker_order_id": null,
+        "broker_position_id": null,
+        "note": "execution is paused: probe: pause switch",
+        "size": 0.03
+      },
+      "checks": [
+        {
+          "check": "pause",
+          "ok": false,
+          "detail": "probe: pause switch"
+        }
+      ],
+      "notifications": [
+        "[BLOCKED] execution is paused: probe: pause switch"
+      ],
+      "signal_text": "XAUUSD BUY NOW 3882.87\nSl : 3873.87\nTp : 3883.87\nTp : 3884.87\nTp : 3885.87",
+      "problems": []
+    }
+  ],
+  "failures": []
+}

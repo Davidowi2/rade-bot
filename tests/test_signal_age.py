@@ -12,6 +12,7 @@ message. If the age guard were missing, all of them would produce an intent.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -249,3 +250,68 @@ def test_a_stale_signal_notifies_as_stale_not_as_blocked():
     """An operator needs to know the listener was away, not that the market was
     wrong."""
     assert NOTIFY_STATUSES[STATUS_STALE] == "stale"
+
+
+# ---------------------------------------------------------------------------
+# the test transport for notifications
+# ---------------------------------------------------------------------------
+
+
+def test_the_file_notifier_records_each_message_once(tmp_path):
+    """The test transport exists so the notify path can be proved without a bot."""
+    from rade.observer.notify import FileNotifier
+
+    path = tmp_path / "alerts.jsonl"
+    notifier = FileNotifier(path=str(path))
+    ok, detail = notifier.send("[STALE] a signal arrived late")
+    assert ok is True
+    assert "written to" in detail
+
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["text"] == "[STALE] a signal arrived late"
+    assert record["at"]
+
+
+def test_the_file_notifier_is_refused_on_a_hosted_deployment(tmp_path, monkeypatch):
+    """Writing alerts to a disk that gets wiped looks exactly like sending them."""
+    from rade.observer.notify import FileNotifier
+
+    monkeypatch.setenv("RENDER", "true")
+    with pytest.raises(RuntimeError, match="hosted deployment"):
+        FileNotifier(path=str(tmp_path / "alerts.jsonl"))
+
+
+def test_the_env_picks_the_file_transport_when_asked(tmp_path, monkeypatch):
+    from rade.observer.notify import FileNotifier, notifier_from_env
+
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("MIRROR_REQUIRE_DURABLE_STORE", raising=False)
+    monkeypatch.setenv("MIRROR_NOTIFY_FILE", str(tmp_path / "alerts.jsonl"))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    assert isinstance(notifier_from_env(), FileNotifier)
+
+
+def test_every_notified_disposition_renders_a_message():
+    """A status added to the notify map must also render.
+
+    The live run caught this the hard way: ``stale`` was added to
+    NOTIFY_STATUSES but not to the header table, so the first stale signal
+    killed the listener thread with KeyError instead of notifying. Iterating the
+    map means a future status cannot repeat it.
+    """
+    from rade.observer.mirror_pipeline import PipelineResult
+    from rade.observer.notify import NOTIFY_STATUSES, build_notification
+
+    for status in NOTIFY_STATUSES:
+        result = PipelineResult(
+            event_key="k", status=status, reason="because",
+            signal={"side": "sell", "instrument": "XAUUSD",
+                    "entry_type": "market", "published_entry": 1.0,
+                    "stop_loss": 2.0, "take_profits": [0.5]},
+            order_intent=None, notification_preview="")
+        text = build_notification(result)
+        assert text is not None, status
+        assert status in text
+        assert "no broker order was sent" in text
