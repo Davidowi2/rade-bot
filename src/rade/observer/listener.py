@@ -225,6 +225,19 @@ class Runtime:
     start_at: str | None = None
     allow_history_import: bool = False
     notify_retry_every: float = 300.0
+    #: How often to poll for new messages, independently of the reconnect.
+    #:
+    #: Live push cannot be relied on. In this deployment the client received
+    #: nothing while connected, and saw the backlog only when it asked:
+    #: ``catch_up=True`` replayed ids 15-17 on connect but never delivered id 18,
+    #: posted seconds later. Two connections sharing one auth key (the listener
+    #: and the poster) is one plausible cause, and it cannot be ruled out here,
+    #: but the conclusion is the same either way: if the copier's only delivery
+    #: path is catch-up, then the catch-up interval *is* the latency, and it has
+    #: to fit inside the signal-age limit.
+    #:
+    #: ``0`` disables the poll and leaves push as the only path.
+    catchup_every: float = 15.0
 
     def __post_init__(self) -> None:
         self.entity = None
@@ -458,6 +471,8 @@ class Runtime:
             "reconnects": self.reconnects,
             "reconnect_failed": self.reconnect_failed,
             "last_reconnect_error": self.last_reconnect_error,
+            "catchup_every_s": self.catchup_every,
+            "reconnect_every_s": self.reconnect_every,
             "errors": self.errors[-3:],
         }, indent=2), encoding="utf-8")
 
@@ -489,8 +504,10 @@ class Runtime:
         deadline = None if seconds is None else time.monotonic() + seconds
         next_reconnect = time.monotonic() + self.reconnect_every
         next_notify_retry = time.monotonic() + self.notify_retry_every
+        next_catchup = time.monotonic() + self.catchup_every
         self.heartbeat(self.phase())
-        self.log(f"listening; reconnect every {self.reconnect_every:.0f}s; "
+        self.log(f"listening; poll every {self.catchup_every:.0f}s, "
+                 f"reconnect every {self.reconnect_every:.0f}s; "
                  "no broker write path exists in this process")
 
         while not self._stop:
@@ -509,6 +526,19 @@ class Runtime:
                     # again shortly, and report the intake as degraded until
                     # a reconnect succeeds.
                     next_reconnect = time.monotonic() + RECONNECT_RETRY_DELAY_S
+            if self.catchup_every > 0 and time.monotonic() >= next_catchup:
+                next_catchup = time.monotonic() + self.catchup_every
+                # The poll is the delivery path when push does not arrive. It is
+                # a plain gap fill, so it is idempotent: the ledger refuses
+                # anything already stored, and a message the push path already
+                # handled is a no-op here.
+                try:
+                    filled = await self.gap_fill()
+                    if filled:
+                        self.log(f"poll fetched {len(filled)} message(s): {filled}")
+                except Exception as exc:
+                    self.errors.append(f"poll: {type(exc).__name__}: {exc}")
+                    self.log(f"poll failed: {type(exc).__name__}: {exc}")
             if self.notify_retry_every > 0 and time.monotonic() >= next_notify_retry:
                 next_notify_retry = time.monotonic() + self.notify_retry_every
                 try:
@@ -560,7 +590,8 @@ def start_listener_thread(*, client_factory: Callable[[], Any], listener: Mirror
                           log: Callable[[str], None] = print,
                           start_at: str | None = None,
                           allow_history_import: bool = False,
-                          notify_retry_every: float = 300.0) -> "threading.Thread":
+                          notify_retry_every: float = 300.0,
+                          catchup_every: float = 15.0) -> "threading.Thread":
     """Run the listener in a daemon thread beside the HTTP service.
 
     Render's free tier offers web services only - there is no free background
@@ -579,7 +610,7 @@ def start_listener_thread(*, client_factory: Callable[[], Any], listener: Mirror
                 client=client_factory(), listener=listener, channel=channel,
                 reconnect_every=reconnect_every, heartbeat_path=heartbeat_path, log=log,
                 start_at=start_at, allow_history_import=allow_history_import,
-                notify_retry_every=notify_retry_every,
+                notify_retry_every=notify_retry_every, catchup_every=catchup_every,
             )
             install_signal_handlers(runtime, loop)
             loop.run_until_complete(runtime.run())

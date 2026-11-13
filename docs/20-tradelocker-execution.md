@@ -887,11 +887,21 @@ closed by TP1. `MIRROR_MAX_SIGNAL_AGE_S` is the missing check.
 
 `MIRROR_MAX_SIGNAL_AGE_S=120`, configurable, `0` disables the limit.
 
-* A live signal arrives in well under a second, so any limit above a few seconds
-  catches the case this exists for.
-* The listener reconnects every 900 s (`MIRROR_RECONNECT_S`), and a signal posted
-  just before a drop is fetched on reconnect. Two minutes admits a short gap and
-  refuses a long one.
+**This is a chosen cutoff, not a measured delivery time.** Nothing in this
+project has demonstrated that Telegram pushes an update to this session: the
+client received no update at all while connected, and saw the backlog only when
+it asked (§12.6). So the limit is not sized against how fast push is; it is sized
+against the polling interval that actually delivers, with room to spare.
+
+* The poll (`MIRROR_CATCHUP_EVERY_S`, 15 s) is the delivery path, so a signal
+  normally reaches the pipeline within fifteen seconds of being posted and often
+  sooner. Two minutes is eight times that, which absorbs a slow tick, a broker
+  quote fetch and a restart without admitting a genuinely old instruction.
+* The listener reconnects every 900 s (`MIRROR_RECONNECT_S`). A reconnect alone
+  is *not* a delivery path that fits: 900 s is longer than the limit, so a signal
+  that waited for a reconnect would always be refused. That is exactly why the
+  poll exists as a separate timer, and the service warns at startup when the
+  reconnect is the only path.
 * This channel's targets are hit within minutes of the call — `18788` was posted
   at 02:37:03 and "Tp 1 hit" carries the same timestamp. A signal recovered ten
   minutes later is not the trade that was published, even if the price has not
@@ -899,7 +909,9 @@ closed by TP1. `MIRROR_MAX_SIGNAL_AGE_S` is the missing check.
 
 The limit is a ceiling, not a target: a signal exactly 120 s old is admitted, and
 121 s is refused. Being conservative here costs a missed trade; being generous
-costs an entry into a trade whose context has expired.
+costs an entry into a trade whose context has expired. Measured delivery on the
+private channel — 4.0 s while connected, 60.6 s across a restart — sits well
+inside it either way.
 
 ### 12.3 What the age is measured against
 
@@ -945,3 +957,33 @@ It is recorded with its own status, `stale`, not folded into `blocked`:
 LIMIT calls are excluded from this check. They are never copied under the
 current policy, and labelling them stale would hide the reason they were not
 copied.
+
+### 12.6 Live push has not been observed, so the poll is the delivery path
+
+`scripts/probe_live_push.py` connects, registers the same handlers the listener
+registers plus a raw handler that sees every update, and posts a message through
+a second session. The result:
+
+| setting | message events | raw updates |
+|---|---|---|
+| `catch_up=False` (what the listener uses) | 0 | 0 |
+| `catch_up=True` | 3 — the backlog, ids 15-17, replayed on connect | 6 |
+
+Under `catch_up=True` the three events arrived in the same millisecond as a
+backlog, and the message posted *after* connecting (id 18) never arrived. That is
+a difference fetch, not a push.
+
+One plausible cause is that the poster shares the listener's auth key (there is
+only one Telegram identity available here, and no bot token), and two connections
+on one auth key compete for the update stream. It cannot be ruled out in this
+environment, so this document does not claim push is broken — only that **it has
+never been observed to work here**, and that the design must not depend on it.
+
+Hence `MIRROR_CATCHUP_EVERY_S` (default 15 s): a plain, idempotent gap fill on
+its own timer, independent of the reconnect. If push does arrive in production,
+it wins the race and the poll is a no-op. If it does not, the poll is the
+delivery path and its interval is the latency. Both numbers are printed at
+startup, together with `delivery_within_age_limit`, because a deployment whose
+poll is slower than the age limit does not copy late signals — it copies
+nothing, and the symptom is silence.
+

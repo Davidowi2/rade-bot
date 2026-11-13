@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-13T19:16:15.194844+00:00",
+  "channel": "@rade_mirror_test_20261113",
+  "session": "rade_session",
+  "seconds": 25.0,
+  "posted": {
+    "sent_at": "2026-11-13T19:15:49.315935+00:00",
+    "message_id": 16,
+    "date": "2026-11-13T19:15:50+00:00"
+  },
+  "message_events": [],
+  "raw_updates": 0,
+  "live_push_observed": false
+}

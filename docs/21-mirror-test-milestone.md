@@ -325,34 +325,104 @@ running. The ladder *mechanics* are evidenced live by §5; only the
 per-leg notification delivery rests on the test, and that is stated here rather
 than implied.
 
-## 10. What was not verified: live push
+## 10. The delivery path: three cases, measured
 
-**An edit sent while a listener is connected produced no event the listener
-saw.** This was checked on the test channel and, separately, on Saved Messages:
-`events seen: []` in both cases. Catch-up works, and every case in this record
-that needed an edit was delivered by catch-up.
+The first version of this record said live push had not been observed and left
+it there. That is not enough to deploy on: if push never arrives, the delivery
+interval is the poll interval, and a poll slower than the age limit means nothing
+is ever copied. So the three paths were separated and measured, on the private
+channel, with the reconnect left at its production value of 900 s — four times
+the age limit — so that anything copied had to have come from the 15 s poll.
 
-That is not a defect in the pipeline — it is a property of this environment's
-Telegram session — but it has a deployment consequence that must not be papered
-over: **if live push does not arrive in production either, the pipeline runs on
-catch-up alone**, and the latency of every copy is the reconnect interval. That
-is why the service prints `intake limits` at startup with
-`catchup_can_exceed_age_limit`, and warns when the reconnect interval is longer
-than the signal-age limit. A deployment in that configuration does not copy
-late signals; it copies nothing, and should say so.
+Config: `MIRROR_MAX_SIGNAL_AGE_S=120`, `MIRROR_CATCHUP_EVERY_S=15`,
+`MIRROR_RECONNECT_S=900`, `MIRROR_RISK_FRACTION=0.0003` (the test cap).
 
-Until live push is observed in the target environment, `MIRROR_RECONNECT_S` is
-the effective delivery interval and must stay well under
-`MIRROR_MAX_SIGNAL_AGE_S`.
+| case | what was done | `source` | posted → received | age | ledger | notification | orders |
+|---|---|---|---|---|---|---|---|
+| 1 | posted while the listener was connected | `catchup` | 19:25:31 → 19:25:35 | 4.0 s | `paper_intent`, then executed | `[PAPER INTENT]`, `[SIGNAL]`, `[ACCEPTED]`, `[FILLED]` | 411 → 412 |
+| 2 | posted with nothing listening, listener restarted 25 s later | `catchup` | 19:27:21 → 19:28:21 | 60.6 s | `paper_intent`, then executed | same set | 412 → 413 |
+| 3 | posted with nothing listening, listener restarted after the limit | `catchup` | 19:29:34 → 19:33:08 | 214.7 s | `stale` | `[STALE]` only | 413 → 413 |
+
+Evidence: `docs/evidence/delivery-timing-*.json`, plus
+`docs/evidence/live-push-*.json` for the push probe.
+
+Three things follow, and only one of them is the answer that was hoped for.
+
+**No case was delivered by push.** All three report `source=catchup`, including
+the one posted while the listener was connected and healthy. The `source` field
+exists precisely to make this visible instead of inferring it from timing, and it
+says the same thing the probe said.
+
+**The poll works inside the limit.** Case 1 was fetched 4.0 s after posting — the
+poll interval is 15 s, so the message waited less than one tick. Case 2 was
+fetched 60.6 s after posting, of which ~35 s was the service reconnecting to
+Telegram and ~25 s was the deliberate delay. Both were copied, both created
+exactly one order, and both notified per lifecycle event.
+
+**The guard still refuses the late one.** Case 3 was fetched 214.7 s after
+posting, recorded as `stale` with its own status, sent a `[STALE]` notification,
+and created no order — the broker's order count did not move (413 → 413) and no
+third position appeared. The stale guard was not loosened to make it trade.
+
+### 10.1 Why push is absent, and what it would change
+
+`scripts/probe_live_push.py` connects, registers the listener's handlers plus a
+raw handler that sees every update, and posts through a second session:
+
+| setting | message events | raw updates |
+|---|---|---|
+| `catch_up=False` (what the listener uses) | 0 | 0 |
+| `catch_up=True` | 3 — ids 15-17, replayed on connect in one millisecond | 6 |
+
+The three events under `catch_up=True` are a difference fetch, not a push: the
+message posted *after* connecting (id 18) never arrived. One plausible cause is
+that the poster shares the listener's auth key — there is only one Telegram
+identity available here and no bot token — and two connections on one auth key
+compete for the update stream. That cannot be ruled out from this machine, so
+this record does not claim push is broken. It claims only that push has never
+been observed here, and that the design does not depend on it.
+
+If push does work in production, it wins the race and the poll is a no-op. If it
+does not, the poll is the delivery path and its interval is the latency. Either
+way the number that matters is printed at startup:
+
+```
+intake limits: {'signal_max_age_seconds': 120.0, 'quote_max_age_seconds': 5.0,
+ 'reconnect_seconds': 900.0, 'catchup_every_seconds': 15.0,
+ 'delivery_interval_seconds': 15.0, 'delivery_within_age_limit': True,
+ 'catchup_can_exceed_age_limit': True}
+WARNING: MIRROR_RECONNECT_S (900s) is longer than MIRROR_MAX_SIGNAL_AGE_S (120s);
+a reconnect-only catch-up would always be refused as stale, which is why
+MIRROR_CATCHUP_EVERY_S exists
+```
+
+A deployment whose delivery interval is outside the age limit now says so at
+startup instead of looking healthy and copying nothing.
+
+### 10.2 The age limit is a cutoff, not a measurement
+
+The earlier draft justified 120 s partly by saying a live signal "arrives in well
+under a second". That was not established by anything here — no push was ever
+observed — and it has been removed from
+[20 §12.2](20-tradelocker-execution.md#122-the-limit-and-why-two-minutes). The
+limit is now described for what it is: a chosen ceiling, sized against the poll
+interval that actually delivers, with room for a slow tick, a quote fetch and a
+restart. The measured latencies in the table above (4.0 s and 60.6 s) are the
+evidence that the cutoff is comfortable rather than the evidence that delivery is
+instant.
 
 ## 11. State at the end
 
 * No listener on the trader channel: every service port refuses connections and
   no service process remains.
-* Demo account flat: 0 positions, 0 open orders.
-* The two Mode B ledgers (`data/test_b.sqlite`, `data/test_b2.sqlite`) and the
-  replay ledger are test artefacts and are not committed; the evidence exports
-  in `docs/evidence/` are.
+* Demo account flat, queried at the broker rather than inferred: 0 positions,
+  0 open orders, equity 100,996.73 after the timing run's two test positions
+  were closed by hand.
+* The test ledgers (`data/test_*.sqlite`) and the replay ledger are artefacts
+  and are not committed; the evidence exports in `docs/evidence/` are.
+* `MIRROR_CATCHUP_EVERY_S=15` is in `render.yaml`, inside the 120 s age limit.
+  `MIRROR_RECONNECT_S` stays at 900: it is a connection-health timer, not the
+  delivery path.
 * `MIRROR_EXECUTE` stays `0` on the trader channel until the remaining behaviour
   in the task list is added and this milestone's checks are re-run against it.
 
@@ -372,6 +442,15 @@ python scripts/post_test_signal.py --side buy
 # the fake signals themselves
 python scripts/test_channel.py --post "XAUUSD BUY NOW …"
 python scripts/test_channel.py --edit 12:"XAUUSD BUY NOW …"
+
+# does Telegram push at all? registers the listener's handlers plus a raw
+# handler, and posts through a second session so "no event" means no push
+python scripts/probe_live_push.py --seconds 25 --post
+
+# the delivery-timing run: poll every 15 s, reconnect left at 900 s so that
+# anything copied had to come from the poll
+. data/test_env_t.sh && export MIRROR_START_AT=latest && python -m rade.observer.service
+python scripts/post_test_signal.py --side buy --tp 3,6,9 --stop 9
 
 # the ledger, read-only
 python scripts/export_mirror_evidence.py --db data/test_b2.sqlite

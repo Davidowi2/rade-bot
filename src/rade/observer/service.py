@@ -259,15 +259,23 @@ class MirrorService:
 
         signal_age = number("MIRROR_MAX_SIGNAL_AGE_S", "120")
         reconnect = number("MIRROR_RECONNECT_S", "900")
+        catchup = number("MIRROR_CATCHUP_EVERY_S", "15")
+        # The delivery interval is whichever path actually delivers. Push is
+        # unproven in this deployment, so the poll is the honest number: if the
+        # only path is a poll every N seconds, N is the latency, and an interval
+        # longer than the age limit means such a signal can never be copied.
+        intervals = [x for x in (catchup, reconnect) if x > 0]
+        delivery = min(intervals) if intervals else 0.0
         return {
             "signal_max_age_seconds": signal_age,
             "quote_max_age_seconds": number("MIRROR_QUOTE_MAX_AGE_S", "2"),
             "reconnect_seconds": reconnect,
-            # If a signal can only reach the pipeline through a catch-up, then
-            # the reconnect interval is its delivery latency, and an interval
-            # longer than the age limit means such a signal can never be copied.
-            # Live push normally beats this, but the coupling is worth seeing:
-            # it is the difference between "copies signals" and "never copies".
+            "catchup_every_seconds": catchup,
+            "delivery_interval_seconds": delivery,
+            # Push has not been observed to arrive here, so this is the number
+            # that decides whether a signal can be copied at all.
+            "delivery_within_age_limit": bool(
+                signal_age <= 0 or (0 < delivery <= signal_age)),
             "catchup_can_exceed_age_limit": bool(
                 reconnect > 0 and signal_age > 0 and reconnect > signal_age),
         }
@@ -741,6 +749,7 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
             start_at=start_at,
             allow_history_import=_truthy(os.getenv("MIRROR_ALLOW_HISTORY_IMPORT")),
             notify_retry_every=float(os.getenv("MIRROR_NOTIFY_RETRY_S", "300")),
+            catchup_every=float(os.getenv("MIRROR_CATCHUP_EVERY_S", "15")),
         )
     except Exception as exc:
         handle.error = f"{type(exc).__name__}: {exc}"
@@ -894,14 +903,22 @@ def main(argv: list[str] | None = None) -> int:
     handler = make_handler(service, log=lambda line: print(line, flush=True))
     intake = service.intake_limits()
     print(f"intake limits: {intake}", flush=True)
+    if not intake["delivery_within_age_limit"]:
+        # Not fatal, because the guard still refuses rather than copying
+        # something old - but a deployment in this state does not copy late
+        # signals, it copies nothing, and the symptom is silence. Live push is
+        # not assumed: no push has been observed to arrive here.
+        print("WARNING: the delivery interval "
+              f"({intake['delivery_interval_seconds']:.0f}s) is not inside "
+              f"MIRROR_MAX_SIGNAL_AGE_S ({intake['signal_max_age_seconds']:.0f}s). "
+              "If live push does not arrive, every signal will be stale by the "
+              "time it is fetched, and nothing will be copied", flush=True)
     if intake["catchup_can_exceed_age_limit"]:
-        # Not fatal - live push normally delivers first - but if it does not,
-        # this configuration copies nothing at all, and the symptom is silence.
         print("WARNING: MIRROR_RECONNECT_S "
               f"({intake['reconnect_seconds']:.0f}s) is longer than "
-              f"MIRROR_MAX_SIGNAL_AGE_S ({intake['signal_max_age_seconds']:.0f}s), "
-              "so a signal that only reaches the pipeline through a catch-up "
-              "will always be refused as stale", flush=True)
+              f"MIRROR_MAX_SIGNAL_AGE_S ({intake['signal_max_age_seconds']:.0f}s); "
+              "a reconnect-only catch-up would always be refused as stale, which "
+              "is why MIRROR_CATCHUP_EVERY_S exists", flush=True)
     httpd = ThreadingHTTPServer(("0.0.0.0", port), handler)
     print(f"listening on :{port}; read-only; store={type(service.ledger).__name__}",
           flush=True)

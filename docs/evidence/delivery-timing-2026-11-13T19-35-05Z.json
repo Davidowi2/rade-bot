@@ -1,0 +1,68 @@
+{
+  "at": "2026-11-13T19:35:05.099669+00:00",
+  "channel": "@rade_mirror_test_20261113",
+  "environment": "demo",
+  "config": {
+    "signal_max_age_s": 120,
+    "catchup_every_s": 15,
+    "reconnect_s": 900,
+    "risk_fraction": 0.0003
+  },
+  "note": "All three deliveries report source=catchup: no live push arrived for any of them. Cases 1 and 2 were delivered by the 15 s poll inside the age limit; case 3 was delivered by the poll after the limit and was refused as stale.",
+  "cases": [
+    {
+      "case": 1,
+      "label": "posted while the listener was connected",
+      "message_id": 19,
+      "orders_before": 411,
+      "orders_after": 412,
+      "source": "catchup",
+      "status": "paper_intent",
+      "reason": "validated; simulation only",
+      "posted_at": "2026-11-13T19:25:31+00:00",
+      "received_at": "2026-11-13T19:25:35.007473+00:00",
+      "age_seconds": 4.0,
+      "notification_headers": [
+        "[PAPER INTENT] paper_intent",
+        "[SIGNAL] BUY XAUUSD market 0.03 lot; SL 3869.65, final TP 3887.65. Plan: close 0.01 at 3881.65, then stop to breakeven; close 0.01 at 3884.65, then stop to 3881.65; close (broker target) 0.01 at 3887.65",
+        "[ACCEPTED] TradeLocker (demo) accepted order 216172782144441836: BUY XAUUSD 0.03 lot, SL 3869.65, TP 3887.65. Awaiting the fill confirmation.",
+        "[FILLED] TradeLocker (demo) confirms position 216172782118686294: BUY XAUUSD 0.03 lot at 3878.85. Broker stop 3869.65, broker target 3887.65. Plan: close 0.01 at 3881.65, then stop to breakeven; close 0.01 at 3884.65, then stop to 3881.65; close (broker target) 0.01 at 3887.65"
+      ]
+    },
+    {
+      "case": 2,
+      "label": "posted while disconnected, recovered inside the limit",
+      "message_id": 20,
+      "orders_before": 412,
+      "orders_after": 413,
+      "source": "catchup",
+      "status": "paper_intent",
+      "reason": "validated; simulation only",
+      "posted_at": "2026-11-13T19:27:21+00:00",
+      "received_at": "2026-11-13T19:28:21.640449+00:00",
+      "age_seconds": 60.6,
+      "notification_headers": [
+        "[PAPER INTENT] paper_intent",
+        "[SIGNAL] BUY XAUUSD market 0.03 lot; SL 3870, final TP 3888. Plan: close 0.01 at 3882, then stop to breakeven; close 0.01 at 3885, then stop to 3882; close (broker target) 0.01 at 3888",
+        "[ACCEPTED] TradeLocker (demo) accepted order 216172782144442057: BUY XAUUSD 0.03 lot, SL 3870, TP 3888. Awaiting the fill confirmation.",
+        "[FILLED] TradeLocker (demo) confirms position 216172782118686316: BUY XAUUSD 0.03 lot at 3878.15. Broker stop 3870, broker target 3888. Plan: close 0.01 at 3882, then stop to breakeven; close 0.01 at 3885, then stop to 3882; close (broker target) 0.01 at 3888"
+      ]
+    },
+    {
+      "case": 3,
+      "label": "posted while disconnected, recovered after the limit",
+      "message_id": 21,
+      "orders_before": 413,
+      "orders_after": 413,
+      "source": "catchup",
+      "status": "stale",
+      "reason": "the signal is stale: it was posted 4m before it reached the pipeline, beyond the 2m limit (MIRROR_MAX_SIGNAL_AGE_S); a late signal is not the trade that was published",
+      "posted_at": "2026-11-13T19:29:34+00:00",
+      "received_at": "2026-11-13T19:33:08.702429+00:00",
+      "age_seconds": 214.7,
+      "notification_headers": [
+        "[STALE] stale"
+      ]
+    }
+  ]
+}

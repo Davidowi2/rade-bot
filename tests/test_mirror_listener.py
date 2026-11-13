@@ -98,6 +98,29 @@ class FakeClient:
             self.handlers.remove(fn)
 
 
+class LateMessageClient(FakeClient):
+    """Delivers a message only on the second fetch.
+
+    That is what a poll looks like: the first gap fill finds nothing, and a
+    later one picks up what arrived in between. No event is ever dispatched, so
+    anything this test sees was delivered by the poll.
+    """
+
+    def __init__(self, messages, late):
+        super().__init__(messages)
+        self.late = late
+
+    async def iter_messages(self, entity, **kwargs):
+        self.iter_calls += 1
+        floor = kwargs.get("min_id") or 0
+        pool = list(self.messages)
+        if self.iter_calls >= 2:
+            pool.append(self.late)
+        for message in pool:
+            if message.id > floor:
+                yield message
+
+
 class NoLatestClient(FakeClient):
     """A client that cannot say where the channel currently ends."""
 
@@ -193,6 +216,62 @@ def _runtime(tmp_path, messages, *, state=None, client=None, **kwargs):
     client = client or FakeClient(messages)
     return Runtime(client=client, listener=listener, channel="@source",
                    heartbeat_path=tmp_path / "beat.json", log=lambda *_: None, **kwargs)
+
+
+def test_the_poll_delivers_a_message_when_no_push_arrives(tmp_path):
+    """The delivery path when Telegram pushes nothing.
+
+    Live push could not be observed in this deployment, so the poll has to
+    stand on its own: a message that arrives while the listener is connected is
+    fetched by the next gap fill, with no event involved.
+    """
+    client = LateMessageClient([msg(1)], msg(7))
+    runtime = _runtime(tmp_path, [], client=client, start_at="latest",
+                       catchup_every=0.05, reconnect_every=0)
+    asyncio.run(runtime.run(seconds=1.2))
+
+    assert runtime.events == 1, "the poll did not deliver the message"
+    assert client.iter_calls >= 2, "the poll never ran"
+    assert runtime.listener.ledger.counts().get("paper_intent") == 1
+
+
+def test_the_poll_can_be_switched_off(tmp_path):
+    client = LateMessageClient([msg(1)], msg(7))
+    runtime = _runtime(tmp_path, [], client=client, start_at="latest",
+                       catchup_every=0, reconnect_every=0)
+    asyncio.run(runtime.run(seconds=1.2))
+
+    assert runtime.events == 0
+    assert client.iter_calls == 1, "a disabled poll still fetched"
+
+
+def test_a_poll_that_finds_nothing_is_not_an_error(tmp_path):
+    client = FakeClient([msg(1)])
+    runtime = _runtime(tmp_path, [], client=client, start_at="latest",
+                       catchup_every=0.05, reconnect_every=0)
+    asyncio.run(runtime.run(seconds=1.0))
+
+    assert client.iter_calls >= 2
+    assert runtime.errors == []
+
+
+def test_a_failing_poll_does_not_stop_the_listener(tmp_path):
+    class BrokenPollClient(FakeClient):
+        async def iter_messages(self, entity, **kwargs):
+            self.iter_calls += 1
+            if self.iter_calls >= 2:
+                raise RuntimeError("telegram is unhappy")
+            for message in self.messages:
+                if message.id > (kwargs.get("min_id") or 0):
+                    yield message
+
+    client = BrokenPollClient([msg(1)])
+    runtime = _runtime(tmp_path, [], client=client, start_at="latest",
+                       catchup_every=0.05, reconnect_every=0)
+    asyncio.run(runtime.run(seconds=1.0))
+
+    assert any("poll" in error for error in runtime.errors)
+    assert client.iter_calls >= 2
 
 
 def test_gap_fill_processes_every_message_after_the_cursor(tmp_path):

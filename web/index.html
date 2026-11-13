@@ -308,6 +308,13 @@ function renderIntake(status) {
       <div class="note">the price must be this fresh at sizing time</div>
     </div>
     <div class="card">
+      <div class="label">Delivery interval</div>
+      <div class="value">${esc(seconds(intake.delivery_interval_seconds))}</div>
+      <div class="note">${intake.delivery_within_age_limit === false
+        ? "outside the age limit: late signals are refused, so nothing is copied"
+        : "the poll that fetches a signal when no push arrives"}</div>
+    </div>
+    <div class="card">
       <div class="label">Stale signals</div>
       <div class="value">${esc((status.counts || {}).stale || 0)}</div>
       <div class="note">arrived too late to act on; no order was sent</div>

@@ -615,3 +615,54 @@ def test_pausing_without_an_executor_is_a_conflict(monkeypatch, tmp_path):
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+# --------------------------------------------------------------------------
+# the delivery interval must fit inside the signal-age limit
+# --------------------------------------------------------------------------
+#
+# The age guard refuses a late signal, which is correct and also means that a
+# delivery path slower than the limit copies nothing at all. Live push has not
+# been observed to arrive in this deployment, so the poll interval is the number
+# that decides whether a signal can be copied.
+
+
+def test_the_poll_interval_is_reported_and_fits_inside_the_age_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRROR_MAX_SIGNAL_AGE_S", "120")
+    monkeypatch.setenv("MIRROR_CATCHUP_EVERY_S", "15")
+    monkeypatch.setenv("MIRROR_RECONNECT_S", "900")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["catchup_every_seconds"] == 15
+    assert intake["delivery_interval_seconds"] == 15
+    assert intake["delivery_within_age_limit"] is True
+    # The reconnect is still longer than the limit; that is what the poll is for,
+    # and the status says so rather than hiding it.
+    assert intake["catchup_can_exceed_age_limit"] is True
+
+
+def test_a_delivery_interval_longer_than_the_limit_is_reported_as_such(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRROR_MAX_SIGNAL_AGE_S", "10")
+    monkeypatch.setenv("MIRROR_CATCHUP_EVERY_S", "30")
+    monkeypatch.setenv("MIRROR_RECONNECT_S", "60")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["delivery_interval_seconds"] == 30
+    assert intake["delivery_within_age_limit"] is False
+
+
+def test_a_disabled_poll_falls_back_to_the_reconnect_interval(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRROR_MAX_SIGNAL_AGE_S", "120")
+    monkeypatch.setenv("MIRROR_CATCHUP_EVERY_S", "0")
+    monkeypatch.setenv("MIRROR_RECONNECT_S", "900")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["catchup_every_seconds"] == 0
+    assert intake["delivery_interval_seconds"] == 900
+    assert intake["delivery_within_age_limit"] is False

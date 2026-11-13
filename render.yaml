@@ -81,11 +81,21 @@ services:
       # How old a NOW signal may be when it reaches the pipeline. A fresh quote
       # is not evidence that the signal is fresh: a message recovered by a poll,
       # a catch-up after a reconnect, or a restart arrives with a current price
-      # and an expired instruction. Two minutes admits a short reconnect gap and
-      # refuses anything longer. 0 disables the limit but not the timestamp
-      # sanity checks.
+      # and an expired instruction.
+      #
+      # This is a chosen cutoff, not a measured delivery time. Nothing here has
+      # demonstrated that Telegram pushes an update to this session; the client
+      # received nothing while connected and saw the backlog only when it asked.
+      # 120 s is therefore sized against the poll below, not against push.
       - key: MIRROR_MAX_SIGNAL_AGE_S
         value: "120"
+      # The delivery interval that actually applies. Polling is independent of
+      # the reconnect: it is a plain gap fill, idempotent because the ledger
+      # refuses anything already stored. It must stay inside
+      # MIRROR_MAX_SIGNAL_AGE_S, or a signal fetched by the poll is already
+      # stale and nothing is ever copied. The service reports both at startup.
+      - key: MIRROR_CATCHUP_EVERY_S
+        value: "15"
       - key: MIRROR_RECONNECT_S
         value: "900"
       # Where the very first activation starts. "latest" means: import
