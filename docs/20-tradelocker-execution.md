@@ -859,3 +859,89 @@ That is the first time the day's opening equity and the peak were written from
 the real account rather than from a fixture, and the first time a guard refusal
 was recorded against a trade row built by the real pipeline. It is still not
 evidence that a signal was copied: no signal was.
+
+## 12. Signal age
+
+### 12.1 A fresh quote is not a fresh instruction
+
+The intake already asked whether the *price* was current: `MIRROR_QUOTE_MAX_AGE_S`
+compares the quote's timestamp against the message's receipt time, and
+`MIRROR_MAX_SLIPPAGE` compares the quote against the published entry. Both
+questions are about the market.
+
+Neither answers the other question: **is the instruction still current?** The
+three ways a copier receives a signal late all leave the price untouched:
+
+| path | what happens | price at sizing time |
+|---|---|---|
+| poll / catch-up | the listener fetches a backlog after a reconnect | current |
+| restart | the cursor replays what arrived while the process was down | current |
+| slow handler | a message waits behind a long management pass | current |
+
+In all three the quote is seconds old, the spread is normal, and the price may
+have moved less than the slippage limit — so every existing check passes and the
+copier enters a trade the trader opened half an hour ago, possibly one already
+closed by TP1. `MIRROR_MAX_SIGNAL_AGE_S` is the missing check.
+
+### 12.2 The limit, and why two minutes
+
+`MIRROR_MAX_SIGNAL_AGE_S=120`, configurable, `0` disables the limit.
+
+* A live signal arrives in well under a second, so any limit above a few seconds
+  catches the case this exists for.
+* The listener reconnects every 900 s (`MIRROR_RECONNECT_S`), and a signal posted
+  just before a drop is fetched on reconnect. Two minutes admits a short gap and
+  refuses a long one.
+* This channel's targets are hit within minutes of the call — `18788` was posted
+  at 02:37:03 and "Tp 1 hit" carries the same timestamp. A signal recovered ten
+  minutes later is not the trade that was published, even if the price has not
+  moved far enough to trip the slippage guard.
+
+The limit is a ceiling, not a target: a signal exactly 120 s old is admitted, and
+121 s is refused. Being conservative here costs a missed trade; being generous
+costs an entry into a trade whose context has expired.
+
+### 12.3 What the age is measured against
+
+The reference is `received_at` — the moment the message entered the pipeline —
+not the wall clock at the moment of evaluation. Two reasons:
+
+* it is deterministic, so the same message always gets the same verdict and a
+  test does not depend on when it runs;
+* it is the right quantity. On a poll, catch-up or restart the listener rebuilds
+  the envelope at fetch time (`envelope_from_telegram` stamps `received_at=now`),
+  so the difference from `posted_at` *is* the delay that makes the signal
+  unusable.
+
+A caller that replays a stored envelope — where `received_at` is the original
+receipt — must pass `now=` to judge it against a later moment. `evaluate_message`
+and `process_once` both accept it. The dry-run CLI passes `now=posted_at` and
+says so in its output, because a replay is late by construction and applying the
+guard there would refuse every stored message and tell the operator nothing.
+
+### 12.4 Timestamps that cannot be trusted
+
+Two cases are refused regardless of the limit, including when the limit is `0`,
+because they are data problems rather than policy:
+
+* **No posted timestamp.** The age cannot be established, and "unknown age" is
+  not "probably fine".
+* **A timestamp far in the future** — more than 120 s ahead of receipt. That is
+  not a clock disagreement, it is an unusable timestamp. A small skew (seconds)
+  is tolerated, because Telegram's clock and ours will never agree exactly.
+
+### 12.5 What a stale signal does
+
+It is recorded with its own status, `stale`, not folded into `blocked`:
+
+* nothing is sized, so the broker is not asked for the balance at all;
+* nothing is submitted — the engine only acts on `paper_intent`, and its
+  status gate is checked again there;
+* it is counted on the dashboard (`Stale signals`), so "the listener was away"
+  is visible as its own number rather than as a mystery;
+* it notifies with the kind `stale` rather than `blocked`, because the operator
+  needs to know the intake was late, not that the market was wrong.
+
+LIMIT calls are excluded from this check. They are never copied under the
+current policy, and labelling them stale would hide the reason they were not
+copied.

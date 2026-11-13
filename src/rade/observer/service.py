@@ -216,6 +216,24 @@ class MirrorService:
             return True, "listener is connecting"
         return True, "listener is listening"
 
+    def intake_limits(self) -> dict:
+        """How old a signal and a quote may be before the pipeline refuses.
+
+        Reported separately from the execution guards because they apply in
+        paper mode too: refusing a stale signal is intake policy, not broker
+        policy.
+        """
+        def number(name: str, default: str) -> float:
+            try:
+                return float(os.getenv(name, default))
+            except (TypeError, ValueError):
+                return float(default)
+
+        return {
+            "signal_max_age_seconds": number("MIRROR_MAX_SIGNAL_AGE_S", "120"),
+            "quote_max_age_seconds": number("MIRROR_QUOTE_MAX_AGE_S", "2"),
+        }
+
     def config_summary(self) -> dict:
         """Presence only. Never a value, never a prefix of a value."""
         supabase = bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
@@ -320,6 +338,7 @@ class MirrorService:
                 "time": _now_iso(),
                 "counts": self.counts(),
                 "listener": listener,
+                "intake": self.intake_limits(),
                 "execution": self.execution_state(),
                 "config": self.config_summary(),
                 "store": type(self.ledger).__name__,
@@ -665,7 +684,9 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
             instrument=instrument,
             risk=RiskConfig(equity, 0.005,
                             float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2")),
-                            equity_provider=equity_provider),
+                            equity_provider=equity_provider,
+                            signal_max_age_seconds=float(
+                                os.getenv("MIRROR_MAX_SIGNAL_AGE_S", "120"))),
             notifier=notifier_from_env(),
             quote_provider=quote_provider,
             state=MirrorState(os.getenv("MIRROR_STATE", "data/mirror_state.json")),

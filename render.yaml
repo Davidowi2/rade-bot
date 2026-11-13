@@ -78,6 +78,14 @@ services:
         value: "none"
       - key: MIRROR_QUOTE_MAX_AGE_S
         value: "2"
+      # How old a NOW signal may be when it reaches the pipeline. A fresh quote
+      # is not evidence that the signal is fresh: a message recovered by a poll,
+      # a catch-up after a reconnect, or a restart arrives with a current price
+      # and an expired instruction. Two minutes admits a short reconnect gap and
+      # refuses anything longer. 0 disables the limit but not the timestamp
+      # sanity checks.
+      - key: MIRROR_MAX_SIGNAL_AGE_S
+        value: "120"
       - key: MIRROR_RECONNECT_S
         value: "900"
       # Where the very first activation starts. "latest" means: import

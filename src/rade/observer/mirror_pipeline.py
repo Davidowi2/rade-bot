@@ -44,6 +44,27 @@ STATUS_BLOCKED = "blocked"
 STATUS_SKIPPED_MIN_LOT = "skipped_minimum_lot"
 STATUS_DUPLICATE = "duplicate"
 STATUS_CONFLICT = "conflict"
+#: A NOW signal that was posted too long before it reached the pipeline.
+#: Distinct from "blocked" because the cause is the clock, not the market, and
+#: because "how many signals arrive too late" is a question worth being able to
+#: count. It is never executed: the engine only acts on ``paper_intent``.
+STATUS_STALE = "stale"
+
+#: How old a NOW signal may be when it reaches the pipeline, in seconds.
+#:
+#: The number is a trade-off with one side chosen deliberately. A live signal
+#: arrives in well under a second, so any limit above a few seconds catches the
+#: real case. It also has to survive a reconnect: the listener reconnects every
+#: 900 s, and a signal posted just before a drop is fetched on reconnect. Two
+#: minutes admits a short reconnect gap and refuses anything longer, on the
+#: grounds that this channel's targets are hit within minutes of the call - a
+#: signal recovered ten minutes later is not the same trade, even if the price
+#: has not moved enough to trip the slippage guard.
+DEFAULT_SIGNAL_MAX_AGE_S = 120.0
+
+#: How far a posted timestamp may sit ahead of receipt before it stops being a
+#: clock disagreement and becomes an unusable timestamp.
+SIGNAL_FUTURE_TOLERANCE_S = 120.0
 
 CLAIM_INSERTED = "inserted"
 CLAIM_DUPLICATE = "duplicate"
@@ -200,12 +221,20 @@ class RiskConfig:
     process sizes against the account as it is now rather than as it was at
     startup. The provider is expected to raise when the equity cannot be read;
     a stale number is never substituted for a fresh one.
+
+    ``quote_max_age_seconds`` and ``signal_max_age_seconds`` are different
+    questions and both are asked. The first says "is the price I am about to
+    trade still current"; the second says "is the instruction I am about to
+    follow still current". A fresh quote proves only the first.
     """
 
     equity: float
     risk_fraction: float
     quote_max_age_seconds: float
     equity_provider: Callable[[], float] | None = None
+    #: How old a NOW signal may be when it reaches the pipeline. ``0`` disables
+    #: the limit, but never the timestamp sanity checks.
+    signal_max_age_seconds: float = DEFAULT_SIGNAL_MAX_AGE_S
 
     def current_equity(self) -> float:
         if self.equity_provider is None:
@@ -266,6 +295,75 @@ def envelope_from_telegram(message: Any, *, channel: str, revision: int = 0,
 
 def as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def format_age(seconds: float) -> str:
+    """A duration a human can read at a glance."""
+    seconds = abs(float(seconds))
+    if seconds < 90:
+        return f"{seconds:.0f}s"
+    minutes = seconds / 60.0
+    if minutes < 90:
+        return f"{minutes:.0f}m"
+    hours = minutes / 60.0
+    if hours < 48:
+        return f"{hours:.1f}h"
+    return f"{hours / 24.0:.1f}d"
+
+
+def signal_age_seconds(message: MessageEnvelope, *,
+                       now: datetime | None = None) -> float | None:
+    """How long the signal sat between being posted and being acted on.
+
+    The reference is the moment the message entered the pipeline
+    (``received_at``), not the wall clock at the moment of evaluation. That
+    matters for one reason: it makes the answer deterministic, so the same
+    message always gets the same verdict and a test does not depend on when it
+    runs.
+
+    It is also the right question. On a poll, a catch-up after a reconnect, or
+    a restart, the listener rebuilds the envelope at fetch time, so
+    ``received_at`` is when the signal was *recovered* and the difference from
+    ``posted_at`` is exactly the delay that makes a signal unusable. A caller
+    that replays a stored envelope - where ``received_at`` is the original
+    receipt - must pass ``now`` to judge it against a later moment.
+
+    Returns ``None`` when the message carries no posted timestamp.
+    """
+    if message.posted_at is None:
+        return None
+    reference = as_utc(now) if now is not None else as_utc(message.received_at)
+    return (reference - as_utc(message.posted_at)).total_seconds()
+
+
+def stale_reason(message: MessageEnvelope, risk: RiskConfig, *,
+                 now: datetime | None = None) -> str | None:
+    """Why this signal is too old to act on, or ``None`` when it is current.
+
+    Separate from the quote check on purpose. The quote check answers "is the
+    price current"; this answers "is the instruction current". A fresh quote
+    says nothing about a signal that was recovered twenty minutes after it was
+    posted, and that is exactly the case a restart or a reconnect produces.
+    """
+    if message.posted_at is None:
+        return ("the signal carries no posted timestamp, so its age cannot be "
+                "established; a signal whose age is unknown is not traded")
+
+    age = signal_age_seconds(message, now=now)
+    if age is None:  # pragma: no cover - guarded by the check above
+        return "the signal's age could not be established"
+
+    if age < -SIGNAL_FUTURE_TOLERANCE_S:
+        return (f"the signal is stamped {format_age(-age)} in the future, which "
+                "is not a clock disagreement; its timestamp cannot be trusted")
+
+    limit = float(risk.signal_max_age_seconds)
+    if limit > 0 and age > limit:
+        return (f"the signal is stale: it was posted {format_age(age)} before it "
+                f"reached the pipeline, beyond the {format_age(limit)} limit "
+                "(MIRROR_MAX_SIGNAL_AGE_S); a late signal is not the trade that "
+                "was published")
+    return None
 
 
 def _opt_float(value: Any) -> float | None:
@@ -338,8 +436,14 @@ def evaluate_message(
     instrument: InstrumentSpec,
     risk: RiskConfig,
     quote: MarketQuote | None = None,
+    now: datetime | None = None,
 ) -> PipelineResult:
-    """Parse and validate one message, returning a paper intent or a no-trade."""
+    """Parse and validate one message, returning a paper intent or a no-trade.
+
+    ``now`` judges the signal's age against a later moment than its receipt;
+    leave it unset to use the receipt time, which is what a live listener
+    wants.
+    """
     key = event_key(message)
     text = message.text or ""
 
@@ -384,6 +488,16 @@ def evaluate_message(
     if any((is_buy and t <= entry) or (not is_buy and t >= entry) for t in targets):
         return _result(key, STATUS_MANUAL_REVIEW,
                        "one or more targets are on the wrong side of entry", signal=parsed)
+
+    # Age is checked before anything is sized or priced. A signal that is too
+    # old is not made acceptable by a fresh quote, a wide stop, or a quiet
+    # market: the instruction itself has expired. This runs for market signals
+    # only - a LIMIT call is never copied, and labelling it stale would hide
+    # the reason it was not copied.
+    if parsed["entry_type"] == "market":
+        stale = stale_reason(message, risk, now=now)
+        if stale is not None:
+            return _result(key, STATUS_STALE, stale, signal=parsed)
 
     # An edit is never applied automatically: it may be a stop move, a partial
     # close instruction, or a correction, and the exit policy is unresolved.
@@ -1117,9 +1231,11 @@ def process_once(
     instrument: InstrumentSpec,
     risk: RiskConfig,
     quote: MarketQuote | None = None,
+    now: datetime | None = None,
 ) -> PipelineResult:
     """Evaluate a message and record it exactly once."""
-    result = evaluate_message(message, instrument=instrument, risk=risk, quote=quote)
+    result = evaluate_message(message, instrument=instrument, risk=risk,
+                              quote=quote, now=now)
     outcome = ledger.claim(message, result)
 
     if outcome == CLAIM_INSERTED:

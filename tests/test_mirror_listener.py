@@ -30,8 +30,12 @@ RISK = RiskConfig(10_000, 0.005, 2.0)
 SELL = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910\nTp : 3905\nTp : 3900"
 
 
-def msg(mid=100, text=SELL, *, at=NOW, edited=None):
-    return SimpleNamespace(id=mid, date=at, message=text, edit_date=edited)
+def msg(mid=100, text=SELL, *, at=None, edited=None):
+    # Posted "just now" unless a test says otherwise: the pipeline refuses a
+    # signal older than MIRROR_MAX_SIGNAL_AGE_S, and a fixture dated yesterday
+    # would be testing that refusal rather than whatever the test is about.
+    return SimpleNamespace(id=mid, date=at or datetime.now(timezone.utc),
+                           message=text, edit_date=edited)
 
 
 def quote_now(bid=3915.0, ask=3915.0):

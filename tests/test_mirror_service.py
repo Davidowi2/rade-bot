@@ -34,9 +34,11 @@ VALID = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910\nTp : 3905\nTp : 3900"
 
 def seed(ledger):
     def env(mid, text, revision=0):
-        # received_at must be the real clock: the quote is stamped when it is
-        # fetched, and a quote "from the future" is correctly rejected.
-        return MessageEnvelope("@source", mid, revision, NOW, datetime.now(timezone.utc), text)
+        # Both stamps must be the real clock: the quote is stamped when it is
+        # fetched (a quote "from the future" is correctly rejected), and a
+        # signal older than the age limit is correctly refused as stale.
+        now = datetime.now(timezone.utc)
+        return MessageEnvelope("@source", mid, revision, now, now, text)
 
     process_once(env(1, VALID), ledger=ledger, instrument=INSTRUMENT, risk=RISK,
                  quote=MarketQuote(3915, 3915, datetime.now(timezone.utc)))

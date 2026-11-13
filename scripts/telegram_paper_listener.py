@@ -102,13 +102,22 @@ def run_dry(args, instrument: InstrumentSpec, risk: RiskConfig, ledger) -> int:
         quote = MarketQuote(float(entry), float(entry), now) if entry else None
 
     result = process_once(envelope, ledger=ledger, instrument=instrument,
-                          risk=risk, quote=quote)
+                          risk=risk, quote=quote,
+                          # Replayed as of when it was posted. The age guard
+                          # exists to refuse a signal that reached the pipeline
+                          # late; a dry run reaches it late by construction, so
+                          # applying the guard here would refuse every stored
+                          # message and tell the operator nothing. The live
+                          # listener never passes this.
+                          now=posted)
     print(json.dumps({
         "mode": "dry_run",
         "source": "stored Telegram history (not a live push)",
         "quote_source": "synthetic, at the published entry",
         "equity_source": "supplied" if args.equity is not None else "synthetic 10,000, sizing only",
         "contract_units_confirmed": bool(instrument.units_confirmed),
+        "evaluated_as_of": posted.isoformat(),
+        "signal_age_check": "not applied: replayed as of the time it was posted",
         **result.to_dict(),
     }, indent=2))
     return 0

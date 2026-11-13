@@ -23,6 +23,7 @@ from rade.observer.mirror_pipeline import (
     STATUS_MANUAL_REVIEW,
     STATUS_PAPER_INTENT,
     STATUS_SKIPPED_MIN_LOT,
+    STATUS_STALE,
     PipelineResult,
 )
 
@@ -45,6 +46,10 @@ NOTIFY_STATUSES = {
     STATUS_CONFLICT: "review",
     STATUS_BLOCKED: "blocked",
     STATUS_SKIPPED_MIN_LOT: "blocked",
+    # A stale signal is worth a message of its own: it means the listener was
+    # away when the trader posted, which is the operator's problem, not the
+    # market's.
+    STATUS_STALE: "stale",
 }
 
 
