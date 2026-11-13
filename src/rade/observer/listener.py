@@ -37,9 +37,18 @@ from rade.observer.mirror_pipeline import (
     parse_message_signal,
     process_once,
 )
-from rade.observer.notify import Notifier, notify_result
+from rade.observer.notify import (
+    DEFAULT_ATTEMPTS,
+    Notifier,
+    notify_result,
+    retry_failed_notifications,
+)
 
 HEARTBEAT_INTERVAL_S = 30.0
+
+#: The default first-activation start point: the newest message in the channel
+#: at the moment of the first connect. Nothing older is imported.
+START_FROM_LATEST = "latest"
 
 
 def _now() -> datetime:
@@ -53,11 +62,15 @@ class MirrorState:
         self.path = Path(path) if path else None
         self.last_message_id = 0
         self.runs = 0
+        # How the start point was decided ("latest:18786", "id:18048", ...).
+        # It is written down so an operator can see where the mirror began.
+        self.start_source = ""
         if self.path and self.path.exists():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
                 self.last_message_id = int(data.get("last_message_id") or 0)
                 self.runs = int(data.get("runs") or 0)
+                self.start_source = str(data.get("start_source") or "")
             except (ValueError, OSError):
                 # A corrupt cursor must not stop the listener; it only means
                 # the first catch-up window is larger.
@@ -81,6 +94,7 @@ class MirrorState:
         tmp.write_text(json.dumps({
             "last_message_id": self.last_message_id,
             "runs": self.runs,
+            "start_source": self.start_source,
             "updated_at": _now().isoformat(),
         }, indent=2), encoding="utf-8")
         os.replace(tmp, self.path)
@@ -96,6 +110,7 @@ class MirrorListener:
     quote_provider: Callable[[], MarketQuote] | None = None
     state: MirrorState = field(default_factory=lambda: MirrorState(None))
     log: Callable[[str], None] = print
+    notify_attempts: int = DEFAULT_ATTEMPTS
 
     # -- per message ------------------------------------------------------
     def process_message(self, message: Any, *, revision: int | None = None,
@@ -132,7 +147,7 @@ class MirrorListener:
         notification = {"notified": False, "kind": None, "reason": "notifier not configured"}
         if self.notifier is not None:
             notification = notify_result(result, self.notifier, ledger=self.ledger,
-                                         source=source)
+                                         source=source, attempts=self.notify_attempts)
 
         payload = {
             **result.to_dict(),
@@ -147,6 +162,20 @@ class MirrorListener:
             + (f" ({result.reason})" if result.status != "paper_intent" else "")
         )
         return payload
+
+    # -- notifications ----------------------------------------------------
+    def retry_notifications(self, *, limit: int = 20) -> dict:
+        """Re-send notifications whose last attempt failed.
+
+        A send that failed is recorded as failed, never as delivered, so this
+        pass has something to work with.
+        """
+        if self.notifier is None:
+            return {"considered": 0, "sent": 0, "failed": 0, "skipped": 0}
+        summary = retry_failed_notifications(self.ledger, self.notifier, limit=limit)
+        if summary.get("sent") or summary.get("failed"):
+            self.log(f"notification retry: {summary}")
+        return summary
 
     # -- event handlers ---------------------------------------------------
     async def on_new(self, event: Any) -> dict:
@@ -168,6 +197,11 @@ class Runtime:
     reconnect_every: float = 900.0
     heartbeat_path: Path | None = None
     log: Callable[[str], None] = print
+    #: First-activation start point: "latest" (default), a message id, or
+    #: "history" (which needs allow_history_import).
+    start_at: str | None = None
+    allow_history_import: bool = False
+    notify_retry_every: float = 300.0
 
     def __post_init__(self) -> None:
         self.entity = None
@@ -177,6 +211,7 @@ class Runtime:
         self.errors: list[str] = []
         self._stop = False
         self._last_beat = 0.0
+        self.baseline = 0
 
     def request_stop(self) -> None:
         self._stop = True
@@ -187,6 +222,71 @@ class Runtime:
         if hasattr(self.client, "is_user_authorized") and not await self.client.is_user_authorized():
             raise RuntimeError("Telegram session is not authorised; run the login flow first")
         self.entity = await self.client.get_entity(self.channel)
+
+    async def latest_message_id(self) -> int:
+        """The newest message id in the channel, or 0 when the channel is empty."""
+        getter = getattr(self.client, "get_messages", None)
+        if getter is None:
+            # Without this the first activation cannot know where the channel
+            # currently ends, and the only alternative left is importing the
+            # whole archive. That is exactly what must not happen by accident.
+            raise RuntimeError(
+                "the Telegram client cannot report the newest message id, so the "
+                "first-activation start point cannot be established"
+            )
+        messages = await getter(self.entity, limit=1)
+        if not messages:
+            return 0
+        return int(getattr(messages[0], "id", 0) or 0)
+
+    async def establish_baseline(self) -> int:
+        """Decide where this channel's import starts.
+
+        A fresh install has no cursor, and the channel's history is full of
+        old calls. Importing them would turn yesterday's signals into today's
+        paper intents and notifications, so the default start point is the
+        newest message at the moment of the first connect: nothing older is
+        imported.
+
+        An explicit start point can be configured (``MIRROR_START_AT=<id>``),
+        and importing the whole history at all takes a second, separate
+        switch.
+        """
+        floor = self.listener.state.last_message_id
+        if floor:
+            return floor
+
+        setting = (self.start_at or START_FROM_LATEST).strip().lower()
+        if setting in {"history", "all"}:
+            if not self.allow_history_import:
+                raise RuntimeError(
+                    "importing the channel history requires "
+                    "MIRROR_ALLOW_HISTORY_IMPORT=1"
+                )
+            self.listener.state.start_source = "history"
+            self.log("first activation: importing the whole channel history "
+                     "(explicitly enabled); old calls will become intents")
+            return 0
+
+        if setting not in {"latest", "now", ""}:
+            try:
+                floor = int(setting)
+            except ValueError:
+                raise RuntimeError(
+                    "MIRROR_START_AT must be 'latest', 'history' or a message id, "
+                    f"not {setting!r}"
+                )
+            self.listener.state.start_source = f"id:{floor}"
+            self.log(f"first activation: importing messages posted after id {floor}")
+            return floor
+
+        latest = await self.latest_message_id()
+        self.listener.state.start_source = f"latest:{latest}"
+        self.log(
+            f"first activation: starting from the newest message (id {latest}); "
+            "no earlier message will be imported"
+        )
+        return latest
 
     async def gap_fill(self) -> list[int]:
         """Fetch every message after the persisted cursor.
@@ -204,7 +304,25 @@ class Runtime:
             seen.append(int(message.id))
             if payload["status"] not in {"duplicate"}:
                 self.events += 1
+        self.save_cursor(self.listener.state.last_message_id)
         return seen
+
+    def save_cursor(self, message_id: int) -> None:
+        """Persist the start point in the store.
+
+        The hosted disk is wiped on every restart, so the cursor has to live
+        in the database as well as in the state file.
+        """
+        if message_id <= 0:
+            return
+        ledger = self.listener.ledger
+        if not hasattr(ledger, "save_cursor"):
+            return
+        try:
+            ledger.save_cursor(self.channel, int(message_id),
+                               source=self.listener.state.start_source)
+        except Exception as exc:
+            self.errors.append(f"cursor save: {type(exc).__name__}: {exc}")
 
     def restore_cursor(self) -> int:
         """Recover the cursor from the store when the local file is gone.
@@ -222,6 +340,11 @@ class Runtime:
             except Exception as exc:
                 self.errors.append(f"cursor restore: {type(exc).__name__}: {exc}")
                 stored = 0
+        if hasattr(ledger, "load_cursor"):
+            try:
+                stored = max(stored, int(ledger.load_cursor(self.channel)))
+            except Exception as exc:
+                self.errors.append(f"cursor restore: {type(exc).__name__}: {exc}")
         if stored > self.listener.state.last_message_id:
             self.listener.state.last_message_id = stored
             self.log(f"cursor restored from the store: {stored}")
@@ -254,6 +377,7 @@ class Runtime:
             "started_at": self.started_at.isoformat(),
             "elapsed_s": round((_now() - self.started_at).total_seconds(), 1),
             "last_message_id": self.listener.state.last_message_id,
+            "start_source": self.listener.state.start_source,
             "events": self.events,
             "reconnects": self.reconnects,
             "errors": self.errors[-3:],
@@ -272,11 +396,21 @@ class Runtime:
         self.client.add_event_handler(
             self.listener.on_edit, tl_events.MessageEdited(chats=self.entity))
 
+        # The start point is decided before the first fetch. On a fresh install
+        # this is what stops the channel's history from being imported as
+        # today's calls.
+        floor = await self.establish_baseline()
+        self.baseline = floor
+        if floor:
+            self.listener.state.advance(floor)
+            self.save_cursor(floor)
+
         self.log(f"connected; catch-up from id {self.listener.state.last_message_id}")
         await self.gap_fill()
 
         deadline = None if seconds is None else time.monotonic() + seconds
         next_reconnect = time.monotonic() + self.reconnect_every
+        next_notify_retry = time.monotonic() + self.notify_retry_every
         self.heartbeat("listening")
         self.log(f"listening; reconnect every {self.reconnect_every:.0f}s; "
                  "no broker write path exists in this process")
@@ -291,6 +425,12 @@ class Runtime:
                 except Exception as exc:
                     self.errors.append(f"reconnect: {type(exc).__name__}: {exc}")
                     self.log(f"reconnect failed: {type(exc).__name__}")
+            if self.notify_retry_every > 0 and time.monotonic() >= next_notify_retry:
+                next_notify_retry = time.monotonic() + self.notify_retry_every
+                try:
+                    self.listener.retry_notifications()
+                except Exception as exc:
+                    self.errors.append(f"notify retry: {type(exc).__name__}: {exc}")
             self.heartbeat("listening")
             await asyncio.sleep(0.5)
 
@@ -333,7 +473,10 @@ def install_signal_handlers(runtime: Runtime, loop: asyncio.AbstractEventLoop | 
 def start_listener_thread(*, client_factory: Callable[[], Any], listener: MirrorListener,
                           channel: str, reconnect_every: float = 900.0,
                           heartbeat_path: Path | None = None,
-                          log: Callable[[str], None] = print) -> "threading.Thread":
+                          log: Callable[[str], None] = print,
+                          start_at: str | None = None,
+                          allow_history_import: bool = False,
+                          notify_retry_every: float = 300.0) -> "threading.Thread":
     """Run the listener in a daemon thread beside the HTTP service.
 
     Render's free tier offers web services only - there is no free background
@@ -351,6 +494,8 @@ def start_listener_thread(*, client_factory: Callable[[], Any], listener: Mirror
             runtime = Runtime(
                 client=client_factory(), listener=listener, channel=channel,
                 reconnect_every=reconnect_every, heartbeat_path=heartbeat_path, log=log,
+                start_at=start_at, allow_history_import=allow_history_import,
+                notify_retry_every=notify_retry_every,
             )
             install_signal_handlers(runtime, loop)
             loop.run_until_complete(runtime.run())

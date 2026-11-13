@@ -13,7 +13,7 @@ from rade.observer.mirror_pipeline import (
 
 
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
-INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50)
+INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50, units_confirmed=True)
 RISK = RiskConfig(10_000, 0.005, 2.0)
 VALID = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910\nTp : 3905\nTp : 3900"
 
@@ -248,15 +248,35 @@ def test_risk_above_the_cap_blocks_instead_of_being_clamped():
 
 
 def test_incomplete_contract_spec_blocks():
-    bad = InstrumentSpec("XAUUSD", 0, 0.01, 0.01, 50)
+    bad = InstrumentSpec("XAUUSD", 0, 0.01, 0.01, 50, units_confirmed=True)
     result = evaluate_message(message(), instrument=bad, risk=RISK,
                               quote=MarketQuote(3915, 3915, NOW))
     assert result.status == "blocked"
     assert "contract" in result.reason
 
 
+def test_unconfirmed_contract_units_are_not_used_to_size():
+    """A plausible number nobody checked must not produce a size."""
+    unconfirmed = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50)
+    result = evaluate_message(message(), instrument=unconfirmed, risk=RISK,
+                              quote=MarketQuote(3915, 3915, NOW))
+    assert result.status == "blocked"
+    assert "not confirmed" in result.reason
+    assert result.order_intent is None
+
+
+def test_a_limit_call_also_needs_a_confirmed_contract_size():
+    """The unverified number was reachable from a limit call, so it is gated too."""
+    limit_text = VALID.replace("NOW", "LIMIT", 1)
+    unconfirmed = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50)
+    result = evaluate_message(message(limit_text), instrument=unconfirmed, risk=RISK)
+    assert result.status == "blocked"
+    assert "not confirmed" in result.reason
+    assert result.order_intent is None
+
+
 def test_instrument_mismatch_is_reviewed():
-    other = InstrumentSpec("XAGUSD", 100, 0.01, 0.01, 50)
+    other = InstrumentSpec("XAGUSD", 100, 0.01, 0.01, 50, units_confirmed=True)
     result = evaluate_message(message(), instrument=other, risk=RISK,
                               quote=MarketQuote(3915, 3915, NOW))
     assert result.status == "manual_review"

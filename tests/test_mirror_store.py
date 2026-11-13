@@ -30,7 +30,7 @@ from rade.observer.store import RequestsTransport, StorageError, SupabaseLedger,
 from datetime import datetime, timezone
 
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
-INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50)
+INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50, units_confirmed=True)
 RISK = RiskConfig(10_000, 0.005, 2.0)
 VALID = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910\nTp : 3905\nTp : 3900"
 
@@ -52,6 +52,7 @@ class FakePostgrest:
     def __init__(self):
         self.events: dict[str, dict] = {}
         self.notifications: dict[tuple[str, str], dict] = {}
+        self.cursors: dict[str, dict] = {}
         self.calls: list[tuple[str, str, dict]] = []
 
     def request(self, method, path, *, params=None, json_body=None, prefer=None):
@@ -66,9 +67,13 @@ class FakePostgrest:
 
         if path == "mirror_events" and method == "GET":
             if "event_key" in params:
-                key = params["event_key"].split("eq.", 1)[1]
-                row = self.events.get(key)
-                return 200, [{"text_sha256": row["text_sha256"]}] if row else []
+                raw = params["event_key"]
+                if raw.startswith("eq."):
+                    keys = [raw.split("eq.", 1)[1]]
+                else:
+                    inner = raw[raw.index("(") + 1:raw.rindex(")")]
+                    keys = [k for k in inner.split(",") if k]
+                return 200, [self.events[k] for k in keys if k in self.events]
             if params.get("select") == "revision":
                 channel = params["channel"].split("eq.", 1)[1]
                 mid = int(params["message_id"].split("eq.", 1)[1])
@@ -83,12 +88,49 @@ class FakePostgrest:
                 rows = [r for r in rows if r["status"] in allowed]
             return 200, rows[: int(params.get("limit", 50))]
 
+        if path == "notification_log" and method == "GET":
+            rows = list(self.notifications.values())
+            if "event_key" in params:
+                key = params["event_key"].split("eq.", 1)[1]
+                rows = [r for r in rows if r["event_key"] == key]
+            if "kind" in params:
+                kind = params["kind"].split("eq.", 1)[1]
+                rows = [r for r in rows if r["kind"] == kind]
+            if "status" in params:
+                want = params["status"].split("eq.", 1)[1]
+                rows = [r for r in rows if r.get("status") == want]
+            return 200, [{"event_key": r["event_key"], "kind": r["kind"],
+                          "status": r.get("status"), "attempts": r.get("attempts", 0),
+                          "detail": r.get("detail")} for r in rows]
+
         if path == "notification_log" and method == "POST":
             slot = (json_body["event_key"], json_body["kind"])
-            if slot in self.notifications:
+            existing = self.notifications.get(slot)
+            if existing is not None and "ignore-duplicates" in (prefer or ""):
                 return 201, []
-            self.notifications[slot] = dict(json_body)
+            row = dict(json_body)
+            if existing:
+                row["attempts"] = json_body.get("attempts", existing.get("attempts", 0))
+            self.notifications[slot] = row
             return 201, [{"id": len(self.notifications)}]
+
+        if path == "notification_log" and method == "PATCH":
+            key = params["event_key"].split("eq.", 1)[1]
+            kind = params["kind"].split("eq.", 1)[1]
+            slot = (key, kind)
+            if slot not in self.notifications:
+                return 200, []
+            self.notifications[slot].update(json_body)
+            return 200, [self.notifications[slot]]
+
+        if path == "mirror_cursor" and method == "GET":
+            channel = params["channel"].split("eq.", 1)[1]
+            row = self.cursors.get(channel)
+            return 200, [row] if row else []
+
+        if path == "mirror_cursor" and method == "POST":
+            self.cursors[json_body["channel"]] = dict(json_body)
+            return 201, [self.cursors[json_body["channel"]]]
 
         raise AssertionError(f"unexpected call {method} {path} {params}")
 
@@ -150,8 +192,31 @@ def test_notification_slot_is_unique_in_the_store():
 def test_make_ledger_falls_back_to_sqlite(monkeypatch, tmp_path):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("MIRROR_REQUIRE_DURABLE_STORE", raising=False)
     monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
     assert isinstance(make_ledger(), SQLiteIntentLedger)
+
+
+def test_hosted_mode_refuses_the_ephemeral_local_store(monkeypatch, tmp_path):
+    """A store that forgets on every restart is worse than no store."""
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
+    with pytest.raises(StorageError) as excinfo:
+        make_ledger()
+    assert "SUPABASE" in str(excinfo.value)
+
+
+def test_the_durable_store_switch_works_outside_render(monkeypatch, tmp_path):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.setenv("MIRROR_REQUIRE_DURABLE_STORE", "1")
+    monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
+    with pytest.raises(StorageError):
+        make_ledger()
 
 
 def test_make_ledger_prefers_supabase_when_configured(monkeypatch):
@@ -234,6 +299,112 @@ def test_notify_result_uses_the_ledger_slot(tmp_path):
     assert len(notifier.sent) == 1
 
 
+# --------------------------------------------------------------------------
+# a failed send must not be recorded as a delivered one
+# --------------------------------------------------------------------------
+
+class CountingNotifier:
+    """Fails until it has been told to work."""
+
+    def __init__(self, fail_times: int = 1, detail: str = "HTTP 500: upstream"):
+        self.fail_times = fail_times
+        self.detail = detail
+        self.calls = 0
+        self.sent: list[str] = []
+
+    def send(self, text: str):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            return False, self.detail
+        self.sent.append(text)
+        return True, "sent"
+
+
+def _stored_intent(tmp_path):
+    from rade.observer.mirror_pipeline import process_once
+
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    result = process_once(envelope(), ledger=ledger, instrument=INSTRUMENT,
+                          risk=RISK, quote=MarketQuote(3915, 3915, NOW))
+    return ledger, result
+
+
+def test_a_failed_send_is_recorded_as_failed_not_sent(tmp_path):
+    ledger, result = _stored_intent(tmp_path)
+    notifier = CountingNotifier(fail_times=99)
+    out = notify_result(result, notifier, ledger=ledger, attempts=2,
+                        sleep=lambda *_: None)
+    assert out["notified"] is False
+    assert out["status"] == "failed"
+    assert ledger.notification_status(result.event_key, "accepted") == "failed"
+
+
+def test_a_transient_failure_is_retried_and_can_succeed(tmp_path):
+    ledger, result = _stored_intent(tmp_path)
+    notifier = CountingNotifier(fail_times=1)
+    out = notify_result(result, notifier, ledger=ledger, attempts=3,
+                        sleep=lambda *_: None)
+    assert out["notified"] is True
+    assert out["status"] == "sent"
+    assert notifier.calls == 2
+    assert ledger.notification_status(result.event_key, "accepted") == "sent"
+
+
+def test_a_permanent_bot_api_error_is_not_retried(tmp_path):
+    ledger, result = _stored_intent(tmp_path)
+    notifier = CountingNotifier(fail_times=99, detail="HTTP 400: bad request")
+    notify_result(result, notifier, ledger=ledger, attempts=3,
+                  sleep=lambda *_: None)
+    assert notifier.calls == 1
+
+
+def test_a_failed_notification_is_picked_up_by_a_later_retry_pass(tmp_path):
+    from rade.observer.notify import retry_failed_notifications
+
+    ledger, result = _stored_intent(tmp_path)
+    broken = CountingNotifier(fail_times=99)
+    notify_result(result, broken, ledger=ledger, attempts=1, sleep=lambda *_: None)
+    assert ledger.notification_status(result.event_key, "accepted") == "failed"
+
+    working = RecordingNotifier()
+    summary = retry_failed_notifications(ledger, working, attempts=2)
+    assert summary == {"considered": 1, "sent": 1, "failed": 0, "skipped": 0}
+    assert len(working.sent) == 1
+    assert "PAPER INTENT" in working.sent[0]
+    assert ledger.notification_status(result.event_key, "accepted") == "sent"
+
+
+def test_a_delivered_notification_is_never_sent_again(tmp_path):
+    ledger, result = _stored_intent(tmp_path)
+    notifier = RecordingNotifier()
+    assert notify_result(result, notifier, ledger=ledger)["notified"] is True
+    assert notify_result(result, notifier, ledger=ledger)["notified"] is False
+    assert len(notifier.sent) == 1
+
+
+def test_the_supabase_adapter_records_the_real_outcome():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    ledger.claim(envelope(), accepted())
+    key = accepted().event_key
+    assert ledger.notification_status(key, "accepted") is None
+    ledger.begin_notification(key, "accepted")
+    assert ledger.notification_status(key, "accepted") == "pending"
+    ledger.complete_notification(key, "accepted", False, "HTTP 500: upstream")
+    assert ledger.notification_status(key, "accepted") == "failed"
+    failed = ledger.failed_notifications()
+    assert len(failed) == 1
+    assert failed[0]["event_status"] == "paper_intent"
+
+
+def test_the_supabase_cursor_is_stored_and_read_back():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    assert ledger.load_cursor("@source") == 0
+    ledger.save_cursor("@source", 4242, source="latest:4242")
+    assert ledger.load_cursor("@source") == 4242
+
+
 def test_botfather_notifier_scrubs_the_token_from_errors():
     def boom(*a, **k):
         raise RuntimeError("POST https://api.telegram.org/botSECRET-TOKEN/sendMessage failed")
@@ -273,6 +444,12 @@ def test_sqlite_last_message_id(tmp_path):
     process_once(envelope(mid=4321), ledger=ledger, instrument=INSTRUMENT, risk=RISK,
                  quote=MarketQuote(3915, 3915, datetime.now(timezone.utc)))
     assert ledger.last_message_id() == 4321
+
+
+def test_the_sqlite_cursor_survives_a_new_ledger_object(tmp_path):
+    path = tmp_path / "l.sqlite"
+    SQLiteIntentLedger(path).save_cursor("@source", 99, source="latest:99")
+    assert SQLiteIntentLedger(path).load_cursor("@source") == 99
 
 
 def test_supabase_last_message_id():

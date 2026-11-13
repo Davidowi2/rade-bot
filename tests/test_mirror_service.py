@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 
@@ -17,11 +18,16 @@ from rade.observer.mirror_pipeline import (
     SQLiteIntentLedger,
     process_once,
 )
-from rade.observer.service import MirrorService, make_handler
+from rade.observer.service import (
+    MirrorService,
+    main as service_main,
+    make_handler,
+    start_listener_if_configured,
+)
 
 TOKEN = "test-token-value"
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
-INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50)
+INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50, units_confirmed=True)
 RISK = RiskConfig(10_000, 0.005, 2.0)
 VALID = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910\nTp : 3905\nTp : 3900"
 
@@ -69,12 +75,66 @@ def call(port, path, *, token=None, method="GET"):
     return resp.status, (json.loads(body) if body else None)
 
 
-def test_healthz_is_public_and_minimal(live):
+def test_healthz_is_public_and_reports_the_listener_state(live):
     status, body = call(live, "/healthz")
     assert status == 200
     assert body["status"] == "ok"
-    # nothing about the channel, the account, or the store
-    assert set(body) == {"status", "uptime_s", "time"}
+    # the intake's state, but nothing about the channel, the account or the store
+    assert set(body) == {"status", "uptime_s", "time", "listener"}
+    assert set(body["listener"]) == {"expected", "healthy", "phase",
+                                     "heartbeat_age_s", "reason"}
+    assert "@source" not in json.dumps(body)
+
+
+def test_healthz_is_503_when_the_expected_listener_is_dead(tmp_path):
+    """A dead intake must not look like a healthy service."""
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    service = MirrorService(ledger, token=TOKEN,
+                             heartbeat_path=tmp_path / "none.json",
+                             listener_expected=True)
+    service.started_at = time.time() - 1000   # past the startup grace
+    status, body = service.route("/healthz", {})
+    assert status == 503
+    assert body["status"] == "degraded"
+    assert body["listener"]["healthy"] is False
+    assert body["listener"]["reason"]
+
+
+def test_healthz_is_503_when_the_listener_thread_died(tmp_path):
+    class DeadThread:
+        def is_alive(self):
+            return False
+
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    beat = tmp_path / "hb.json"
+    beat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=beat,
+                             listener_expected=True, listener_thread=DeadThread())
+    status, body = service.route("/healthz", {})
+    assert status == 503
+    assert body["listener"]["healthy"] is False
+    assert "thread" in body["listener"]["reason"]
+
+
+def test_healthz_is_ok_when_the_listener_is_not_enabled(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    service = MirrorService(ledger, token=TOKEN,
+                             heartbeat_path=tmp_path / "none.json")
+    status, body = service.route("/healthz", {})
+    assert status == 200
+    assert body["listener"]["expected"] is False
+    assert body["listener"]["healthy"] is True
+
+
+def test_healthz_is_ok_during_the_startup_grace(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    service = MirrorService(ledger, token=TOKEN,
+                             heartbeat_path=tmp_path / "none.json",
+                             listener_expected=True)
+    status, body = service.route("/healthz", {})
+    assert status == 200
+    assert body["listener"]["healthy"] is True
+    assert "starting" in body["listener"]["reason"]
 
 
 def test_api_requires_a_token(live):
@@ -166,4 +226,45 @@ def test_a_missing_heartbeat_is_not_reported_as_listening(tmp_path):
     service = MirrorService(ledger, token=TOKEN, heartbeat_path=tmp_path / "none.json")
     state = service.listener_state()
     assert state["known"] is False
-    assert "phase" not in state
+    assert state["phase"] is None
+    assert state["stale"] is True
+
+
+# --------------------------------------------------------------------------
+# the service must refuse to come up in a state it cannot vouch for
+# --------------------------------------------------------------------------
+
+def test_the_service_refuses_to_start_without_a_durable_store(monkeypatch, tmp_path):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("MIRROR_API_TOKEN", "t")
+    monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
+    assert service_main([]) == 3
+
+
+def test_the_service_refuses_to_start_when_the_listener_cannot_start(monkeypatch,
+                                                                     tmp_path):
+    monkeypatch.setenv("MIRROR_API_TOKEN", "t")
+    monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
+    monkeypatch.delenv("MIRROR_EQUITY", raising=False)
+    monkeypatch.delenv("MIRROR_CONTRACT_UNITS_PER_LOT", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.setenv("MIRROR_SQLITE_PATH", str(tmp_path / "l.sqlite"))
+    assert service_main([]) == 3
+
+
+def test_the_listener_handle_reports_a_missing_equity(monkeypatch, tmp_path):
+    monkeypatch.setenv("MIRROR_RUN_LISTENER", "1")
+    monkeypatch.delenv("MIRROR_EQUITY", raising=False)
+    handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+    assert handle.expected is True
+    assert handle.error is not None
+    assert "MIRROR_EQUITY" in handle.error
+
+
+def test_no_listener_is_expected_when_it_is_switched_off(monkeypatch, tmp_path):
+    monkeypatch.delenv("MIRROR_RUN_LISTENER", raising=False)
+    handle = start_listener_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+    assert handle.expected is False
+    assert handle.error is None

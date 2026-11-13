@@ -167,13 +167,21 @@ class MessageEnvelope:
 
 @dataclass(frozen=True)
 class InstrumentSpec:
-    """Contract terms that must come from the broker, never from a guess."""
+    """Contract terms that must come from the broker, never from a guess.
+
+    ``units_confirmed`` is the guard against a *plausible but unverified* number.
+    A contract size read once from a broker response is not evidence: until a
+    human has checked it against the broker's own specification, any size
+    computed from it is fiction. The default is therefore ``False`` - an
+    unconfirmed spec produces no size at all.
+    """
 
     symbol: str
     contract_units_per_lot: float
     lot_step: float
     min_lot: float
     max_lot: float
+    units_confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -331,6 +339,16 @@ def evaluate_message(
             f"risk configuration is invalid (per-trade risk must be in (0, {MAX_RISK_FRACTION:.1%}])",
             signal=parsed,
         )
+    if not instrument.units_confirmed:
+        # The contract size was never checked against the broker's own
+        # specification. Any lot count derived from it would look right and be
+        # wrong, so nothing is sized.
+        return _result(
+            key, STATUS_BLOCKED,
+            "contract units per lot are not confirmed against the broker "
+            "specification; no size is computed",
+            signal=parsed,
+        )
     if (instrument.contract_units_per_lot <= 0 or instrument.lot_step <= 0
             or instrument.min_lot <= 0 or instrument.max_lot < instrument.min_lot):
         return _result(key, STATUS_BLOCKED,
@@ -477,10 +495,18 @@ CREATE INDEX IF NOT EXISTS ix_mirror_events_received ON mirror_events(received_a
 CREATE TABLE IF NOT EXISTS notification_log (
     event_key TEXT NOT NULL,
     kind      TEXT NOT NULL,
-    ok        INTEGER NOT NULL,
+    status    TEXT NOT NULL DEFAULT 'pending',
+    ok        INTEGER NOT NULL DEFAULT 0,
+    attempts  INTEGER NOT NULL DEFAULT 0,
     detail    TEXT,
     sent_at   TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (event_key, kind)
+);
+CREATE TABLE IF NOT EXISTS mirror_cursor (
+    channel         TEXT PRIMARY KEY,
+    last_message_id INTEGER NOT NULL,
+    start_source    TEXT NOT NULL DEFAULT '',
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -531,6 +557,18 @@ class SQLiteIntentLedger:
             if column not in have:
                 con.execute(f"ALTER TABLE mirror_events ADD COLUMN {column} {decl}")
 
+        # The notification table used to hold a single "ok" flag with the slot
+        # claimed *before* the send. That made a failed send indistinguishable
+        # from a delivered one and left nothing to retry. The status column
+        # carries the real outcome.
+        have_notif = {row[1] for row in con.execute("PRAGMA table_info(notification_log)")}
+        for column, decl in (
+            ("status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in have_notif:
+                con.execute(f"ALTER TABLE notification_log ADD COLUMN {column} {decl}")
+
     def claim(self, message: MessageEnvelope, result: PipelineResult) -> str:
         digest = text_hash(message.text)
         with self._connect() as con:
@@ -575,16 +613,118 @@ class SQLiteIntentLedger:
             return {status: n for status, n in con.execute(
                 "SELECT status, COUNT(*) FROM mirror_events GROUP BY status")}
 
-    def record_notification(self, event_key: str, kind: str, ok: bool,
-                            detail: str | None = None) -> bool:
-        """Claim the one notification slot for this event. False if taken."""
+    # -- notifications ----------------------------------------------------
+    #
+    # The notification slot has a real state machine, because a boolean "ok"
+    # that is written before the send cannot distinguish "delivered" from
+    # "failed" and leaves nothing to retry:
+    #
+    #   begin_notification   -> status 'pending', attempts += 1
+    #   complete_notification-> status 'sent' or 'failed', with the detail
+    #
+    # A 'pending' row means the process died between the two calls. It is
+    # retried: at-least-once delivery beats silently losing a notification,
+    # and a duplicate phone message is the cheaper failure.
+
+    def notification_status(self, event_key: str, kind: str) -> str | None:
+        """'sent', 'failed', 'pending', or None when the slot is unused."""
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT status FROM notification_log WHERE event_key=? AND kind=?",
+                (event_key, kind),
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def begin_notification(self, event_key: str, kind: str) -> int:
+        """Claim the slot for an attempt and count it. Returns the attempt number."""
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT attempts FROM notification_log WHERE event_key=? AND kind=?",
+                (event_key, kind),
+            ).fetchone()
+            attempts = (int(row[0]) if row and row[0] is not None else 0) + 1
+            con.execute(
+                "INSERT INTO notification_log "
+                "(event_key, kind, status, ok, attempts, detail, sent_at) "
+                "VALUES (?, ?, 'pending', 0, ?, NULL, datetime('now')) "
+                "ON CONFLICT(event_key, kind) DO UPDATE SET "
+                "status='pending', ok=0, attempts=excluded.attempts, "
+                "sent_at=datetime('now')",
+                (event_key, kind, attempts),
+            )
+        return attempts
+
+    def complete_notification(self, event_key: str, kind: str, ok: bool,
+                              detail: str | None = None) -> bool:
+        """Record the real outcome of the attempt."""
         with self._connect() as con:
             cur = con.execute(
-                "INSERT OR IGNORE INTO notification_log (event_key, kind, ok, detail) "
-                "VALUES (?, ?, ?, ?)",
-                (event_key, kind, 1 if ok else 0, detail),
+                "UPDATE notification_log SET status=?, ok=?, detail=?, "
+                "sent_at=datetime('now') WHERE event_key=? AND kind=?",
+                ("sent" if ok else "failed", 1 if ok else 0, detail, event_key, kind),
             )
-            return cur.rowcount == 1
+            return cur.rowcount > 0
+
+    def record_notification(self, event_key: str, kind: str, ok: bool,
+                            detail: str | None = None) -> bool:
+        """Claim the slot and record the outcome in one step.
+
+        False means the slot was already delivered, so nothing was sent.
+        """
+        if self.notification_status(event_key, kind) == "sent":
+            return False
+        self.begin_notification(event_key, kind)
+        self.complete_notification(event_key, kind, ok, detail)
+        return True
+
+    def failed_notifications(self, *, limit: int = 20) -> list[dict]:
+        """Notifications whose last attempt failed, oldest first."""
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT n.event_key, n.kind, n.detail, n.attempts, "
+                "e.status AS event_status, e.reason AS event_reason, "
+                "e.signal_json, e.intent_json, e.channel, e.message_id "
+                "FROM notification_log n "
+                "LEFT JOIN mirror_events e ON e.event_key = n.event_key "
+                "WHERE n.status='failed' ORDER BY n.sent_at ASC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        keys = ("event_key", "kind", "detail", "attempts", "event_status",
+                "event_reason", "signal_json", "intent_json", "channel", "message_id")
+        out = []
+        for row in rows:
+            item = dict(zip(keys, row))
+            for field_name in ("signal_json", "intent_json"):
+                if isinstance(item[field_name], str) and item[field_name]:
+                    try:
+                        item[field_name] = json.loads(item[field_name])
+                    except ValueError:
+                        item[field_name] = None
+            out.append(item)
+        return out
+
+    # -- cursor -----------------------------------------------------------
+
+    def load_cursor(self, channel: str) -> int:
+        """The persisted 'start from here' floor for this channel."""
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT last_message_id FROM mirror_cursor WHERE channel=?", (channel,)
+            ).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def save_cursor(self, channel: str, message_id: int, *, source: str = "") -> bool:
+        """Persist the floor, so an ephemeral disk does not lose it."""
+        with self._connect() as con:
+            con.execute(
+                "INSERT INTO mirror_cursor (channel, last_message_id, start_source, updated_at) "
+                "VALUES (?, ?, ?, datetime('now')) "
+                "ON CONFLICT(channel) DO UPDATE SET "
+                "last_message_id=excluded.last_message_id, "
+                "start_source=excluded.start_source, updated_at=datetime('now')",
+                (channel, int(message_id), source or ""),
+            )
+        return True
 
     def recent(self, *, limit: int = 50, statuses: list[str] | None = None) -> list[dict]:
         """Newest events first, shaped like the Supabase adapter's rows."""

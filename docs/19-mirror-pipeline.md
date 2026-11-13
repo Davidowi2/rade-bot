@@ -6,6 +6,10 @@ This is the record for the mirror pipeline. The retrospective replay study stays
 closed (`docs/16-replay-results-1m.md`); nothing here reopens it, and no exit
 policy is selected.
 
+A deployment review on 2026-11-13 found five ways this could have been deployed
+while looking healthy and behaving badly. All five are fixed; §9 records what
+each one was and what changed.
+
 ---
 
 ## 1. What is built
@@ -19,9 +23,10 @@ policy is selected.
 | `src/rade/observer/service.py` | read-only HTTP API (stdlib, no new deps) with bearer auth |
 | `src/rade/observer/quotes.py` | demo-only read-only bid/ask; refuses a live environment |
 | `supabase/migrations/0001_mirror_events.sql` | schema of record, constraints, RLS deny-all |
+| `supabase/migrations/0002_notification_and_cursor.sql` | notification state machine + the durable cursor table |
 | `render.yaml` | Render blueprint (free web service, no cron, no worker) |
 | `web/` | Vercel dashboard + server-side proxy functions |
-| `scripts/simulate_mirror_pipeline.py` | 15-scenario reproducible simulation |
+| `scripts/simulate_mirror_pipeline.py` | 16-scenario reproducible simulation |
 | `scripts/telegram_paper_listener.py` | CLI entry point; refuses to run beside another listener |
 
 ### Dispositions
@@ -52,20 +57,38 @@ always has `filled: false` and `order_state` of `pending_limit` or
   stale quote, an inverted quote, or a quote that has already crossed the stop.
   Nothing is defaulted. The per-trade risk cap is 0.5% and a larger configured
   fraction blocks rather than being clamped.
+* **An unconfirmed contract size is not a contract size.** `InstrumentSpec`
+  carries `units_confirmed`, default `False`. Until a human has checked the
+  number against the broker's own specification, every signal is recorded as
+  `blocked` and nothing is sized — including limit calls, which is where the
+  unverified number was reachable.
+* **A first activation never imports the channel's history.** With no cursor,
+  the start point is the newest message at the moment of the first connect.
+  Importing history at all takes two separate switches.
+* **A hosted deployment refuses to start without a durable store.** Falling
+  back to SQLite on a host that wipes its disk is refused, not accepted.
+* **A failed notification is recorded as failed.** The slot is reserved as
+  `pending` and completed as `sent` or `failed`; only `sent` suppresses a
+  resend, and failed sends are retried.
+* **A healthy service reports whether the intake is healthy.** `/healthz`
+  answers 503 when the listener is expected but is not running, so an uptime
+  ping cannot be mistaken for a working mirror.
 
 ---
 
 ## 2. What was verified
 
-All commands run from the repository root on 2026-11-12.
+All commands run from the repository root. The first row was measured on
+2026-11-12; the review fixes were re-verified on 2026-11-13.
 
 | Check | Command | Result |
 |---|---|---|
-| Full test suite | `python -m pytest tests/ -q` | **198 passed** in 140s (was 126 before this work) |
-| Simulation matrix | `python scripts/simulate_mirror_pipeline.py --message-id 18048` | **15/15 PASS**, exit 0, evidence `docs/evidence/mirror-simulation.json` |
+| Full test suite | `python -m pytest tests/ -q` | **226 passed** in 82s (was 198 after the pipeline landed, 126 before it) |
+| Simulation matrix | `python scripts/simulate_mirror_pipeline.py --message-id 18048` | **16/16 PASS**, exit 0, evidence `docs/evidence/mirror-simulation.json` |
 | Dashboard proxy | `node --test web/test/proxy.test.js` | **6/6 pass** |
-| Service over HTTP | started on `:8099`, called with `urllib` | `/healthz` 200, `/api/status` 401 without token, 200 with, `paper_only: true`, `broker_writes: false` |
-| Single-file test isolation | `python -m pytest tests/test_mirror_pipeline.py` | passes standalone (it did not before; see §5) |
+| Service over HTTP | started on `:8099`, called with `curl` | `/healthz` 200 with a `listener` block, `/api/status` 401 without token, 200 with, `paper_only: true`, `broker_writes: false` |
+| Hosted refusals | `RENDER=true python -m rade.observer.service` | exit **3** with "hosted mode requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"; exit **3** with "MIRROR_EQUITY is not set" when the listener cannot start |
+| Single-file test isolation | `python -m pytest tests/test_mirror_pipeline.py` | passes standalone (it did not before; see §3) |
 
 ### The simulation scenarios (real archived message 18048)
 
@@ -85,6 +108,7 @@ TPs 3910/3905/3900 — not a fixture written to match the parser.
 | missing quote | blocked | blocked |
 | stale quote | blocked | blocked |
 | missing contract spec | blocked | blocked |
+| unconfirmed contract units | blocked | blocked |
 | risk above the 0.5% cap | blocked | blocked |
 | missing equity | blocked | blocked |
 | minimum lot exceeds risk budget | skipped_minimum_lot | skipped_minimum_lot |
@@ -199,11 +223,12 @@ Not deployed: no Vercel account access in this session.
 
 ### Supabase
 
-`supabase/migrations/0001_mirror_events.sql` is the schema of record. Apply it
-with `supabase db push` or by pasting it into the SQL editor. RLS is enabled with
-**no policies**, so the anon and authenticated roles can neither read nor write;
-only the service-role key (backend) can. Not applied: no Supabase project
-credentials in this session.
+`supabase/migrations/0001_mirror_events.sql` and
+`supabase/migrations/0002_notification_and_cursor.sql` are the schema of record.
+Apply them with `supabase db push` or by pasting them into the SQL editor, in
+order. RLS is enabled with **no policies**, so the anon and authenticated roles
+can neither read nor write; only the service-role key (backend) can. Not
+applied: no Supabase project credentials in this session.
 
 ---
 
@@ -226,10 +251,16 @@ Values only. Do not paste any of these into a chat window.
 | `TELEGRAM_SESSION` | run `python scripts/export_telegram_session.py` locally and paste the output |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_NOTIFY_CHAT_ID` | BotFather; the chat id is where notifications go |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | from above |
+| `MIRROR_CONTRACT_UNITS_PER_LOT` | **not preset.** Read it from the broker's own specification and enter it here |
+| `MIRROR_CONTRACT_UNITS_CONFIRMED` | set to `1` only once the number above has been checked against that specification. Until then every signal is recorded as `blocked`, not sized |
 
-`MIRROR_CONTRACT_UNITS_PER_LOT` is preset to `100` from the TradeLocker XAUUSD
-read-only response. It is **not confirmed by a fill**; confirm it against a demo
-order before trusting the lot size.
+The contract size used to be preset to `100` in `render.yaml`, taken from a
+TradeLocker read-only response and never confirmed by a fill. That preset is
+gone: the value is entered by an operator, and it is not used for sizing until
+it has been confirmed. `MIRROR_START_AT` defaults to `latest`, so the first
+activation imports nothing that is already in the channel; set it to a message
+id to import from that point, and `history` (plus
+`MIRROR_ALLOW_HISTORY_IMPORT=1`) to import everything.
 
 **Vercel** (project settings → Environment Variables)
 | Variable | Notes |
@@ -259,10 +290,92 @@ order before trusting the lot size.
 
 1. Live **new-message** push latency. One edit arrived ~30 s late; that is not a
    new-message measurement and the host clock cannot certify anything.
-2. Supabase in practice — the migration has not been applied to a real project,
-   and the adapter has only been exercised against a fake PostgREST.
+2. Supabase in practice — the migrations have not been applied to a real
+   project, and the adapter has only been exercised against a fake PostgREST.
 3. Render and Vercel deployment, including the spin-up behaviour from cold.
 4. BotFather delivery — the adapter is tested against a mock transport, not the
    Bot API.
-5. The XAUUSD contract size, until a demo fill confirms it.
+5. The XAUUSD contract size, until a demo fill confirms it. Until then nothing
+   is sized, by design.
 6. Everything about exits, because no exit policy exists.
+
+---
+
+## 9. The five deployment-review fixes (2026-11-13)
+
+A review of commit `4ba07b2` found no exploitable vulnerability in the changed
+runtime code, and five ways to deploy this while it looked healthy and
+behaved badly. Each fix is enforced in code and covered by a test, not by a
+convention in a runbook.
+
+### 9.1 A fresh install replayed the channel's old history
+
+**Was:** with no saved cursor, `gap_fill()` fetched from the beginning of the
+channel. Every old call in the archive became a paper intent and, for the
+notable ones, a phone notification.
+
+**Now:** the first activation establishes a start point before the first fetch.
+`Runtime.establish_baseline()` uses the newest message id in the channel at that
+moment, so nothing older is imported; the floor is written to the state file
+*and* to the `mirror_cursor` table, because the hosted disk is wiped on every
+restart. `MIRROR_START_AT=<id>` imports from a chosen message instead, and
+importing the whole history takes two switches (`MIRROR_START_AT=history` plus
+`MIRROR_ALLOW_HISTORY_IMPORT=1`). A client that cannot report the newest
+message id makes the listener refuse to start rather than fall back to the
+archive.
+
+### 9.2 Supabase was optional in the code
+
+**Was:** `make_ledger()` silently returned a SQLite ledger when the Supabase
+credentials were missing. On Render that is a file that is wiped on every
+redeploy and spin-down — a store that forgets while looking like it works.
+
+**Now:** `make_ledger()` raises `StorageError` when the process is hosted
+(`RENDER` is set, or `MIRROR_REQUIRE_DURABLE_STORE=1`) and Supabase is not
+configured. `service.main()` exits **3** with the reason instead of serving.
+The SQLite path is unchanged for local work.
+
+### 9.3 A failed BotFather send was recorded as successful
+
+**Was:** the notification slot was reserved with `ok=True` *before* the send.
+A failed send left a row that said "delivered", and nothing retried it.
+
+**Now:** the slot has a state machine. `begin_notification` reserves it as
+`pending` and counts the attempt; `complete_notification` records the real
+outcome as `sent` or `failed`. Only `sent` suppresses a resend. A transient
+failure is retried with backoff, a permanent Bot API error (4xx other than 429)
+is not retried, and `retry_failed_notifications()` re-sends whatever is still
+marked failed — the stored signal and intent are enough to rebuild the message.
+The new `notification_log.status` and `.attempts` columns are in migration
+`0002`; rows written by the old code are backfilled from their `ok` flag.
+
+### 9.4 The sizing configuration was not ready to trust
+
+**Was:** `render.yaml` preset `MIRROR_CONTRACT_UNITS_PER_LOT` to `100` — a value
+read once from a broker response and never confirmed by a fill. NOW calls were
+blocked (no quote provider), but LIMIT sizing could still use the number.
+
+**Now:** the preset is gone; the operator enters the value. `InstrumentSpec`
+gained `units_confirmed`, default `False`, and an unconfirmed spec produces
+`blocked` with no size — for limit calls too. `MIRROR_CONTRACT_UNITS_CONFIRMED=1`
+is what makes the number usable, and it is an explicit act by a human. The CLI
+requires `--confirm-contract-units` for live mode.
+
+### 9.5 The health ping could give a false sense of operation
+
+**Was:** `/healthz` returned 200 as long as the process was up. The listener
+thread could be dead and the ping would still be green, so an uptime monitor
+proved nothing about Telegram intake.
+
+**Now:** `/healthz` reports the intake and answers **503** when the listener is
+expected but is not running, its heartbeat is stale, or it failed to start. The
+body carries only `expected`, `healthy`, `phase`, `heartbeat_age_s` and a fixed
+reason string — no channel, no account, no store. A 90 s startup grace covers
+the window before the first heartbeat, and Render's `healthCheckPath` now
+restarts the service when the intake dies. `MIRROR_RUN_LISTENER=0` keeps
+`/healthz` a plain process check.
+
+### Not changed by this review
+
+Broker order capability is still absent, the exit policy is still unresolved,
+the demo gate is still closed, and the frozen holdout is untouched.

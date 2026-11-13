@@ -58,14 +58,41 @@ services:
       # --- non-secret settings ---
       - key: MIRROR_RUN_LISTENER
         value: "1"
+      # The contract size is NOT committed here. It was read once from a
+      # broker response and has never been confirmed by a fill, so a preset
+      # number here would silently size every intent with an unverified
+      # value. Set it in the dashboard, and only set
+      # MIRROR_CONTRACT_UNITS_CONFIRMED=1 once it has been checked against
+      # the broker's own specification. Until then every signal is recorded
+      # as blocked rather than sized.
       - key: MIRROR_CONTRACT_UNITS_PER_LOT
-        value: "100"
-      - key: MIRROR_QUOTE_PROVIDER     # "none" until a demo quote is verified
+        sync: false
+      - key: MIRROR_CONTRACT_UNITS_CONFIRMED
+        sync: false
+      # "none" means no verified quote source: market (NOW) calls are blocked
+      # because they cannot be priced. Switch to "tradelocker" only after a
+      # demo login works.
+      - key: MIRROR_QUOTE_PROVIDER
         value: "none"
       - key: MIRROR_QUOTE_MAX_AGE_S
         value: "2"
       - key: MIRROR_RECONNECT_S
         value: "900"
+      # Where the very first activation starts. "latest" means: import
+      # nothing that is already in the channel when the mirror is switched
+      # on. An explicit message id imports from there; "history" imports
+      # everything and additionally needs MIRROR_ALLOW_HISTORY_IMPORT=1.
+      - key: MIRROR_START_AT
+        value: "latest"
+      - key: MIRROR_ALLOW_HISTORY_IMPORT
+        value: "0"
+      # How often failed notifications are retried.
+      - key: MIRROR_NOTIFY_RETRY_S
+        value: "300"
+      # How old a listener heartbeat may be before the service reports itself
+      # unhealthy (503 on /healthz, which makes Render restart the service).
+      - key: MIRROR_HEALTH_MAX_AGE_S
+        value: "90"
       - key: MIRROR_STATE
         value: "/tmp/mirror_state.json"
       - key: MIRROR_HEARTBEAT

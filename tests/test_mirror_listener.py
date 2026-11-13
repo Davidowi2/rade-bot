@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from rade.observer.listener import MirrorListener, MirrorState, Runtime
 from rade.observer.mirror_pipeline import (
     InstrumentSpec,
@@ -23,7 +25,7 @@ from rade.observer.mirror_pipeline import (
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
-INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50)
+INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50, units_confirmed=True)
 RISK = RiskConfig(10_000, 0.005, 2.0)
 SELL = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910\nTp : 3905\nTp : 3900"
 
@@ -71,6 +73,12 @@ class FakeClient:
     async def get_entity(self, channel):
         return channel
 
+    async def get_messages(self, entity, **kwargs):
+        """The newest messages, newest first - what Telethon returns."""
+        limit = kwargs.get("limit") or 1
+        newest = sorted(self.messages, key=lambda m: m.id, reverse=True)[:limit]
+        return list(newest)
+
     async def iter_messages(self, entity, **kwargs):
         self.iter_calls += 1
         floor = kwargs.get("min_id") or 0
@@ -84,6 +92,12 @@ class FakeClient:
     def remove_event_handler(self, fn):
         if fn in self.handlers:
             self.handlers.remove(fn)
+
+
+class NoLatestClient(FakeClient):
+    """A client that cannot say where the channel currently ends."""
+
+    get_messages = None
 
 
 # --------------------------------------------------------------------------
@@ -168,13 +182,13 @@ def test_edit_of_a_message_never_seen_is_revision_one(tmp_path):
 # reconnect / gap fill
 # --------------------------------------------------------------------------
 
-def _runtime(tmp_path, messages, *, state=None):
+def _runtime(tmp_path, messages, *, state=None, client=None, **kwargs):
     listener = make_listener(tmp_path, quote=quote_now())
     if state is not None:
         listener.state = state
-    client = FakeClient(messages)
+    client = client or FakeClient(messages)
     return Runtime(client=client, listener=listener, channel="@source",
-                   heartbeat_path=tmp_path / "beat.json", log=lambda *_: None)
+                   heartbeat_path=tmp_path / "beat.json", log=lambda *_: None, **kwargs)
 
 
 def test_gap_fill_processes_every_message_after_the_cursor(tmp_path):
@@ -313,3 +327,84 @@ def test_cursor_restore_does_not_move_backwards(tmp_path):
     runtime = _runtime(tmp_path, [msg(1)], state=state)
     runtime.listener.process_message(msg(1))
     assert runtime.restore_cursor() == 9
+
+
+# --------------------------------------------------------------------------
+# the first activation must not import the channel's history
+# --------------------------------------------------------------------------
+
+def test_a_fresh_install_starts_from_the_newest_message(tmp_path):
+    """Old calls must not become today's paper intents."""
+    runtime = _runtime(tmp_path, [msg(1), msg(2), msg(3)])
+    asyncio.run(runtime.connect())
+    floor = asyncio.run(runtime.establish_baseline())
+    assert floor == 3
+    runtime.listener.state.advance(floor)
+    seen = asyncio.run(runtime.gap_fill())
+    assert seen == []
+    assert runtime.events == 0
+    assert runtime.listener.ledger.counts() == {}
+
+
+def test_only_messages_posted_after_the_baseline_are_imported(tmp_path):
+    runtime = _runtime(tmp_path, [msg(1), msg(2), msg(3)])
+    asyncio.run(runtime.connect())
+    floor = asyncio.run(runtime.establish_baseline())
+    runtime.listener.state.advance(floor)
+    runtime.client.messages.append(msg(4))
+    seen = asyncio.run(runtime.gap_fill())
+    assert seen == [4]
+    assert runtime.events == 1
+
+
+def test_an_explicit_start_at_imports_from_that_message(tmp_path):
+    runtime = _runtime(tmp_path, [msg(1), msg(2), msg(3)], start_at="2")
+    asyncio.run(runtime.connect())
+    floor = asyncio.run(runtime.establish_baseline())
+    assert floor == 2
+    runtime.listener.state.advance(floor)
+    assert asyncio.run(runtime.gap_fill()) == [3]
+
+
+def test_importing_the_history_needs_a_second_switch(tmp_path):
+    runtime = _runtime(tmp_path, [msg(1)], start_at="history")
+    asyncio.run(runtime.connect())
+    with pytest.raises(RuntimeError):
+        asyncio.run(runtime.establish_baseline())
+    runtime.allow_history_import = True
+    assert asyncio.run(runtime.establish_baseline()) == 0
+
+
+def test_an_unusable_start_setting_is_refused(tmp_path):
+    runtime = _runtime(tmp_path, [msg(1)], start_at="yesterday")
+    asyncio.run(runtime.connect())
+    with pytest.raises(RuntimeError):
+        asyncio.run(runtime.establish_baseline())
+
+
+def test_the_start_source_is_recorded_for_the_operator(tmp_path):
+    runtime = _runtime(tmp_path, [msg(7)])
+    asyncio.run(runtime.connect())
+    asyncio.run(runtime.establish_baseline())
+    assert runtime.listener.state.start_source == "latest:7"
+
+
+def test_the_baseline_survives_a_wiped_disk(tmp_path):
+    """The floor lives in the database, because the hosted disk is ephemeral."""
+    runtime = _runtime(tmp_path, [msg(1), msg(2)])
+    asyncio.run(runtime.connect())
+    floor = asyncio.run(runtime.establish_baseline())
+    runtime.save_cursor(floor)
+
+    restarted = _runtime(tmp_path, [msg(1), msg(2)],
+                         state=MirrorState(tmp_path / "gone.json"))
+    assert restarted.listener.state.last_message_id == 0
+    assert restarted.restore_cursor() == 2
+    assert asyncio.run(restarted.gap_fill()) == []
+
+
+def test_a_client_that_cannot_report_the_newest_message_refuses_to_start(tmp_path):
+    runtime = _runtime(tmp_path, [msg(1)], client=NoLatestClient([msg(1)]))
+    asyncio.run(runtime.connect())
+    with pytest.raises(RuntimeError):
+        asyncio.run(runtime.establish_baseline())

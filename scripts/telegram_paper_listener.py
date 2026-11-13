@@ -10,11 +10,14 @@ other's update state.
 
 Examples:
     # stored history only, no Telegram connection
-    python scripts/telegram_paper_listener.py --dry-run --message-id 18048
+    python scripts/telegram_paper_listener.py --dry-run --message-id 18048 \
+        --contract-units-per-lot 100
 
-    # live, 15 minutes, read-only quotes
+    # live, 15 minutes, read-only quotes. The contract size must be confirmed
+    # against the broker's specification, and the first activation starts from
+    # the newest message so the channel's history is not imported.
     python scripts/telegram_paper_listener.py --seconds 900 --equity 10000 \
-        --contract-units 100
+        --contract-units-per-lot 100 --confirm-contract-units --start-at latest
 """
 from __future__ import annotations
 
@@ -46,7 +49,7 @@ from rade.observer.mirror_pipeline import (  # noqa: E402
 )
 from rade.observer.notify import notifier_from_env  # noqa: E402
 from rade.observer.quotes import tradelocker_quote_provider  # noqa: E402
-from rade.observer.store import make_ledger  # noqa: E402
+from rade.observer.store import StorageError, make_ledger  # noqa: E402
 
 SOAK_HEARTBEAT = ROOT / "docs" / "evidence" / "telegram-soak.heartbeat.json"
 
@@ -139,6 +142,8 @@ async def run_live(args, instrument: InstrumentSpec, risk: RiskConfig, ledger) -
         channel=channel,
         reconnect_every=args.reconnect_every,
         heartbeat_path=Path(args.heartbeat) if args.heartbeat else None,
+        start_at=args.start_at,
+        allow_history_import=args.allow_history_import,
     )
     install_signal_handlers(runtime)
 
@@ -165,11 +170,20 @@ def main() -> int:
     ap.add_argument("--equity", type=float, default=None,
                     help="paper account equity; required for live mode, never guessed")
     ap.add_argument("--contract-units-per-lot", type=float, default=None,
-                    help="XAUUSD contract units per lot from the broker; required for live mode")
+                    help="XAUUSD contract units per lot from the broker; never guessed")
+    ap.add_argument("--confirm-contract-units", action="store_true",
+                    help="assert that the contract size has been checked against "
+                         "the broker's own specification (required for live mode)")
     ap.add_argument("--risk-pct", type=float, default=0.005,
                     help="per-trade risk fraction; the cap is 0.5%%")
     ap.add_argument("--quote-max-age", type=float, default=2.0)
     ap.add_argument("--quote-provider", choices=["none", "tradelocker"], default="none")
+    ap.add_argument("--start-at", default="latest",
+                    help="where the first activation starts: 'latest' (import nothing "
+                         "that is already in the channel), a message id, or 'history'")
+    ap.add_argument("--allow-history-import", action="store_true",
+                    help="required by --start-at history: import the whole channel, "
+                         "old calls included")
     ap.add_argument("--ledger", default=None,
                     help="SQLite ledger path when Supabase is not configured")
     ap.add_argument("--state", default="data/mirror_state.json")
@@ -181,10 +195,18 @@ def main() -> int:
 
     if args.ledger:
         os.environ["MIRROR_SQLITE_PATH"] = args.ledger
-    ledger = make_ledger()
+    try:
+        ledger = make_ledger()
+    except StorageError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
 
     if args.dry_run:
-        instrument = InstrumentSpec("XAUUSD", 100.0, 0.01, 0.01, 50.0)
+        if args.contract_units_per_lot is None:
+            print("--contract-units-per-lot is required (the size is never guessed)")
+            return 2
+        instrument = InstrumentSpec("XAUUSD", args.contract_units_per_lot, 0.01, 0.01, 50.0,
+                                    units_confirmed=args.confirm_contract_units)
         risk = RiskConfig(args.equity or 10_000.0, args.risk_pct, args.quote_max_age)
         return run_dry(args, instrument, risk, ledger)
 
@@ -202,8 +224,13 @@ def main() -> int:
     if args.contract_units_per_lot is None:
         print("--contract-units-per-lot is required for live mode (never guessed)")
         return 2
+    if not args.confirm_contract_units:
+        print("--confirm-contract-units is required for live mode: the contract size "
+              "must have been checked against the broker's own specification")
+        return 2
 
-    instrument = InstrumentSpec("XAUUSD", args.contract_units_per_lot, 0.01, 0.01, 50.0)
+    instrument = InstrumentSpec("XAUUSD", args.contract_units_per_lot, 0.01, 0.01, 50.0,
+                               units_confirmed=True)
     risk = RiskConfig(args.equity, args.risk_pct, args.quote_max_age)
     return asyncio.run(run_live(args, instrument, risk, ledger))
 

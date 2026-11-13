@@ -34,7 +34,7 @@ from rade.observer.mirror_pipeline import (  # noqa: E402
     text_hash,
 )
 
-INSTRUMENT = InstrumentSpec("XAUUSD", 100.0, 0.01, 0.01, 50.0)
+INSTRUMENT = InstrumentSpec("XAUUSD", 100.0, 0.01, 0.01, 50.0, units_confirmed=True)
 RISK = RiskConfig(equity=10_000.0, risk_fraction=0.005, quote_max_age_seconds=2.0)
 
 
@@ -175,9 +175,16 @@ def main() -> int:
         # 8. invalid account inputs
         bad_spec = evaluate_message(
             envelope(channel, 99006, posted, text),
-            instrument=InstrumentSpec("XAUUSD", 0, 0.01, 0.01, 50), risk=RISK,
-            quote=quote_now())
+            instrument=InstrumentSpec("XAUUSD", 0, 0.01, 0.01, 50, units_confirmed=True),
+            risk=RISK, quote=quote_now())
         record("missing contract spec", "blocked", bad_spec)
+
+        # the same number, but nobody has confirmed it against the broker
+        unconfirmed = evaluate_message(
+            envelope(channel, 99011, posted, text),
+            instrument=InstrumentSpec("XAUUSD", 100.0, 0.01, 0.01, 50.0), risk=RISK,
+            quote=quote_now())
+        record("unconfirmed contract units", "blocked", unconfirmed)
 
         over_cap = evaluate_message(
             envelope(channel, 99007, posted, text), instrument=INSTRUMENT,
@@ -219,7 +226,9 @@ def main() -> int:
             "text_sha256": text_hash(text),
             "quote": "synthetic, stamped at evaluation time; not a live broker quote",
             "equity": "synthetic 10,000 for sizing only",
-            "contract_spec": "TradeLocker XAUUSD read-only response; still unconfirmed by a demo fill",
+            "contract_spec": "TradeLocker XAUUSD read-only response; still unconfirmed "
+                             "by a demo fill (the scenarios below use it only where "
+                             "the spec is explicitly marked confirmed)",
             "proves": "parser/validator/ledger behaviour",
             "does_not_prove": "live Telegram push delivery, broker execution, exit policy",
         },

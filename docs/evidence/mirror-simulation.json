@@ -7,7 +7,7 @@
     "text_sha256": "7813d1cad0612d9f889f8d49ff8d3bab2c7f9dcef4fa73ea549051dfa3362fb1",
     "quote": "synthetic, stamped at evaluation time; not a live broker quote",
     "equity": "synthetic 10,000 for sizing only",
-    "contract_spec": "TradeLocker XAUUSD read-only response; still unconfirmed by a demo fill",
+    "contract_spec": "TradeLocker XAUUSD read-only response; still unconfirmed by a demo fill (the scenarios below use it only where the spec is explicitly marked confirmed)",
     "proves": "parser/validator/ledger behaviour",
     "does_not_prove": "live Telegram push delivery, broker execution, exit policy"
   },
@@ -93,6 +93,13 @@
       "reason": "broker contract/lot specification is incomplete"
     },
     {
+      "scenario": "unconfirmed contract units",
+      "expected": "blocked",
+      "actual": "blocked",
+      "verdict": "PASS",
+      "reason": "contract units per lot are not confirmed against the broker specification; no size is computed"
+    },
+    {
       "scenario": "risk above the 0.5% cap",
       "expected": "blocked",
       "actual": "blocked",
@@ -125,8 +132,8 @@
     }
   ],
   "summary": {
-    "total": 15,
-    "passed": 15,
+    "total": 16,
+    "passed": 16,
     "failed": 0
   }
 }
