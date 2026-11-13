@@ -15,6 +15,12 @@ const TIMEOUT_MS = 8000;
 //: escaping the /api/trades prefix on the way upstream.
 const TRADE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+//: The only write the dashboard may ask for carries a reason and a name.
+//: Both are truncated rather than rejected so a long reason still pauses, but
+//: nothing larger than this reaches the backend.
+const MAX_REASON = 200;
+const MAX_BY = 64;
+
 function tradePath(id) {
   const value = String(id == null ? "" : id);
   if (!TRADE_ID_RE.test(value)) return null;
@@ -38,33 +44,59 @@ function buildQuery(query) {
   return suffix ? `?${suffix}` : "";
 }
 
-async function proxy(req, res, path) {
+//: Rebuild the pause body from a whitelist, exactly as the query string is
+//: rebuilt. A caller cannot smuggle an extra field to the backend.
+function buildWriteBody(body) {
+  const source = body && typeof body === "object" ? body : {};
+  const reason = typeof source.reason === "string" ? source.reason.slice(0, MAX_REASON) : "";
+  const by = typeof source.by === "string" ? source.by.slice(0, MAX_BY) : "dashboard";
+  return { reason, by };
+}
+
+//: Shared checks. Returns the upstream settings, or null after answering.
+function prepare(req, res) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
 
   const expected = process.env.DASHBOARD_TOKEN || "";
   if (!expected) {
     res.status(503).json({ error: "dashboard token is not configured" });
-    return;
+    return null;
   }
   const presented = req.headers["x-dashboard-token"] || "";
   if (!safeEqual(presented, expected)) {
     res.status(401).json({ error: "unauthorised" });
-    return;
+    return null;
   }
 
   const base = (process.env.MIRROR_API_URL || "").replace(/\/+$/, "");
   const apiToken = process.env.MIRROR_API_TOKEN || "";
   if (!base || !apiToken) {
     res.status(503).json({ error: "backend is not configured" });
-    return;
+    return null;
   }
+  return { base, apiToken };
+}
+
+function unreachable(res, err) {
+  // No stack, no upstream URL: a free Render instance that is spinning up
+  // takes about a minute and this is the expected symptom.
+  res.status(502).json({
+    error: "backend unreachable",
+    detail: err && err.name === "AbortError" ? "timed out" : String(err && err.name),
+    hint: "a free Render service spins up in about a minute after idling",
+  });
+}
+
+async function proxy(req, res, path) {
+  const settings = prepare(req, res);
+  if (!settings) return;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const upstream = await fetch(`${base}${path}${buildQuery(req.query || {})}`, {
-      headers: { Authorization: `Bearer ${apiToken}` },
+    const upstream = await fetch(`${settings.base}${path}${buildQuery(req.query || {})}`, {
+      headers: { Authorization: `Bearer ${settings.apiToken}` },
       signal: controller.signal,
     });
     const body = await upstream.text();
@@ -72,16 +104,40 @@ async function proxy(req, res, path) {
     res.setHeader("Content-Type", "application/json");
     res.send(body);
   } catch (err) {
-    // No stack, no upstream URL: a free Render instance that is spinning up
-    // takes about a minute and this is the expected symptom.
-    res.status(502).json({
-      error: "backend unreachable",
-      detail: err && err.name === "AbortError" ? "timed out" : String(err && err.name),
-      hint: "a free Render service spins up in about a minute after idling",
-    });
+    unreachable(res, err);
   } finally {
     clearTimeout(timer);
   }
 }
 
-module.exports = { proxy, buildQuery, safeEqual, tradePath };
+//: The only write path. It forwards a rebuilt body to one of two fixed
+//: upstream paths, so this cannot be used to reach any other endpoint.
+async function proxyWrite(req, res, path) {
+  const settings = prepare(req, res);
+  if (!settings) return;
+
+  const payload = buildWriteBody(req.body);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const upstream = await fetch(`${settings.base}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.apiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const body = await upstream.text();
+    res.status(upstream.status);
+    res.setHeader("Content-Type", "application/json");
+    res.send(body);
+  } catch (err) {
+    unreachable(res, err);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+module.exports = { proxy, proxyWrite, buildQuery, buildWriteBody, safeEqual, tradePath };

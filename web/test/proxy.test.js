@@ -130,3 +130,83 @@ test("the trade detail route refuses an invalid id before calling upstream", () 
   assert.equal(res.statusCode, 400);
   assert.deepEqual(res.jsonBody, { error: "invalid trade id" });
 });
+
+// ---------------------------------------------------------------------------
+// the pause write path
+// ---------------------------------------------------------------------------
+
+const { proxyWrite, buildWriteBody } = require("../lib/proxy");
+
+test("the write body is rebuilt from a whitelist", () => {
+  assert.deepEqual(buildWriteBody({ reason: "checking" }),
+    { reason: "checking", by: "dashboard" });
+  // extra fields never reach the backend
+  assert.deepEqual(
+    buildWriteBody({ reason: "r", by: "me", paused: false, force: true }),
+    { reason: "r", by: "me" });
+  // non-strings are dropped rather than coerced into something odd
+  assert.deepEqual(buildWriteBody({ reason: 42, by: {} }),
+    { reason: "", by: "dashboard" });
+  // and both are bounded
+  assert.equal(buildWriteBody({ reason: "x".repeat(500) }).reason.length, 200);
+  assert.equal(buildWriteBody({ by: "y".repeat(500) }).by.length, 64);
+  assert.deepEqual(buildWriteBody(null), { reason: "", by: "dashboard" });
+});
+
+test("a write without the dashboard token is refused before any upstream call", async () => {
+  const saved = process.env.DASHBOARD_TOKEN;
+  try {
+    delete process.env.DASHBOARD_TOKEN;
+    const unconfigured = fakeRes();
+    await proxyWrite({ headers: {}, body: { reason: "x" } }, unconfigured,
+      "/api/pause");
+    assert.equal(unconfigured.statusCode, 503);
+
+    // With a token configured, presenting the wrong one is a 401 and the
+    // backend is still never called.
+    process.env.DASHBOARD_TOKEN = "dash";
+    const wrong = fakeRes();
+    await proxyWrite({ headers: { "x-dashboard-token": "nope" },
+      body: { reason: "x" } }, wrong, "/api/pause");
+    assert.equal(wrong.statusCode, 401);
+    assert.ok(!JSON.stringify(wrong.jsonBody).includes("MIRROR_API_TOKEN"));
+  } finally {
+    if (saved === undefined) delete process.env.DASHBOARD_TOKEN;
+    else process.env.DASHBOARD_TOKEN = saved;
+  }
+});
+
+test("a write forwards only the rebuilt body to the fixed path", async () => {
+  let seen = null;
+  const server = await upstream((req, res) => {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      seen = { url: req.url, method: req.method, auth: req.headers.authorization,
+               body: JSON.parse(body || "{}") };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ paused: { paused: true } }));
+    });
+  });
+  process.env.DASHBOARD_TOKEN = "dash";
+  process.env.MIRROR_API_TOKEN = "backend-secret";
+  process.env.MIRROR_API_URL = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = fakeRes();
+    await proxyWrite(
+      { headers: { "x-dashboard-token": "dash" },
+        body: { reason: "manual stop", by: "op", extra: "smuggled" } },
+      res, "/api/pause");
+    assert.equal(res.statusCode, 200);
+    assert.equal(seen.url, "/api/pause");
+    assert.equal(seen.method, "POST");
+    assert.equal(seen.auth, "Bearer backend-secret");
+    assert.deepEqual(seen.body, { reason: "manual stop", by: "op" });
+    assert.ok(!res.body.includes("backend-secret"));
+  } finally {
+    server.close();
+    delete process.env.DASHBOARD_TOKEN;
+    delete process.env.MIRROR_API_TOKEN;
+    delete process.env.MIRROR_API_URL;
+  }
+});

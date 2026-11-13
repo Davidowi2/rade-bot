@@ -99,6 +99,16 @@
     </div>
 
     <div class="panel">
+      <h2>Pre-trade controls</h2>
+      <div id="guards"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Execution switch</h2>
+      <div id="pause"></div>
+    </div>
+
+    <div class="panel">
       <h2>Trades</h2>
       <div id="trades"></div>
     </div>
@@ -136,6 +146,20 @@ function token() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
 
 async function api(path) {
   const res = await fetch(path, { headers: { "x-dashboard-token": token() } });
+  if (res.status === 401) throw new Error("unauthorised");
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+// The only write the dashboard makes. It reaches /api/pause or /api/resume,
+// which set one boolean in the store; nothing here can place or close an order.
+async function post(path, payload) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "x-dashboard-token": token(), "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
   if (res.status === 401) throw new Error("unauthorised");
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
@@ -209,7 +233,91 @@ function renderBadges(status) {
   items.push('<span class="badge bad">live trading disabled</span>');
   items.push(`<span class="badge ${status.exit_policy === "tp_ladder" ? "ok" : "warn"}">exit policy ${esc(status.exit_policy || "unresolved")}</span>`);
   if (exec.error) items.push('<span class="badge bad">execution error</span>');
+  const paused = exec.paused;
+  if (paused && paused.paused === true) {
+    items.push('<span class="badge bad">paused</span>');
+  } else if (paused && paused.paused === null) {
+    items.push('<span class="badge bad">pause state unreadable</span>');
+  }
   document.getElementById("badges").innerHTML = items.join("");
+}
+
+// The guards are only claimed when the backend says they are running, and any
+// that are switched off are listed as disabled rather than omitted. A control
+// that is off must not read as a control that passed.
+function renderGuards(status) {
+  const el = document.getElementById("guards");
+  const exec = status.execution || {};
+  const guards = exec.guards;
+  if (!exec.enabled || !guards || !guards.limits) {
+    el.innerHTML = '<div class="empty">No pre-trade controls are running: ' +
+      'the execution path is not enabled.</div>';
+    return;
+  }
+  const limits = guards.limits;
+  const disabled = new Set(limits.disabled || []);
+  const pct = v => `${(Number(v) * 100).toFixed(2)}%`;
+  const rows = [
+    { key: "max_open_positions", label: "Max open positions", value: limits.max_open_positions },
+    { key: "daily_loss_fraction", label: "Daily loss limit", value: pct(limits.daily_loss_fraction) },
+    { key: "max_drawdown_fraction", label: "Drawdown stop", value: pct(limits.max_drawdown_fraction) },
+    { key: "max_spread", label: "Max spread", value: limits.max_spread },
+    { key: "max_slippage", label: "Max slippage", value: limits.max_slippage },
+  ];
+  const last = guards.last_verdict;
+  el.innerHTML = `<div class="grid" style="padding:14px 16px;margin:0">` +
+    rows.map(r => `
+      <div class="card">
+        <div class="label">${esc(r.label)}</div>
+        <div class="value">${esc(r.value)}</div>
+        <div class="note">${disabled.has(r.key) ? "disabled by configuration" : "enforced"}</div>
+      </div>`).join("") +
+    `<div class="card">
+       <div class="label">Last pre-trade verdict</div>
+       <div class="value">${last ? (last.allowed ? "passed" : "blocked") : "—"}</div>
+       <div class="note">${esc(last ? last.reason : "no order attempted yet")}</div>
+     </div>` +
+    `</div>`;
+}
+
+function renderPause(status) {
+  const el = document.getElementById("pause");
+  const exec = status.execution || {};
+  if (!exec.enabled) {
+    el.innerHTML = '<div class="empty">The pause switch controls the execution ' +
+      'path, which is not enabled.</div>';
+    return;
+  }
+  const paused = exec.paused || {};
+  const isPaused = paused.paused === true;
+  const unreadable = paused.paused === null;
+  el.innerHTML = `
+    <div class="row" style="padding:14px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <span class="badge ${isPaused ? "bad" : unreadable ? "bad" : "ok"}">
+        ${isPaused ? "paused" : unreadable ? "unreadable" : "running"}
+      </span>
+      <span style="opacity:.8">${esc(paused.reason || "")}</span>
+      <input id="pause-reason" placeholder="reason (required to pause)" maxlength="200"
+             style="flex:1;min-width:220px;padding:6px 8px;border-radius:6px;
+                    border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit">
+      <button id="pause-btn" ${isPaused || unreadable ? "disabled" : ""}>Pause</button>
+      <button id="resume-btn" ${!isPaused ? "disabled" : ""}>Resume</button>
+    </div>`;
+  const send = async (path) => {
+    const reason = (document.getElementById("pause-reason").value || "").trim();
+    if (path === "/api/pause" && !reason) {
+      alert("A reason is required to pause execution.");
+      return;
+    }
+    try {
+      await post(path, { reason, by: "dashboard" });
+      await refresh();
+    } catch (err) {
+      alert(`Could not ${path === "/api/pause" ? "pause" : "resume"}: ${err.message}`);
+    }
+  };
+  document.getElementById("pause-btn").addEventListener("click", () => send("/api/pause"));
+  document.getElementById("resume-btn").addEventListener("click", () => send("/api/resume"));
 }
 
 function stateBadge(state) {
@@ -342,6 +450,8 @@ async function refresh() {
     ]);
     const tradeRows = trades.trades || [];
     renderBroker(status, tradeRows);
+    renderGuards(status);
+    renderPause(status);
     renderTrades(tradeRows);
     renderIntents(intents.events || []);
     renderEvents(review.events || [], { target: "review" });
