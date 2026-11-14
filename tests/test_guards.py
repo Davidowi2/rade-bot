@@ -354,7 +354,8 @@ def test_the_pause_switch_is_a_row_that_survives_a_new_engine(tmp_path):
     # A new engine over the same ledger is what a restart produces.
     from rade.execution.engine import ExecutionEngine
     restarted = ExecutionEngine(broker=FakeBroker(), ledger=ledger,
-                                log=lambda line: None)
+                                log=lambda line: None,
+                                fixed_lots=0.03, max_trade_risk_usd=50.0)
     state = restarted.pause_state()
     assert state["paused"] is True
     assert state["reason"] == "storage test"

@@ -13,6 +13,7 @@ Run locally:
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import threading
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from rade.execution.sizing import describe_fixed_lot
 from rade.observer.mirror_pipeline import (
     MAX_RISK_FRACTION,
     STATUS_CONFLICT,
@@ -55,6 +57,49 @@ def _now_iso() -> str:
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY
+
+
+def _fixed_lots() -> float | None:
+    """The confirmed fixed size, or ``None`` when none is configured.
+
+    ``None`` is not a fallback. The paper mirror can still size from equity,
+    but :func:`start_executor_if_configured` refuses to start an executor
+    without a fixed lot, so unset means "no execution" rather than "size it
+    another way". There is no partial mode, and no fallback to the fraction if
+    this number turns out to be invalid for the broker.
+    """
+    raw = os.getenv("MIRROR_FIXED_LOTS", "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise SystemExit(f"MIRROR_FIXED_LOTS={raw!r} is not a number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise SystemExit(f"MIRROR_FIXED_LOTS={value!r} must be a finite positive "
+                         "number")
+    return value
+
+
+def _max_trade_risk_usd() -> float | None:
+    """The per-trade USD ceiling a fixed lot must stay inside.
+
+    Deliberately has no default. A default here would be a number nobody
+    verified against a real account, and it would silently become the risk
+    limit. Unset means the fixed-lot rule refuses every signal and says so.
+    """
+    raw = os.getenv("MIRROR_MAX_TRADE_RISK_USD", "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise SystemExit(
+            f"MIRROR_MAX_TRADE_RISK_USD={raw!r} is not a number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise SystemExit(f"MIRROR_MAX_TRADE_RISK_USD={value!r} must be a finite "
+                         "positive number")
+    return value
 
 
 def _risk_fraction() -> float:
@@ -266,6 +311,20 @@ class MirrorService:
         # longer than the age limit means such a signal can never be copied.
         intervals = [x for x in (catchup, reconnect) if x > 0]
         delivery = min(intervals) if intervals else 0.0
+        sizing = describe_fixed_lot(lots=_fixed_lots(),
+                                    max_risk_usd=_max_trade_risk_usd())
+        # Execution has no sizing fallback: without both numbers the executor
+        # refuses to start. Reporting the rule as "ready" (or as a working
+        # "risk fraction" mode) while the executor is down would be the same
+        # contradiction in a different place, so execution mode says why.
+        execution_ready = sizing["mode"] == "fixed_lots" and bool(sizing["ready"])
+        execution_problem = sizing["problem"]
+        if sizing["mode"] != "fixed_lots":
+            execution_problem = ("MIRROR_FIXED_LOTS is not set, so there is no "
+                                 "confirmed size; the executor will not start")
+        if _truthy(os.getenv("MIRROR_EXECUTE")) and not execution_ready:
+            sizing = {**sizing, "ready": False, "problem": execution_problem,
+                      "blocks_execution": True}
         return {
             "signal_max_age_seconds": signal_age,
             "quote_max_age_seconds": number("MIRROR_QUOTE_MAX_AGE_S", "2"),
@@ -278,6 +337,17 @@ class MirrorService:
                 signal_age <= 0 or (0 < delivery <= signal_age)),
             "catchup_can_exceed_age_limit": bool(
                 reconnect > 0 and signal_age > 0 and reconnect > signal_age),
+            # The sizing rule in force. ``ready`` is false when the rule cannot
+            # accept any signal, so a misconfiguration reads as a refusal rather
+            # than as a copier that quietly never copies.
+            "sizing": sizing,
+            "sizing_mode": sizing["mode"],
+            "fixed_lot_ready": sizing["ready"],
+            "fixed_lot_problem": sizing["problem"],
+            # Whether the executor could start with this rule. False means the
+            # service will report `executor: not started` and place nothing.
+            "execution_sizing_ready": execution_ready,
+            "execution_sizing_problem": execution_problem,
         }
 
     def config_summary(self) -> dict:
@@ -724,6 +794,22 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
             instrument = InstrumentSpec("XAUUSD", units, 0.01, 0.01, 50.0,
                                         units_confirmed=confirmed)
 
+        # Report the sizing rule at boot. A rule that can accept no signal is
+        # otherwise silent until the first one arrives, which on a deployment
+        # can be days - and it would look exactly like a channel that had gone
+        # quiet.
+        sizing = describe_fixed_lot(lots=_fixed_lots(),
+                                    max_risk_usd=_max_trade_risk_usd())
+        if sizing["mode"] == "fixed_lots":
+            if sizing["ready"]:
+                log(f"sizing: fixed {sizing['fixed_lots']:g} lot, per-trade "
+                    f"ceiling ${sizing['max_trade_risk_usd']:.2f}")
+            else:
+                log(f"SIZING NOT READY: {sizing['problem']}")
+        else:
+            log("sizing: risk fraction "
+                f"{_risk_fraction():.4%} of equity (fixed lot not configured)")
+
         listener = MirrorListener(
             channel=channel,
             ledger=ledger,
@@ -732,7 +818,9 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
                             float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2")),
                             equity_provider=equity_provider,
                             signal_max_age_seconds=float(
-                                os.getenv("MIRROR_MAX_SIGNAL_AGE_S", "120"))),
+                                os.getenv("MIRROR_MAX_SIGNAL_AGE_S", "120")),
+                            fixed_lots=_fixed_lots(),
+                            max_trade_risk_usd=_max_trade_risk_usd()),
             notifier=notifier_from_env(),
             quote_provider=quote_provider,
             state=MirrorState(os.getenv("MIRROR_STATE", "data/mirror_state.json")),
@@ -760,15 +848,18 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
 def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHandle":
     """Start the demo execution path when MIRROR_EXECUTE=1.
 
-    Three things happen in this order, and the order is the point:
+    Four things happen in this order, and the order is the point:
 
     1. The broker specification is resolved and **verified**. An unconfirmed
        contract size stops the executor here: the service says why instead of
        starting something that would block every signal.
-    2. The trades in the store are reconciled against the broker *before* the
+    2. The size rule is required. Without ``MIRROR_FIXED_LOTS`` and
+       ``MIRROR_MAX_TRADE_RISK_USD`` the executor does not start, because the
+       only alternative is sizing from equity - which is not the confirmed rule.
+    3. The trades in the store are reconciled against the broker *before* the
        listener is allowed to act. A restart therefore adopts what the broker
        already has instead of placing a second order.
-    3. Only then does the management loop start.
+    4. Only then does the management loop start.
     """
     handle = ExecutorHandle()
     if not _truthy(os.getenv("MIRROR_EXECUTE")):
@@ -794,6 +885,27 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
             log(f"executor not started: {handle.error}")
             return handle
 
+        # No size rule, no executor. Unset used to fall through to risk-fraction
+        # sizing, which is the opposite of "exactly 0.03 lots or refuse": the
+        # copier would size each order from equity instead of declining. An
+        # unset ceiling is refused for the same reason - a fixed lot without one
+        # is a size, not a limit, and a copier that refuses every signal while
+        # reporting itself healthy is the failure mode this is meant to avoid.
+        fixed_lots = _fixed_lots()
+        max_trade_risk_usd = _max_trade_risk_usd()
+        if fixed_lots is None:
+            handle.error = ("MIRROR_FIXED_LOTS is not set, so there is no "
+                            "confirmed size; the executor does not start rather "
+                            "than falling back to risk-fraction sizing")
+            log(f"executor not started: {handle.error}")
+            return handle
+        if max_trade_risk_usd is None:
+            handle.error = ("MIRROR_MAX_TRADE_RISK_USD is not set, so the fixed "
+                            "lot has no ceiling and no order could be accepted; "
+                            "the executor does not start")
+            log(f"executor not started: {handle.error}")
+            return handle
+
         engine = ExecutionEngine(
             broker=gateway,
             ledger=ledger,
@@ -803,6 +915,11 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
             fill_timeout_s=float(os.getenv("MIRROR_FILL_TIMEOUT_S", "300")),
             limits=RiskLimits.from_env(),
             duplicate_window_s=float(os.getenv("MIRROR_DUPLICATE_WINDOW_S", "900")),
+            # The engine applies the same size rule to the order it is about to
+            # send. Both numbers are required by the engine, so this is also
+            # where an unconfigured size stops the executor from starting.
+            fixed_lots=fixed_lots,
+            max_trade_risk_usd=max_trade_risk_usd,
         )
         log(f"pre-trade limits: {engine.limits.describe()}")
         if engine.limits.describe()["disabled"]:

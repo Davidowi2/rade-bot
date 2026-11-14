@@ -292,9 +292,32 @@ function renderIntake(status) {
   const intake = status.intake || {};
   const age = intake.signal_max_age_seconds;
   const quoteAge = intake.quote_max_age_seconds;
+  const sizing = intake.sizing || {};
   const seconds = v => v === undefined ? "unknown"
     : Number(v) <= 0 ? "disabled" : `${Number(v)}s`;
+  const money = v => v === undefined || v === null ? "not set"
+    : `$${Number(v).toFixed(2)}`;
+  const sizeCard = sizing.mode === "fixed_lots"
+    ? `<div class="card">
+      <div class="label">Position size</div>
+      <div class="value">${esc(`${Number(sizing.fixed_lots)} lot`)}</div>
+      <div class="note">${sizing.ready
+        ? `fixed, or the signal is refused. Per-trade ceiling ${esc(money(sizing.max_trade_risk_usd))}.`
+        : `NOT READY: ${esc(sizing.problem)}`}</div>
+    </div>`
+    : sizing.blocks_execution
+    ? `<div class="card">
+      <div class="label">Position size</div>
+      <div class="value">not configured</div>
+      <div class="note">NOT READY: ${esc(sizing.problem)}</div>
+    </div>`
+    : `<div class="card">
+      <div class="label">Position size</div>
+      <div class="value">risk fraction</div>
+      <div class="note">fixed lot is not configured; size is a fraction of equity</div>
+    </div>`;
   el.innerHTML = `<div class="grid" style="padding:14px 16px;margin:0">
+    ${sizeCard}
     <div class="card">
       <div class="label">Signal age limit</div>
       <div class="value">${esc(seconds(age))}</div>

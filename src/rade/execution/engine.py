@@ -24,6 +24,7 @@ would be invisible:
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,9 @@ from rade.execution.guards import (
     utc_day,
 )
 from rade.execution.ladder import (
+    ACTION_BROKER_TARGET,
+    ACTION_STOP_MOVE,
+    POLICY_HOLD_TO_FINAL,
     STOP_NONE,
     ExitLeg,
     ExitPlan,
@@ -53,6 +57,11 @@ from rade.execution.ladder import (
     build_exit_plan,
     stop_move_is_risk_reducing,
     target_reached,
+)
+from rade.execution.sizing import (
+    LotSpec,
+    check_broker_lot,
+    check_fixed_lot,
 )
 from rade.observer.mirror_pipeline import (
     STATUS_MANUAL_REVIEW,
@@ -203,6 +212,7 @@ class ManagedTrade:
                         "fraction": leg.fraction,
                         "quantity": leg.quantity,
                         "managed": leg.managed,
+                        "action": leg.action,
                         "stop_after_kind": leg.stop_after_kind,
                         "stop_after_value": leg.stop_after_value,
                         "expected_remaining_after": leg.expected_remaining_after,
@@ -236,6 +246,9 @@ class ManagedTrade:
                     fraction=float(leg["fraction"]),
                     quantity=float(leg["quantity"]),
                     managed=bool(leg["managed"]),
+                    # A plan written before actions existed has no action, and
+                    # every leg it could contain closed a quantity.
+                    action=leg.get("action", "close"),
                     stop_after_kind=leg.get("stop_after_kind", "none"),
                     stop_after_value=leg.get("stop_after_value"),
                     expected_remaining_after=float(leg.get("expected_remaining_after", 0.0)),
@@ -247,8 +260,11 @@ class ManagedTrade:
                 initial_stop=float(row["stop"]),
                 final_target=float(plan_blob.get("final_target", 0.0)),
                 total_size=float(row["size"]),
-                lot_step=float(row.get("lot_step", 0.01)),
-                min_lot=float(row.get("min_lot", 0.01)),
+                # Read from the plan, where it was written. Reading it from the
+                # trade row silently fell back to 0.01 on every restart, so a
+                # broker with a different step came back with the wrong one.
+                lot_step=float(plan_blob.get("lot_step", 0.01)),
+                min_lot=float(plan_blob.get("min_lot", 0.01)),
                 legs=tuple(legs),
                 ignored_targets=tuple(float(t) for t in plan_blob.get("ignored_targets", [])),
             )
@@ -286,6 +302,26 @@ class ManagedTrade:
             return None
 
 
+def _require_size(name: str, value: Any) -> float:
+    """A size rule number, or a refusal to build the engine without one.
+
+    ``None`` is not a mode here. It used to mean "size from equity", which is
+    the behaviour the confirmed rule forbids, so it is rejected at construction
+    rather than discovered on the first signal.
+    """
+    if value is None:
+        raise ValueError(
+            f"{name} is required: the engine places orders at a fixed size and "
+            "inside a dollar ceiling, and has no other sizing mode")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name}={value!r} is not a number") from None
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{name}={number!r} must be a finite positive number")
+    return number
+
+
 class ExecutionEngine:
     """Submits, manages and reconciles demo trades."""
 
@@ -296,7 +332,10 @@ class ExecutionEngine:
                  fill_timeout_s: float = 300.0,
                  max_stop_attempts: int = 10,
                  limits: RiskLimits | None = None,
-                 duplicate_window_s: float = 900.0):
+                 duplicate_window_s: float = 900.0,
+                 exit_policy: str = POLICY_HOLD_TO_FINAL,
+                 fixed_lots: float,
+                 max_trade_risk_usd: float):
         self.broker = broker
         self.ledger = ledger
         self.notifier = notifier
@@ -319,6 +358,24 @@ class ExecutionEngine:
         #: channel re-posts calls as separate messages, so the id-based
         #: uniqueness constraint cannot catch it. 0 disables the check.
         self.duplicate_window_s = float(duplicate_window_s)
+        #: Which exit policy a new trade is built against. The confirmed one
+        #: holds the position through the intermediate targets; the earlier
+        #: one takes profit in thirds and is only used when named.
+        self.exit_policy = str(exit_policy)
+        #: The size rule. Both numbers are required, and neither has a default.
+        #:
+        #: They used to be optional, with ``None`` meaning "fall back to
+        #: risk-fraction sizing". That fallback was the confirmed rule's
+        #: opposite: an engine started without ``MIRROR_FIXED_LOTS`` would size
+        #: each order from equity instead of refusing, which is exactly the
+        #: behaviour "exactly 0.03 lots or refuse" rules out. An engine that
+        #: cannot state its size and its ceiling now cannot be constructed.
+        #:
+        #: The pipeline still offers risk-fraction sizing for the paper mirror.
+        #: That is observation; this is the component that sends orders.
+        self.fixed_lots = _require_size("fixed_lots", fixed_lots)
+        self.max_trade_risk_usd = _require_size("max_trade_risk_usd",
+                                                max_trade_risk_usd)
         #: The startup read of what the guards depend on, once it has been made.
         self._preflight: dict | None = None
 
@@ -481,7 +538,8 @@ class ExecutionEngine:
 
         try:
             plan = build_exit_plan(side=side, entry=entry, stop=stop, targets=targets,
-                                    size=size, lot_step=spec.lot_step, min_lot=spec.min_lot)
+                                    size=size, lot_step=spec.lot_step, min_lot=spec.min_lot,
+                                    policy=self.exit_policy)
         except LadderError as exc:
             return self._blocked_new(result, message, trade_id, str(exc))
 
@@ -520,7 +578,7 @@ class ExecutionEngine:
         # about the day, the account, or whether the market has moved since the
         # channel posted. Those are asked here, immediately before the order,
         # against an equity read at this moment rather than at startup.
-        blocked = self._pre_trade_check(trade)
+        blocked = self._pre_trade_check(trade, spec)
         if blocked is not None:
             return blocked
 
@@ -553,7 +611,51 @@ class ExecutionEngine:
                     "lookup_failed": True}
         return found
 
-    def _pre_trade_check(self, trade: ManagedTrade) -> dict | None:
+    def _verify_order_size(self, trade: ManagedTrade, spec: BrokerSpec,
+                           reference: float) -> str:
+        """Recheck the exact lot and its dollar risk, broker-side. Empty is ok.
+
+        This is deliberately a second opinion. The pipeline already sized this
+        order, but the pipeline is not what sends it, and the two can disagree:
+        a trade resumed from the ledger carries whatever ``size_lots`` was
+        written, and a signal that reached the engine by any path other than the
+        pipeline was never sized by it at all. The checks below are the same
+        functions the pipeline uses, so there is one implementation of the
+        arithmetic and two places that apply it.
+
+        ``reference`` is the price the stop is measured from: the ask for a buy
+        and the bid for a sell, read immediately before submission, matching
+        what the pipeline used when it sized the intent.
+
+        Returns a reason when the order must not be sent, otherwise ``""``.
+        """
+        broker_spec = LotSpec(
+            contract_units_per_lot=spec.contract_units_per_lot,
+            lot_step=spec.lot_step,
+            min_lot=spec.min_lot,
+            max_lot=spec.max_lot,
+            verified=bool(spec.verified),
+        )
+
+        usable, reason = check_broker_lot(lots=trade.size, spec=broker_spec)
+        if usable is None:
+            return f"the order size was refused at submission: {reason}"
+
+        stop_distance = abs(float(reference) - float(trade.stop))
+
+        if abs(usable - self.fixed_lots) > 1e-9:
+            return (f"the order size {usable:g} is not the configured fixed "
+                    f"lot {self.fixed_lots:g}; a signal is copied at exactly "
+                    "the configured size or not at all")
+        sized, reason = check_fixed_lot(
+            lots=usable, spec=broker_spec, stop_distance=stop_distance,
+            max_risk_usd=self.max_trade_risk_usd)
+        if sized is None:
+            return f"the order was refused at submission: {reason}"
+        return ""
+
+    def _pre_trade_check(self, trade: ManagedTrade,
+                         spec: BrokerSpec | None = None) -> dict | None:
         """Run the account-level guards. Returns an outcome when blocked.
 
         Every read here fails closed. An equity that cannot be read, a risk
@@ -605,6 +707,19 @@ class ExecutionEngine:
         spread = float(quote.ask) - float(quote.bid)
         reference = float(quote.ask) if trade.side == "buy" else float(quote.bid)
         slippage = abs(reference - float(trade.entry)) if trade.entry else 0.0
+
+        # The size is verified here, against this quote and this broker spec,
+        # rather than trusted from the intent that arrived from the pipeline.
+        if spec is None:
+            try:
+                spec = self.broker.spec()
+            except Exception as exc:
+                return self._guard_blocked(
+                    trade, "the broker specification could not be read, so the "
+                           f"order size cannot be verified: {type(exc).__name__}: {exc}")
+        size_problem = self._verify_order_size(trade, spec, reference)
+        if size_problem:
+            return self._guard_blocked(trade, size_problem)
 
         try:
             others = [row for row in self.ledger.list_trades(states=ACTIVE_STATES)
@@ -826,42 +941,52 @@ class ExecutionEngine:
                      f"{trade.plan.final_target:g}. Plan: {trade.plan.description()}")
 
         # The plan was built from the published entry, and the fill can be
-        # worse than that. If the fill already sits at or beyond the first
-        # target, the ladder as published cannot be walked: the "stop to TP1"
-        # move would come out *behind* breakeven and would have to widen the
-        # risk. That is not a reason to rewrite the policy, so the trade is
-        # flagged and left protected by the stop and target at the broker.
-        blocked = self._fill_beyond_first_target(trade)
+        # worse than that. Under the confirmed policy a fill beyond the first
+        # target is harmless - the position is held to the final one anyway -
+        # but a fill already at the final target leaves nothing to manage. That
+        # is not a reason to rewrite the policy, so the trade is flagged and
+        # left protected by the stop and target at the broker.
+        blocked = self._fill_beyond_final_target(trade)
         if blocked is not None:
             return blocked
 
         return {"filled": True, "trade_id": trade.trade_id,
                 "position_id": trade.broker_position_id}
 
-    def _fill_beyond_first_target(self, trade: ManagedTrade) -> dict | None:
-        """Refuse a ladder whose first target the fill already passed."""
+    def _fill_beyond_final_target(self, trade: ManagedTrade) -> dict | None:
+        """Refuse a trade whose fill already passed the target it exists to reach.
+
+        Under the confirmed policy the intermediate targets are not exits, so a
+        fill beyond the *first* target is not a problem: the position is being
+        held to the final one anyway, and the stop move fires on the first
+        observation. What cannot be managed is a fill already at or beyond the
+        final target, because there is then no move left to capture and the
+        "stop to the first target" step would have nothing sensible to do.
+        """
         if not trade.plan.legs or trade.fill_price is None:
             return None
-        first = trade.plan.legs[0].target
-        passed = (trade.fill_price >= first if trade.side == "buy"
-                  else trade.fill_price <= first)
+        final = trade.plan.final_target
+        if final <= 0:
+            return None
+        passed = (trade.fill_price >= final if trade.side == "buy"
+                  else trade.fill_price <= final)
         if not passed:
             return None
         slipped = abs(trade.fill_price - (trade.entry or trade.fill_price))
         return self._stop_management(
             trade,
-            f"the fill at {trade.fill_price:g} is already at or beyond the first "
-            f"target {first:g} (published entry {trade.entry:g}, slippage "
-            f"{slipped:g}); the published ladder cannot be walked as written, so "
-            "automatic management did not start. The broker-side stop and target "
-            "are still in place")
+            f"the fill at {trade.fill_price:g} is already at or beyond the final "
+            f"target {final:g} (published entry {trade.entry:g}, slippage "
+            f"{slipped:g}); there is no move left to capture, so automatic "
+            "management did not start. The broker-side stop and target are still "
+            "in place")
 
     # -- management --------------------------------------------------------
 
     def manage(self) -> dict:
         """Run one management pass over every open trade."""
-        summary = {"considered": 0, "closed": 0, "partial": 0, "stopped": 0,
-                   "pending_fill": 0, "errors": 0}
+        summary = {"considered": 0, "closed": 0, "partial": 0, "stops_moved": 0,
+                   "stopped": 0, "pending_fill": 0, "errors": 0}
         for row in self.ledger.list_trades(states=(STATE_ACCEPTED, STATE_OPEN, STATE_PARTIAL)):
             trade = ManagedTrade.from_row(row)
             if trade is None:
@@ -884,6 +1009,8 @@ class ExecutionEngine:
                 summary["errors"] += 1
             elif outcome.get("closed"):
                 summary["closed"] += 1
+            elif outcome.get("stop_moved"):
+                summary["stops_moved"] += 1
             elif outcome.get("partial"):
                 summary["partial"] += 1
             elif outcome.get("stopped"):
@@ -964,7 +1091,7 @@ class ExecutionEngine:
             outcome = self._apply_stop(trade, pending, position, quote)
             if outcome.get("error"):
                 return outcome
-            return {"partial": True, "trade_id": trade.trade_id,
+            return {"stop_moved": True, "trade_id": trade.trade_id,
                     "stop_retried": pending.label}
 
         leg = self._next_leg(trade)
@@ -975,6 +1102,32 @@ class ExecutionEngine:
                               bid=quote.bid, ask=quote.ask):
             return {"waiting": True, "trade_id": trade.trade_id,
                     "next_target": leg.target}
+
+        if leg.action == ACTION_STOP_MOVE:
+            # The confirmed policy: price has passed the first target and the
+            # position is held in full. Only the stop moves. This is a distinct
+            # branch rather than a close with a zero quantity, because a close
+            # of zero would be read as "close the remainder" further down.
+            outcome = self._apply_stop(trade, leg, position, quote, notify=False)
+            # ``stopped`` as well as ``error``: a move that would widen the risk
+            # stops management rather than failing, and returning here is what
+            # keeps a refused move from being recorded as applied.
+            if outcome.get("error") or outcome.get("stopped"):
+                # legs_done is deliberately not advanced, so the next pass
+                # retries it; the position stays protected by the stop already
+                # attached.
+                return outcome
+            trade.legs_done = max(trade.legs_done, self._leg_index(trade, leg) + 1)
+            self._save(trade)
+            self._notify(
+                trade.trade_id, f"target:{leg.label}",
+                f"[{leg.label.upper()} PASSED] {trade.symbol} reached {leg.target:g}. "
+                f"The position is held in full (no quantity closed) and the "
+                f"broker-side stop moved to {trade.current_stop:g}. "
+                f"Waiting for the final target {trade.plan.final_target:g}.")
+            return {"stop_moved": True, "trade_id": trade.trade_id,
+                    "leg": leg.label, "stop": trade.current_stop,
+                    "closed_qty": 0.0}
 
         # The target is reached. Before closing anything, the live position
         # must match what the plan expects.
@@ -1051,8 +1204,12 @@ class ExecutionEngine:
                 "closed_qty": closed_qty, **stop_result}
 
     def _apply_stop(self, trade: ManagedTrade, leg: ExitLeg,
-                    position: BrokerPosition, quote) -> dict:
-        """Move the stop after a leg, if the policy calls for it."""
+                    position: BrokerPosition, quote, *, notify: bool = True) -> dict:
+        """Move the stop after a leg, if the policy calls for it.
+
+        ``notify`` is off when the caller sends its own message, so one event
+        produces one notification rather than two descriptions of it.
+        """
         new_stop = leg.stop_after(fill_price=trade.fill_price or position.avg_price)
         if new_stop is None:
             # Nothing to move, but the final target must still be attached.
@@ -1094,9 +1251,10 @@ class ExecutionEngine:
                          f"the stop moved to {new_stop:g}",
                          payload={"stop": new_stop, "previous_stop": old_stop})
         self._save(trade)
-        self._notify(trade.trade_id, f"stop:{leg.label}",
-                     f"[STOP MOVED] {leg.label.upper()} done: the broker-side stop "
-                     f"moved to {new_stop:g} on position {position.id}.")
+        if notify:
+            self._notify(trade.trade_id, f"stop:{leg.label}",
+                         f"[STOP MOVED] {leg.label.upper()} done: the broker-side stop "
+                         f"moved to {new_stop:g} on position {position.id}.")
         return self._ensure_final_target(trade, position)
 
     def _defer_stop(self, trade: ManagedTrade, leg: ExitLeg, reason: str) -> dict:

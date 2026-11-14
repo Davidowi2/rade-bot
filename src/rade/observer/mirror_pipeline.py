@@ -33,6 +33,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from rade.execution.sizing import LotSpec, check_fixed_lot
+
 # ---------------------------------------------------------------------------
 # dispositions
 # ---------------------------------------------------------------------------
@@ -226,6 +228,12 @@ class RiskConfig:
     questions and both are asked. The first says "is the price I am about to
     trade still current"; the second says "is the instruction I am about to
     follow still current". A fresh quote proves only the first.
+
+    ``fixed_lots`` selects the confirmed sizing mode. When it is set the size
+    is exactly that number or the signal is refused; ``risk_fraction`` is then
+    ignored, and ``max_trade_risk_usd`` becomes mandatory, because a fixed lot
+    is not a risk limit on its own. Leaving ``fixed_lots`` unset keeps the
+    earlier risk-fraction behaviour.
     """
 
     equity: float
@@ -235,6 +243,15 @@ class RiskConfig:
     #: How old a NOW signal may be when it reaches the pipeline. ``0`` disables
     #: the limit, but never the timestamp sanity checks.
     signal_max_age_seconds: float = DEFAULT_SIGNAL_MAX_AGE_S
+    #: The confirmed size, or ``None`` for risk-fraction sizing.
+    fixed_lots: float | None = None
+    #: The per-trade USD ceiling a fixed lot must stay inside. Required
+    #: whenever ``fixed_lots`` is set; a missing ceiling refuses every signal.
+    max_trade_risk_usd: float | None = None
+
+    @property
+    def sizing_mode(self) -> str:
+        return "risk_fraction" if self.fixed_lots is None else "fixed_lots"
 
     def current_equity(self) -> float:
         if self.equity_provider is None:
@@ -553,7 +570,11 @@ def evaluate_message(
             f"{type(exc).__name__}: {exc}", signal=parsed)
     if equity <= 0 or not math.isfinite(equity):
         return _result(key, STATUS_BLOCKED, "account equity is missing or invalid", signal=parsed)
-    if not 0 < risk.risk_fraction <= MAX_RISK_FRACTION:
+    # The fraction is only a sizing input in risk-fraction mode. In fixed-lot
+    # mode the size is a constant and the ceiling is what constrains it, so
+    # validating an unused fraction here would refuse signals for a setting
+    # that has no effect on them.
+    if risk.fixed_lots is None and not 0 < risk.risk_fraction <= MAX_RISK_FRACTION:
         return _result(
             key, STATUS_BLOCKED,
             f"risk configuration is invalid (per-trade risk must be in (0, {MAX_RISK_FRACTION:.1%}])",
@@ -594,9 +615,21 @@ def evaluate_message(
         if (is_buy and stop >= effective_entry) or (not is_buy and stop <= effective_entry):
             return _result(key, STATUS_BLOCKED,
                            "market has already crossed the published stop", signal=parsed)
-        if any((is_buy and t <= effective_entry) or (not is_buy and t >= effective_entry) for t in targets):
-            return _result(key, STATUS_MANUAL_REVIEW,
-                           "market has already crossed a target; review required", signal=parsed)
+        # Only the *final* target ends the trade. The position is now held
+        # through the intermediate targets, so a market already past the first
+        # one is still tradeable: the stop move fires on the first observation
+        # instead of waiting for a level that has already gone by. What cannot
+        # be copied is a market that is already at the target the trade exists
+        # to reach.
+        if targets:
+            final_target = max(targets) if is_buy else min(targets)
+            if ((is_buy and effective_entry >= final_target)
+                    or (not is_buy and effective_entry <= final_target)):
+                return _result(
+                    key, STATUS_MANUAL_REVIEW,
+                    f"the market is already at or beyond the final target "
+                    f"{final_target:g} (entry {effective_entry:g}); there is no "
+                    "move left to copy", signal=parsed)
         order_type = "market"
         order_price = None
         quote_block = {
@@ -610,22 +643,43 @@ def evaluate_message(
         order_type = "limit"
         order_price = entry
 
-    risk_budget = equity * risk.risk_fraction
     risk_per_lot = abs(effective_entry - stop) * instrument.contract_units_per_lot
     if risk_per_lot <= 0:
         return _result(key, STATUS_BLOCKED, "stop distance is zero", signal=parsed)
-    raw_lots = risk_budget / risk_per_lot
-    lots = math.floor((raw_lots + 1e-12) / instrument.lot_step) * instrument.lot_step
-    lots = round(lots, 8)
-    if lots < instrument.min_lot:
-        return _result(
-            key, STATUS_SKIPPED_MIN_LOT,
-            f"minimum lot {instrument.min_lot:g} would exceed the risk budget; skip",
-            signal=parsed,
+
+    if risk.fixed_lots is not None:
+        # The confirmed rule: this size, or no signal. Nothing below adjusts,
+        # rounds or skips - see rade.execution.sizing for why.
+        lots, refusal = check_fixed_lot(
+            lots=float(risk.fixed_lots),
+            spec=LotSpec(
+                contract_units_per_lot=instrument.contract_units_per_lot,
+                lot_step=instrument.lot_step,
+                min_lot=instrument.min_lot,
+                max_lot=instrument.max_lot,
+                verified=bool(instrument.units_confirmed),
+            ),
+            stop_distance=abs(effective_entry - stop),
+            max_risk_usd=risk.max_trade_risk_usd,
         )
-    if lots > instrument.max_lot:
-        lots = instrument.max_lot
-    estimated_stop_risk = lots * risk_per_lot
+        if refusal:
+            return _result(key, STATUS_BLOCKED, refusal, signal=parsed)
+        risk_budget = lots * risk_per_lot
+        estimated_stop_risk = risk_budget
+    else:
+        risk_budget = equity * risk.risk_fraction
+        raw_lots = risk_budget / risk_per_lot
+        lots = math.floor((raw_lots + 1e-12) / instrument.lot_step) * instrument.lot_step
+        lots = round(lots, 8)
+        if lots < instrument.min_lot:
+            return _result(
+                key, STATUS_SKIPPED_MIN_LOT,
+                f"minimum lot {instrument.min_lot:g} would exceed the risk budget; skip",
+                signal=parsed,
+            )
+        if lots > instrument.max_lot:
+            lots = instrument.max_lot
+        estimated_stop_risk = lots * risk_per_lot
 
     signal = {
         "instrument": instrument.symbol,
@@ -654,6 +708,12 @@ def evaluate_message(
         "size_lots": lots,
         "stop_loss": stop,
         "take_profits": targets,
+        # Which rule produced the size, and the ceiling it had to satisfy. In
+        # fixed-lot mode the fraction below is inert, and saying so here is
+        # what stops a later reader from believing the size was risk-scaled.
+        "sizing_mode": risk.sizing_mode,
+        "fixed_lots": risk.fixed_lots,
+        "max_trade_risk_usd": risk.max_trade_risk_usd,
         "risk_fraction": risk.risk_fraction,
         "equity_at_sizing": round(equity, 2),
         "risk_budget": round(risk_budget, 2),

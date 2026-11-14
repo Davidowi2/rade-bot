@@ -20,6 +20,8 @@ from rade.observer.mirror_pipeline import (
 )
 from rade.observer.service import (
     MirrorService,
+    _fixed_lots,
+    _max_trade_risk_usd,
     main as service_main,
     make_handler,
     start_listener_if_configured,
@@ -666,3 +668,319 @@ def test_a_disabled_poll_falls_back_to_the_reconnect_interval(tmp_path, monkeypa
     assert intake["catchup_every_seconds"] == 0
     assert intake["delivery_interval_seconds"] == 900
     assert intake["delivery_within_age_limit"] is False
+
+
+# ---------------------------------------------------------------------------
+# the sizing rule, as reported
+# ---------------------------------------------------------------------------
+
+
+def test_the_sizing_rule_defaults_to_risk_fraction_when_no_lot_is_set(tmp_path, monkeypatch):
+    monkeypatch.delenv("MIRROR_FIXED_LOTS", raising=False)
+    monkeypatch.delenv("MIRROR_MAX_TRADE_RISK_USD", raising=False)
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["sizing_mode"] == "risk_fraction"
+    assert intake["fixed_lot_ready"] is True
+
+
+def test_a_fixed_lot_without_a_ceiling_is_reported_as_not_ready(tmp_path, monkeypatch):
+    """A rule that can accept no signal must not read as a rule that passes."""
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "0.03")
+    monkeypatch.delenv("MIRROR_MAX_TRADE_RISK_USD", raising=False)
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["sizing_mode"] == "fixed_lots"
+    assert intake["fixed_lot_ready"] is False
+    assert "ceiling" in intake["fixed_lot_problem"]
+
+
+def test_a_complete_sizing_rule_is_reported_as_ready(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "0.03")
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "25")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["fixed_lot_ready"] is True
+    assert intake["sizing"]["fixed_lots"] == 0.03
+    assert intake["sizing"]["max_trade_risk_usd"] == 25.0
+
+
+def test_a_nonsense_fixed_lot_stops_the_service_rather_than_being_ignored(monkeypatch):
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "three")
+    with pytest.raises(SystemExit, match="not a number"):
+        _fixed_lots()
+
+
+def test_a_negative_fixed_lot_stops_the_service(monkeypatch):
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "-0.03")
+    with pytest.raises(SystemExit, match="must be a finite positive"):
+        _fixed_lots()
+
+
+def test_an_infinite_fixed_lot_stops_the_service(monkeypatch):
+    """``inf > 0`` is true, so positivity alone let infinity through."""
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "inf")
+    with pytest.raises(SystemExit, match="must be a finite positive"):
+        _fixed_lots()
+
+
+def test_a_nan_ceiling_stops_the_service(monkeypatch):
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "nan")
+    with pytest.raises(SystemExit, match="must be a finite positive"):
+        _max_trade_risk_usd()
+
+
+def test_an_infinite_ceiling_stops_the_service(monkeypatch):
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "inf")
+    with pytest.raises(SystemExit, match="must be a finite positive"):
+        _max_trade_risk_usd()
+
+
+# ---------------------------------------------------------------------------
+# the executor refuses to start without a size rule
+# ---------------------------------------------------------------------------
+
+
+class _VerifiedGateway:
+    """Enough of the gateway for the startup checks to reach the size rule."""
+
+    def __init__(self):
+        from rade.execution.broker import BrokerSpec
+        self._spec = BrokerSpec(
+            environment="demo", base_url="https://demo.tradelocker.com",
+            account_id=1, account_number=1, symbol="XAUUSD", instrument_id=1808,
+            trade_route_id="1869", contract_units_per_lot=100.0, lot_step=0.01,
+            min_lot=0.01, max_lot=50.0, tick_size=0.01,
+            symbol_status="FULLY_OPEN", confirmed_contract_units=100.0,
+            verified=True,
+        )
+
+    def spec(self):
+        return self._spec
+
+    # The startup reconciliation and the guard preflight read these. An empty
+    # account with a flat equity is enough: the test is about the size rule,
+    # not about what the engine does with a position.
+    def positions(self):
+        return []
+
+    def equity(self):
+        return 10_000.0
+
+
+def _start_with(monkeypatch, tmp_path, **env):
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    for key in ("MIRROR_FIXED_LOTS", "MIRROR_MAX_TRADE_RISK_USD"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    import rade.execution.gateway as gateway_module
+    monkeypatch.setattr(gateway_module, "tradelocker_gateway_from_env",
+                        lambda **kwargs: _VerifiedGateway())
+
+    from rade.observer.service import start_executor_if_configured
+    return start_executor_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+
+
+def test_the_executor_does_not_start_without_a_fixed_lot(monkeypatch, tmp_path):
+    """Unset used to mean "size from equity", which is the opposite of the rule."""
+    handle = _start_with(monkeypatch, tmp_path,
+                         MIRROR_MAX_TRADE_RISK_USD="50")
+
+    assert handle.executor is None
+    assert "MIRROR_FIXED_LOTS is not set" in handle.error
+    assert "risk-fraction" in handle.error
+
+
+def test_the_executor_does_not_start_without_a_ceiling(monkeypatch, tmp_path):
+    """A fixed lot with no ceiling cannot accept any signal; say so at boot."""
+    handle = _start_with(monkeypatch, tmp_path, MIRROR_FIXED_LOTS="0.03")
+
+    assert handle.executor is None
+    assert "MIRROR_MAX_TRADE_RISK_USD is not set" in handle.error
+
+
+def test_the_executor_starts_when_both_numbers_are_configured(monkeypatch, tmp_path):
+    """The happy path, so the two refusals above mean something."""
+    handle = _start_with(monkeypatch, tmp_path, MIRROR_FIXED_LOTS="0.03",
+                         MIRROR_MAX_TRADE_RISK_USD="50")
+    try:
+        assert handle.error is None, handle.error
+        assert handle.executor is not None
+        assert handle.executor.fixed_lots == pytest.approx(0.03)
+        assert handle.executor.max_trade_risk_usd == pytest.approx(50.0)
+    finally:
+        if handle.stop_event is not None:
+            handle.stop_event.set()
+        if handle.thread is not None:
+            handle.thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# the executor refuses to start without a size rule
+# ---------------------------------------------------------------------------
+
+
+class _VerifiedGateway:
+    """Enough of the gateway for the startup checks to reach the size rule."""
+
+    def __init__(self):
+        from rade.execution.broker import BrokerSpec
+        self._spec = BrokerSpec(
+            environment="demo", base_url="https://demo.tradelocker.com",
+            account_id=1, account_number=1, symbol="XAUUSD", instrument_id=1808,
+            trade_route_id="1869", contract_units_per_lot=100.0, lot_step=0.01,
+            min_lot=0.01, max_lot=50.0, tick_size=0.01,
+            symbol_status="FULLY_OPEN", confirmed_contract_units=100.0,
+            verified=True,
+        )
+
+    def spec(self):
+        return self._spec
+
+    # The startup reconciliation and the guard preflight read these. An empty
+    # account with a flat equity is enough: the test is about the size rule,
+    # not about what the engine does with a position.
+    def positions(self):
+        return []
+
+    def equity(self):
+        return 10_000.0
+
+
+def _start_with(monkeypatch, tmp_path, **env):
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    for key in ("MIRROR_FIXED_LOTS", "MIRROR_MAX_TRADE_RISK_USD"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    import rade.execution.gateway as gateway_module
+    monkeypatch.setattr(gateway_module, "tradelocker_gateway_from_env",
+                        lambda **kwargs: _VerifiedGateway())
+
+    from rade.observer.service import start_executor_if_configured
+    return start_executor_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+
+
+def test_the_executor_does_not_start_without_a_fixed_lot(monkeypatch, tmp_path):
+    """Unset used to mean "size from equity", which is the opposite of the rule."""
+    handle = _start_with(monkeypatch, tmp_path,
+                         MIRROR_MAX_TRADE_RISK_USD="50")
+
+    assert handle.executor is None
+    assert "MIRROR_FIXED_LOTS is not set" in handle.error
+    assert "risk-fraction" in handle.error
+
+
+def test_the_executor_does_not_start_without_a_ceiling(monkeypatch, tmp_path):
+    """A fixed lot with no ceiling cannot accept any signal; say so at boot."""
+    handle = _start_with(monkeypatch, tmp_path, MIRROR_FIXED_LOTS="0.03")
+
+    assert handle.executor is None
+    assert "MIRROR_MAX_TRADE_RISK_USD is not set" in handle.error
+
+
+def test_the_executor_starts_when_both_numbers_are_configured(monkeypatch, tmp_path):
+    """The happy path, so the two refusals above mean something."""
+    handle = _start_with(monkeypatch, tmp_path, MIRROR_FIXED_LOTS="0.03",
+                         MIRROR_MAX_TRADE_RISK_USD="50")
+    try:
+        assert handle.error is None, handle.error
+        assert handle.executor is not None
+        assert handle.executor.fixed_lots == pytest.approx(0.03)
+        assert handle.executor.max_trade_risk_usd == pytest.approx(50.0)
+    finally:
+        if handle.stop_event is not None:
+            handle.stop_event.set()
+        if handle.thread is not None:
+            handle.thread.join(timeout=5)
+
+
+def test_execution_mode_reports_a_missing_lot_as_blocking(tmp_path, monkeypatch):
+    """The status must not describe a mode the executor refuses to run in."""
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    monkeypatch.delenv("MIRROR_FIXED_LOTS", raising=False)
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "50")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["execution_sizing_ready"] is False
+    assert "MIRROR_FIXED_LOTS is not set" in intake["execution_sizing_problem"]
+    assert intake["sizing"]["ready"] is False
+    assert intake["sizing"]["blocks_execution"] is True
+
+
+def test_paper_mode_is_not_reported_as_blocked_by_a_missing_lot(tmp_path, monkeypatch):
+    """The paper mirror may size from equity; only execution may not."""
+    monkeypatch.delenv("MIRROR_EXECUTE", raising=False)
+    monkeypatch.delenv("MIRROR_FIXED_LOTS", raising=False)
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["sizing"]["ready"] is True
+    assert intake["sizing"].get("blocks_execution") is None
+    assert intake["execution_sizing_ready"] is False
+
+
+def test_execution_mode_with_a_complete_rule_is_ready(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "0.03")
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "50")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["execution_sizing_ready"] is True
+    assert intake["execution_sizing_problem"] == ""
+    assert intake["sizing"]["ready"] is True
+
+
+def test_execution_mode_reports_a_missing_lot_as_blocking(tmp_path, monkeypatch):
+    """The status must not describe a mode the executor refuses to run in."""
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    monkeypatch.delenv("MIRROR_FIXED_LOTS", raising=False)
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "50")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["execution_sizing_ready"] is False
+    assert "MIRROR_FIXED_LOTS is not set" in intake["execution_sizing_problem"]
+    assert intake["sizing"]["ready"] is False
+    assert intake["sizing"]["blocks_execution"] is True
+
+
+def test_paper_mode_is_not_reported_as_blocked_by_a_missing_lot(tmp_path, monkeypatch):
+    """The paper mirror may size from equity; only execution may not."""
+    monkeypatch.delenv("MIRROR_EXECUTE", raising=False)
+    monkeypatch.delenv("MIRROR_FIXED_LOTS", raising=False)
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["sizing"]["ready"] is True
+    assert intake["sizing"].get("blocks_execution") is None
+    assert intake["execution_sizing_ready"] is False
+
+
+def test_execution_mode_with_a_complete_rule_is_ready(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "0.03")
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "50")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json")
+
+    intake = service.intake_limits()
+    assert intake["execution_sizing_ready"] is True
+    assert intake["execution_sizing_problem"] == ""
+    assert intake["sizing"]["ready"] is True

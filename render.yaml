@@ -16,6 +16,19 @@
 # pinging /healthz every few minutes prevents most spin-downs, but Render may
 # still restart a free service at any time, and any gap is recovered on restart
 # by the cursor plus the database's uniqueness constraint.
+#
+# --- how to read the values below -----------------------------------------
+# Every value here is a BLUEPRINT DEFAULT. It is what this file asks for, not a
+# measurement of a running service and not a value checked against a real
+# account. Two kinds are marked inline:
+#
+#   BLUEPRINT DEFAULT  - chosen here, never verified against a broker.
+#   VERIFY BEFORE USE  - must be read off the destination account and confirmed
+#                        before this file is used for anything but a demo.
+#
+# A value that has been verified against a real account should be changed here
+# only after being checked against the broker's own specification, and the
+# comment should say which account and when.
 services:
   - type: web
     name: rade-mirror
@@ -53,6 +66,32 @@ services:
       - key: TELEGRAM_NOTIFY_CHAT_ID
         sync: false
       - key: MIRROR_EQUITY             # paper equity; never guessed
+        sync: false
+
+      # --- sizing ---------------------------------------------------------
+      # BLUEPRINT DEFAULT: the confirmed size, 0.03 lots. When this is set the
+      # size is exactly this number or the signal is refused. There is no
+      # partial mode: the pipeline never rounds, clamps, substitutes another
+      # size, or silently skips. A refusal names the condition that failed and
+      # is recorded in the ledger.
+      #
+      # REQUIRED FOR EXECUTION. With MIRROR_EXECUTE=1 the executor refuses to
+      # start if this is unset: there is no fallback to risk-fraction sizing,
+      # because "size each order from equity" is the opposite of "exactly 0.03
+      # lots or refuse". The service logs why and reports executor: not started.
+      - key: MIRROR_FIXED_LOTS
+        value: "0.03"
+      # VERIFY BEFORE USE, and deliberately left empty. A fixed lot is not a
+      # risk limit: 0.03 lots on a 10-unit stop and 0.03 on a 30-unit stop are
+      # the same order and three times the money. This ceiling is what turns the
+      # lot into a limit, so it has no default here. While it is empty the
+      # fixed-lot rule refuses EVERY signal with a named reason, which is the
+      # intended fail-closed behaviour, not a bug. It cannot be set until the
+      # destination's contract size, lot step and account currency are known.
+      #
+      # REQUIRED FOR EXECUTION. The executor does not start without it, rather
+      # than running a copier that refuses every signal while looking healthy.
+      - key: MIRROR_MAX_TRADE_RISK_USD
         sync: false
 
       # --- non-secret settings ---
@@ -144,7 +183,13 @@ services:
         value: "0.02"
       - key: MIRROR_MAX_DRAWDOWN_FRACTION # of the peak equity
         value: "0.05"
-      - key: MIRROR_MAX_SPREAD            # price units; XAUUSD is ~0.2
+      # VERIFY BEFORE USE. Both are in PRICE UNITS, not points or pips, and the
+      # value below is far too wide for the instrument this channel trades:
+      # XAUUSD's normal spread is about 0.2, so a limit of 5 accepts a book
+      # roughly 25 times wider than normal. That is not a filter. The value is
+      # left as it is rather than guessed at, because a number invented here
+      # would look like a verified one.
+      - key: MIRROR_MAX_SPREAD
         value: "5"
       - key: MIRROR_MAX_SLIPPAGE          # price units from the published entry
         value: "5"

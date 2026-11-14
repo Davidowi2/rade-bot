@@ -234,7 +234,8 @@ def test_the_engine_refuses_to_submit_a_stale_signal(tmp_path):
     ledger = SQLiteIntentLedger(tmp_path / "e.sqlite")
     broker = FakeBroker()
     engine = ExecutionEngine(broker=broker, ledger=ledger,
-                             notifier=RecordingNotifier(), log=lambda line: None)
+                             notifier=RecordingNotifier(), log=lambda line: None,
+                             fixed_lots=0.03, max_trade_risk_usd=50.0)
     msg = message(age_s=900, mid=888)
     result = evaluate(msg)
 

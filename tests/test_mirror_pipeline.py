@@ -398,3 +398,105 @@ def test_counts_group_by_disposition(tmp_path):
                  quote=MarketQuote(3915, 3915, NOW))
     process_once(message("hello", mid=101), ledger=ledger, instrument=INSTRUMENT, risk=RISK)
     assert ledger.counts() == {"paper_intent": 1, "ignored": 1}
+
+
+# ---------------------------------------------------------------------------
+# fixed-lot sizing (the confirmed rule)
+# ---------------------------------------------------------------------------
+
+
+def fixed_risk(*, lots=0.03, ceiling=50.0, fraction=0.005):
+    return RiskConfig(10_000, fraction, 2.0, fixed_lots=lots,
+                      max_trade_risk_usd=ceiling)
+
+
+def fixed_evaluated(*, text=VALID, risk=None):
+    return evaluate_message(
+        message(text), instrument=INSTRUMENT, risk=risk or fixed_risk(),
+        quote=MarketQuote(3915, 3915, NOW),
+    )
+
+
+def test_a_fixed_lot_is_the_size_and_not_a_risk_fraction_of_equity():
+    result = fixed_evaluated()
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.03
+    assert result.order_intent["sizing_mode"] == "fixed_lots"
+    assert result.order_intent["fixed_lots"] == 0.03
+
+
+def test_the_intent_records_which_rule_produced_the_size():
+    result = fixed_evaluated()
+    intent = result.order_intent
+    assert intent["sizing_mode"] == "fixed_lots"
+    assert intent["max_trade_risk_usd"] == 50.0
+    # The fraction is inert in this mode, and the intent says so by recording
+    # the mode rather than leaving a reader to assume it was used.
+    assert intent["risk_fraction"] == 0.005
+
+
+def test_a_missing_ceiling_blocks_the_signal_and_says_so():
+    result = fixed_evaluated(risk=fixed_risk(ceiling=None))
+    assert result.status == "blocked"
+    assert result.order_intent is None
+    assert "no per-trade USD risk ceiling" in result.reason
+
+
+def test_stop_risk_above_the_ceiling_blocks_the_signal():
+    # 0.03 x 100 units x 10 price units = $30 against a $25 ceiling.
+    result = fixed_evaluated(risk=fixed_risk(ceiling=25.0))
+    assert result.status == "blocked"
+    assert result.order_intent is None
+    assert "$30.00" in result.reason
+
+
+def test_a_fixed_lot_below_the_broker_minimum_is_blocked_not_skipped():
+    instrument = InstrumentSpec("XAUUSD", 100, 0.01, 0.05, 50, units_confirmed=True)
+    result = evaluate_message(message(), instrument=instrument,
+                              risk=fixed_risk(), quote=MarketQuote(3915, 3915, NOW))
+    assert result.status == "blocked", "a refusal, not a quiet skip"
+    assert result.order_intent is None
+    assert "below the broker's minimum" in result.reason
+
+
+def test_a_fixed_lot_above_the_broker_maximum_is_blocked_not_clamped():
+    instrument = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 0.02, units_confirmed=True)
+    result = evaluate_message(message(), instrument=instrument,
+                              risk=fixed_risk(), quote=MarketQuote(3915, 3915, NOW))
+    assert result.status == "blocked"
+    assert result.order_intent is None
+    assert "above the broker's maximum" in result.reason
+
+
+def test_a_fixed_lot_that_is_not_on_the_step_is_blocked():
+    result = fixed_evaluated(risk=fixed_risk(lots=0.035))
+    assert result.status == "blocked"
+    assert result.order_intent is None
+    assert "not representable" in result.reason
+
+
+def test_the_fixed_lot_mode_does_not_validate_an_unused_risk_fraction():
+    """A fraction that would block risk-fraction sizing must not block this."""
+    result = fixed_evaluated(risk=fixed_risk(fraction=0.0))
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.03
+
+
+def test_an_entry_past_tp1_is_still_tradeable():
+    """TP1 is no longer an exit, so a market beyond it is not a refusal."""
+    result = evaluate_message(
+        message(), instrument=INSTRUMENT, risk=fixed_risk(),
+        quote=MarketQuote(3909, 3909, NOW),
+    )
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.03
+
+
+def test_an_entry_already_past_the_final_target_is_sent_to_review():
+    result = evaluate_message(
+        message(), instrument=INSTRUMENT, risk=fixed_risk(),
+        quote=MarketQuote(3899, 3899, NOW),
+    )
+    assert result.status == "manual_review"
+    assert "final target" in result.reason
+    assert result.order_intent is None

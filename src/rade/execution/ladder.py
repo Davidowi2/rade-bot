@@ -5,18 +5,31 @@ taking profit and moving the stop. It contains no broker calls and no I/O: it
 is arithmetic over numbers, so it can be tested exhaustively before any of it
 is trusted with an order.
 
-The agreed policy, which this module implements literally:
+Two policies live here. Exactly one of them is the confirmed behaviour; the
+other is retained because tests exercise it directly and because a policy that
+takes profit in thirds may be wanted again later.
 
-* **Three or more targets** — close a third at TP1, move the stop to
-  breakeven, close a third at TP2, move the stop to TP1, and let the rest
-  close at TP3. Targets beyond TP3 are ignored, and the ignore is recorded
-  rather than silent.
-* **Two targets** — close half at TP1, move the stop to breakeven, and let the
-  rest close at TP2.
-* **One target** — close the whole position at that target.
+**``hold_to_final`` — the confirmed policy** (``docs/23`` §4):
 
-Two rules make the plan safe to execute:
+* **Two or more targets** — hold the whole position through the first target.
+  When price passes it, move the stop to that first target. Nothing is closed
+  at any intermediate target. The full position closes at the final target,
+  which is attached to the order at the broker.
+* **One target** — close the whole position at that target. There is no earlier
+  target to pass, so no earlier stop move is invented.
 
+**``ladder`` — the earlier policy, retained but not the default:**
+
+* Three or more targets close a third at TP1, move the stop to breakeven, close
+  a third at TP2, move the stop to TP1, and let the rest close at TP3.
+* Two targets close half at TP1, move the stop to breakeven, rest at TP2.
+* One target closes the whole position.
+
+Three rules apply to both:
+
+* **A leg's ``action`` says what it does.** A leg that only moves the stop
+  closes nothing, and is marked as such rather than being inferred from a zero
+  quantity — inferring it is how a stop move becomes an accidental full close.
 * **Quantities are rounded down to the broker's step.** Rounding up would
   close more than the plan allows. A quantity that rounds below the broker's
   minimum is a *block*, not a smaller close: the policy is not quietly
@@ -38,9 +51,28 @@ STOP_TARGET = "target"
 
 StopAfterKind = Literal["none", "breakeven", "target"]
 
+#: What a leg does when its target is reached.
+#:
+#: ``close`` sends a partial close for ``quantity``. ``stop_move`` closes
+#: nothing and only moves the stop. ``broker_target`` is the final target: the
+#: broker's attached take profit closes it, and the manager only confirms it.
+ACTION_CLOSE = "close"
+ACTION_STOP_MOVE = "stop_move"
+ACTION_BROKER_TARGET = "broker_target"
+
+LegAction = Literal["close", "stop_move", "broker_target"]
+
+#: The confirmed policy: hold through the first target, close at the last.
+POLICY_HOLD_TO_FINAL = "hold_to_final"
+
+#: The earlier policy: take profit in thirds (or halves), moving the stop after
+#: each partial close. Not the default.
+POLICY_LADDER = "ladder"
+
 #: The maximum number of targets the ladder acts on. Anything beyond this is
 #: ignored and recorded.
 MAX_LADDER_TARGETS = 3
+
 
 
 class LadderError(RuntimeError):
@@ -58,16 +90,31 @@ class ExitLeg:
     target: float
     #: The share of the *original* size closed at this target.
     fraction: float
-    #: The quantity to close, rounded down to the broker's step.
+    #: The quantity to close, rounded down to the broker's step. Zero on a leg
+    #: that only moves the stop.
     quantity: float
     #: True when this project sends the close order. The final leg is False:
     #: the broker's attached take profit closes it, and that is what keeps the
     #: position protected through a monitoring outage.
     managed: bool
+    #: What this leg does. Explicit, because a leg with ``quantity == 0`` and
+    #: ``managed == False`` would otherwise be read as "close the remainder",
+    #: which is the opposite of what a stop-move leg means.
+    action: LegAction = ACTION_CLOSE
     stop_after_kind: StopAfterKind = STOP_NONE
     stop_after_value: float | None = None
     #: What should be left open after this leg, for the verification step.
     expected_remaining_after: float = 0.0
+
+    @property
+    def closes_quantity(self) -> bool:
+        """Whether reaching this leg's target closes any part of the position."""
+        return self.action != ACTION_STOP_MOVE and self.quantity > 0
+
+    @property
+    def moves_stop(self) -> bool:
+        return self.stop_after_kind != STOP_NONE
+
 
     def stop_after(self, *, fill_price: float) -> float | None:
         """The stop to apply once this leg has closed.
@@ -108,13 +155,20 @@ class ExitPlan:
     def description(self) -> str:
         parts = []
         for leg in self.legs:
-            action = "close" if leg.managed else "close (broker target)"
+            if leg.action == ACTION_STOP_MOVE:
+                parts.append(f"hold in full, stop to {leg.target:g} once price "
+                             f"passes {leg.target:g}")
+                continue
+            if leg.action == ACTION_BROKER_TARGET:
+                parts.append(f"close all {leg.quantity:g} at {leg.target:g} "
+                             "(broker target)")
+                continue
             stop = ""
             if leg.stop_after_kind == STOP_BREAKEVEN:
                 stop = ", then stop to breakeven"
             elif leg.stop_after_kind == STOP_TARGET and leg.stop_after_value is not None:
                 stop = f", then stop to {leg.stop_after_value:g}"
-            parts.append(f"{action} {leg.quantity:g} at {leg.target:g}{stop}")
+            parts.append(f"close {leg.quantity:g} at {leg.target:g}{stop}")
         text = "; ".join(parts)
         if self.ignored_targets:
             ignored = ", ".join(f"{t:g}" for t in self.ignored_targets)
@@ -147,10 +201,86 @@ def _fraction_for(index: int, count: int) -> float:
     return 1.0
 
 
+def _hold_to_final_plan(*, side: str, entry: float, stop: float,
+                        used: list[float], ignored: tuple[float, ...],
+                        size: float, lot_step: float,
+                        min_lot: float) -> ExitPlan:
+    """Build the confirmed policy: hold through the first target, close at the last.
+
+    Two legs at most. The first moves the stop and closes nothing; the second is
+    the final target, which the broker's attached take profit closes. With a
+    single target there is nothing to pass on the way, so no earlier stop move
+    is invented and the position simply closes there.
+    """
+    count = len(used)
+    final_target = float(used[-1])
+    closing_quantity = round(float(size), 8)
+
+    if closing_quantity + 1e-9 < min_lot:
+        raise LadderError(
+            f"the position of {size:g} lots is below the broker's minimum of "
+            f"{min_lot:g}; the exit could not be placed"
+        )
+
+    legs: list[ExitLeg] = []
+    if count == 1:
+        legs.append(ExitLeg(
+            label="tp1",
+            target=float(used[0]),
+            fraction=1.0,
+            quantity=closing_quantity,
+            managed=False,
+            action=ACTION_BROKER_TARGET,
+            stop_after_kind=STOP_NONE,
+            expected_remaining_after=0.0,
+        ))
+    else:
+        first = float(used[0])
+        legs.append(ExitLeg(
+            label="tp1",
+            target=first,
+            fraction=0.0,
+            quantity=0.0,
+            managed=False,
+            action=ACTION_STOP_MOVE,
+            stop_after_kind=STOP_TARGET,
+            stop_after_value=first,
+            expected_remaining_after=round(float(size), 8),
+        ))
+        legs.append(ExitLeg(
+            label=f"tp{count}",
+            target=final_target,
+            fraction=1.0,
+            quantity=closing_quantity,
+            managed=False,
+            action=ACTION_BROKER_TARGET,
+            stop_after_kind=STOP_NONE,
+            expected_remaining_after=0.0,
+        ))
+
+    return ExitPlan(
+        policy=POLICY_HOLD_TO_FINAL,
+        side=side,
+        entry=float(entry),
+        initial_stop=float(stop),
+        final_target=final_target,
+        total_size=round(float(size), 8),
+        lot_step=float(lot_step),
+        min_lot=float(min_lot),
+        legs=tuple(legs),
+        ignored_targets=ignored,
+    )
+
+
 def build_exit_plan(*, side: str, entry: float, stop: float,
                     targets: list[float], size: float,
-                    lot_step: float, min_lot: float) -> ExitPlan:
-    """Build the ladder for one trade, or raise :class:`LadderError`.
+                    lot_step: float, min_lot: float,
+                    policy: str = POLICY_HOLD_TO_FINAL) -> ExitPlan:
+    """Build the exit plan for one trade, or raise :class:`LadderError`.
+
+    ``policy`` selects between the confirmed behaviour and the earlier
+    take-profit-in-thirds behaviour. The default is the confirmed one; the
+    earlier policy is only built when it is asked for by name.
 
     The plan is built against the *original* size. At execution time the
     manager checks the live position against the plan before it closes
@@ -164,6 +294,8 @@ def build_exit_plan(*, side: str, entry: float, stop: float,
         raise LadderError(f"the broker's quantity step must be positive, got {lot_step!r}")
     if min_lot <= 0:
         raise LadderError(f"the broker's minimum quantity must be positive, got {min_lot!r}")
+    if policy not in {POLICY_HOLD_TO_FINAL, POLICY_LADDER}:
+        raise LadderError(f"unknown exit policy {policy!r}")
 
     ordered = list(targets)
     if not ordered:
@@ -175,6 +307,12 @@ def build_exit_plan(*, side: str, entry: float, stop: float,
 
     used = ordered[:MAX_LADDER_TARGETS]
     ignored = tuple(float(t) for t in ordered[MAX_LADDER_TARGETS:])
+
+    if policy == POLICY_HOLD_TO_FINAL:
+        return _hold_to_final_plan(side=side, entry=entry, stop=stop, used=used,
+                                   ignored=ignored, size=float(size),
+                                   lot_step=float(lot_step),
+                                   min_lot=float(min_lot))
 
     count = len(used)
     if count >= 3:
@@ -235,6 +373,7 @@ def build_exit_plan(*, side: str, entry: float, stop: float,
             fraction=fraction,
             quantity=quantity,
             managed=managed,
+            action=(ACTION_BROKER_TARGET if is_final else ACTION_CLOSE),
             stop_after_kind=stop_kind,
             stop_after_value=stop_value,
             expected_remaining_after=round(remaining, 8),
