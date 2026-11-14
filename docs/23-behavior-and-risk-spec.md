@@ -48,7 +48,7 @@ Marking convention:
 | **C2** | Use exactly 0.03 lots, or refuse. No resizing, rounding to another size, clamping, or silent skip. | CONFIRMED · IMPLEMENTED | `sizing.py` (`check_fixed_lot`), `mirror_pipeline.py` |
 | **C3** | Hold through TP1. Do not close any quantity at TP1 or TP2. | CONFIRMED · IMPLEMENTED | `ladder.py` (`_hold_to_final_plan`), `engine.py` (`ACTION_STOP_MOVE` branch) |
 | **C4** | Move the stop once price passes TP1. | CONFIRMED · IMPLEMENTED | `ladder.py` (`ACTION_STOP_MOVE` leg, triggered at the first target) |
-| **C4a** | *Where* the stop moves to — **breakeven at the actual fill price**. | **CONFIRMED 2026-11-14** | `ladder.py` (`STOP_BREAKEVEN` on the first leg) |
+| **C4a** | *Where* the stop moves to — **TP1**. | **CONFIRMED** | `ladder.py` (`STOP_TARGET` = first target) |
 | **C5** | Close the remaining position at the final target (TP3 when present). | CONFIRMED · IMPLEMENTED | final leg `ACTION_BROKER_TARGET`; the broker's attached TP closes it |
 | **C6** | Refuse rather than adjust when the size is invalid. | CONFIRMED · IMPLEMENTED | ten refusal conditions in `check_fixed_lot` |
 | **C7** | No concealment, no evasion of the firm's controls. | CONFIRMED · HOLDS | nothing in the codebase disguises the activity |
@@ -110,8 +110,7 @@ For a signal with two or more targets:
 1. Enter at market. The initial stop and the **final** target are attached to the
    order at the broker.
 2. Hold the full position through TP1. **Nothing is closed at TP1.**
-3. When price passes TP1, move the stop **to breakeven (the actual fill
-   price)**. **Nothing is closed.**
+3. When price passes TP1, move the stop **to TP1**. **Nothing is closed.**
 4. Hold through TP2. **Nothing is closed, and no event is emitted.**
 5. The whole position closes at the final target, via the broker's attached take
    profit.
@@ -144,25 +143,31 @@ that fragmentation problem no longer exists.
 These are the points where the confirmation did not decide, and the implementer
 did. **They are not agreed, and they should be confirmed or overruled.**
 
-### A1 — RESOLVED 2026-11-14: the stop moves to breakeven, not to TP1
+### A1 — RESOLVED: the stop moves to **TP1**, not to breakeven
 
-The account holder confirmed on 2026-11-14 that "move the stop there after price
-passes TP1" means **breakeven at the actual fill price**, not the TP1 level.
+The instruction is "move the stop there after price passes TP1" — *there* is
+TP1. That is the implemented policy.
 
-Measured over the 1,972-setup archived cohort (`scripts/compare_exit_policies.py`,
-30-minute bars, pessimistic tie-breaking):
+An earlier revision of this section recorded breakeven as the decision, on the
+strength of `scripts/compare_exit_policies.py`. **That measurement was wrong.**
+The script signed the stop-loss branches as `entry - stop`, so a long that was
+stopped out was booked as a **+1R win**. The error inverted the ranking. It was
+found by an external review on 2026-11-14 and fixed; the script now has tests
+that pin a stopped-out long to −1R (`tests/test_exit_policy_comparison.py`).
 
-| Policy after TP1 | Mean R | Win rate | Exits |
-|---|---|---|---|
-| Stop to TP1 | +0.169 | 49.3% | 834 initial-SL, 992 stopped at TP1, 141 final TP |
-| Stop to breakeven | **+0.812** | **57.8%** | 834 initial-SL, 823 breakeven, 291 final TP |
+Corrected measurement over the 1,972-setup archived cohort (30-minute bars,
+pessimistic tie-breaking):
 
-The TP1 stop is too tight: price reaches TP1 and ordinary noise knocks the stop
-out 992 times before the final target. Breakeven leaves room and reaches the
-final target 291 times versus 141.
+| Policy after TP1 | Mean R | Win rate | Total R | Exits |
+|---|---|---|---|---|
+| **Stop to TP1** | **+0.160** | **58.0%** | **+315** | 834 initial-SL, 992 stopped at TP1, 141 final TP |
+| Stop to breakeven | −0.021 | 16.2% | −42 | 834 initial-SL, 823 breakeven, 291 final TP |
 
-**Caveat:** this is a 30-minute-bar model using the published stop and entry,
-not real fills. Re-run on 1-minute data before treating it as settled.
+TP1 wins clearly. Breakeven gives up 992 small locked profits for 291 shots at
+the final target, and the trade is worse for it.
+
+**Caveat:** a 30-minute-bar model using the published stop and entry, not real
+fills. Re-run on 1-minute data before treating it as settled.
 
 ### A2 — "Price passes TP1" means the exit-side quote touches it
 
@@ -412,16 +417,12 @@ and none of it exists.
 
 ## 9. What has and has not been validated
 
-The current bot has **no Blueberry adapter**. It has never connected to
-Blueberry, never read a Blueberry quote, and never placed a Blueberry order. Zero
-references to the platform exist in the repository.
+The destination adapter exists and has been used **read-only** against the
+Blueberry account: the instrument specification, account id, balance and
+positions were read on 2026-11-14. **No order has ever been placed.** The
+account has been connected to, never traded.
 
-Building toward Blueberry does **not** mean it has been validated there. The demo
-account exercised is a TradeLocker demo, and the instrument specification,
-contract size, lot rules, account currency and execution behaviour of the
-destination are all still **UNKNOWN**.
-
-Specifically, none of the following has been demonstrated:
+What has **not** been demonstrated:
 
 * that a signal arrives by live push (all measured deliveries came from the 15 s
   poll);
@@ -436,8 +437,8 @@ file, and about what the account holder has decided.
 
 ## 10. What I need from you
 
-1. ~~**A1 — confirm the stop moves to TP1, not to breakeven.**~~ **RESOLVED
-   2026-11-14: breakeven at the actual fill.** See §5 A1 for the measurement.
+1. ~~**A1 — confirm the stop moves to TP1, not to breakeven.**~~ **RESOLVED:
+   the stop moves to TP1.** See §5 A1 for the corrected measurement.
 2. **S2 — the per-trade USD ceiling.** Cannot be set until the destination's
    contract size, lot step and account currency are verified, plus the firm's
    daily loss limit.

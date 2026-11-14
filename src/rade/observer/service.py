@@ -892,10 +892,24 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
         units_raw = os.getenv("MIRROR_CONTRACT_UNITS_PER_LOT", "").strip()
         confirmed_units = float(units_raw) if (confirmed and units_raw) else None
 
+        # The destination must be pinned. An unset pin is the same fail-open
+        # class as an unset ceiling: the copier would run against whatever
+        # account the credentials resolve to, which is not a risk a
+        # configuration should be allowed to take by omission.
+        dest_server = os.getenv("MIRROR_DESTINATION_SERVER", "").strip()
+        dest_account = _optional_int(os.getenv("MIRROR_DESTINATION_ACCOUNT_ID", ""))
+        if not dest_server or dest_account is None:
+            handle.error = (
+                "the destination is not pinned: MIRROR_DESTINATION_SERVER and "
+                "MIRROR_DESTINATION_ACCOUNT_ID must both be set; the executor "
+                "does not start")
+            log(f"executor not started: {handle.error}")
+            return handle
+
         gateway = tradelocker_gateway_from_env(
             confirmed_contract_units=confirmed_units,
-            expected_server=(os.getenv("MIRROR_DESTINATION_SERVER", "").strip() or None),
-            expected_account_id=_optional_int(os.getenv("MIRROR_DESTINATION_ACCOUNT_ID", "")),
+            expected_server=dest_server,
+            expected_account_id=dest_account,
             log=log)
         handle.spec = gateway.spec()
         if not handle.spec.verified:

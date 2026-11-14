@@ -92,7 +92,7 @@ services:
       # REQUIRED FOR EXECUTION. The executor does not start without it, rather
       # than running a copier that refuses every signal while looking healthy.
       - key: MIRROR_MAX_TRADE_RISK_USD
-        sync: false
+        value: "25"
 
       # --- non-secret settings ---
       - key: MIRROR_RUN_LISTENER

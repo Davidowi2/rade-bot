@@ -778,6 +778,10 @@ def _start_with(monkeypatch, tmp_path, **env):
     monkeypatch.setenv("MIRROR_EXECUTE", "1")
     for key in ("MIRROR_FIXED_LOTS", "MIRROR_MAX_TRADE_RISK_USD"):
         monkeypatch.delenv(key, raising=False)
+    # The destination pin is set by default so the tests that are about the
+    # size rule can pass; the pin has its own test below.
+    monkeypatch.setenv("MIRROR_DESTINATION_SERVER", "BLBRY")
+    monkeypatch.setenv("MIRROR_DESTINATION_ACCOUNT_ID", "2346225")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -805,6 +809,27 @@ def test_the_executor_does_not_start_without_a_ceiling(monkeypatch, tmp_path):
 
     assert handle.executor is None
     assert "MIRROR_MAX_TRADE_RISK_USD is not set" in handle.error
+
+
+def test_the_executor_does_not_start_without_a_pinned_destination(monkeypatch, tmp_path):
+    """An unset pin is fail-open: the copier would run against whatever
+    account the credentials resolve to, which is not a risk a configuration
+    should take by omission."""
+    for key in ("MIRROR_DESTINATION_SERVER", "MIRROR_DESTINATION_ACCOUNT_ID"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "0.03")
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "25")
+
+    import rade.execution.gateway as gateway_module
+    monkeypatch.setattr(gateway_module, "tradelocker_gateway_from_env",
+                        lambda **kwargs: _VerifiedGateway())
+
+    from rade.observer.service import start_executor_if_configured
+    handle = start_executor_if_configured(SQLiteIntentLedger(tmp_path / "l.sqlite"))
+
+    assert handle.executor is None
+    assert "destination is not pinned" in handle.error
 
 
 def test_the_executor_starts_when_both_numbers_are_configured(monkeypatch, tmp_path):
