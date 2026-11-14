@@ -178,9 +178,9 @@ services:
       # ones are off at startup and reports them on /api/status as "disabled",
       # so a switched-off control cannot be mistaken for a passing one.
       - key: MIRROR_MAX_OPEN_POSITIONS
-        value: "3"
+        value: "1"
       - key: MIRROR_DAILY_LOSS_FRACTION   # of the day's opening equity
-        value: "0.02"
+        value: "0.01"
       - key: MIRROR_MAX_DRAWDOWN_FRACTION # of the peak equity
         value: "0.05"
       # VERIFY BEFORE USE. Both are in PRICE UNITS, not points or pips, and the
@@ -210,3 +210,10 @@ services:
         sync: false
       - key: TRADELOCKER_ENV
         value: "demo"
+      # The approved destination. When both are set, a server or account that
+      # does not match is refused before any broker call. The account id is a
+      # secret-side setting: it is not committed here.
+      - key: MIRROR_DESTINATION_SERVER
+        value: "BLBRY"
+      - key: MIRROR_DESTINATION_ACCOUNT_ID
+        sync: false

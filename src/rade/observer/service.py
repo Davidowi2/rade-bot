@@ -59,6 +59,23 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY
 
 
+def _optional_int(raw: str) -> int | None:
+    """An optional integer setting, or ``None`` when it is not set.
+
+    A value that is present but not an integer stops the service rather than
+    being ignored: a destination pinned to a garbled account id is a
+    configuration error, not a reason to run unpinned.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        raise SystemExit(
+            f"an integer is required, got {text!r}") from None
+
+
 def _fixed_lots() -> float | None:
     """The confirmed fixed size, or ``None`` when none is configured.
 
@@ -876,7 +893,10 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
         confirmed_units = float(units_raw) if (confirmed and units_raw) else None
 
         gateway = tradelocker_gateway_from_env(
-            confirmed_contract_units=confirmed_units, log=log)
+            confirmed_contract_units=confirmed_units,
+            expected_server=(os.getenv("MIRROR_DESTINATION_SERVER", "").strip() or None),
+            expected_account_id=_optional_int(os.getenv("MIRROR_DESTINATION_ACCOUNT_ID", "")),
+            log=log)
         handle.spec = gateway.spec()
         if not handle.spec.verified:
             handle.error = (

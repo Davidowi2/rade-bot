@@ -48,7 +48,7 @@ from rade.execution.engine import (
     ManagedTrade,
     trade_id_for,
 )
-from rade.execution.gateway import TradeLockerGateway, assert_demo_environment
+from rade.execution.gateway import TradeLockerGateway, assert_demo_environment, assert_destination
 from rade.execution.ladder import (
     LadderError,
     build_exit_plan,
@@ -495,6 +495,33 @@ def test_a_demo_name_pointing_at_the_live_host_is_refused():
 
 def test_the_demo_environment_is_accepted():
     assert_demo_environment("demo", "https://demo.tradelocker.com")
+
+
+def test_the_approved_destination_is_accepted():
+    assert_destination("demo", "https://demo.tradelocker.com",
+                       server="BLBRY", account_id=2346225,
+                       expected_server="BLBRY", expected_account_id=2346225)
+
+
+def test_a_wrong_server_is_refused_even_on_the_demo_host():
+    with pytest.raises(BrokerRefused, match="approved destination"):
+        assert_destination("demo", "https://demo.tradelocker.com",
+                           server="PLEXY", account_id=2346225,
+                           expected_server="BLBRY", expected_account_id=2346225)
+
+
+def test_a_wrong_account_is_refused():
+    with pytest.raises(BrokerRefused, match="refusing TradeLocker account"):
+        assert_destination("demo", "https://demo.tradelocker.com",
+                           server="BLBRY", account_id=2509174,
+                           expected_server="BLBRY", expected_account_id=2346225)
+
+
+def test_the_destination_guard_still_refuses_a_live_host():
+    with pytest.raises(BrokerRefused, match="not the demo host"):
+        assert_destination("demo", "https://live.tradelocker.com",
+                           server="BLBRY", account_id=2346225,
+                           expected_server="BLBRY", expected_account_id=2346225)
 
 
 class _FakeClient:

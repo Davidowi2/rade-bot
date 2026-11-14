@@ -42,6 +42,7 @@ __all__ = [
     "DEMO_HOST",
     "TradeLockerGateway",
     "assert_demo_environment",
+    "assert_destination",
     "tradelocker_gateway_from_env",
 ]
 
@@ -86,6 +87,37 @@ def assert_demo_environment(environment: str, base_url: str) -> None:
         )
 
 
+def assert_destination(environment: str, base_url: str, server: str,
+                       account_id: int, *,
+                       expected_server: str | None = None,
+                       expected_account_id: int | None = None) -> None:
+    """Refuse anything that is not the approved destination account.
+
+    The environment/host guard is applied first and is never skipped. On top of
+    it, when an expected server or account is configured, both must match. A
+    destination that is not the one a human approved fails loudly rather than
+    spending money somewhere else.
+    """
+    assert_demo_environment(environment, base_url)
+    if expected_server:
+        got = (server or "").strip()
+        if got != expected_server.strip():
+            raise BrokerRefused(
+                f"refusing a TradeLocker server {got!r}; the approved destination "
+                f"is {expected_server!r}"
+            )
+    if expected_account_id:
+        try:
+            got_id = int(account_id or 0)
+        except (TypeError, ValueError):
+            got_id = 0
+        if got_id != int(expected_account_id):
+            raise BrokerRefused(
+                f"refusing TradeLocker account {got_id}; the approved destination "
+                f"is {int(expected_account_id)}"
+            )
+
+
 def _epoch_ms_to_dt(value: Any) -> datetime | None:
     try:
         ms = float(value)
@@ -107,8 +139,15 @@ class TradeLockerGateway:
                  symbol: str = "XAUUSD",
                  confirmed_contract_units: float | None = None,
                  account_id: int | None = None,
+                 server: str = "",
+                 expected_server: str | None = None,
+                 expected_account_id: int | None = None,
                  log: Callable[[str], None] = print):
-        assert_demo_environment(environment, base_url)
+        assert_destination(environment, base_url, server=server or "",
+                           account_id=account_id if account_id is not None else int(
+                               getattr(client, "account_id", 0) or 0),
+                           expected_server=expected_server,
+                           expected_account_id=expected_account_id)
         self.client = client
         self.environment = environment
         self.base_url = base_url
@@ -467,17 +506,24 @@ def _iter_rows(frame: Any):
 
 def tradelocker_gateway_from_env(*, symbol: str = "XAUUSD",
                                  confirmed_contract_units: float | None = None,
+                                 expected_server: str | None = None,
+                                 expected_account_id: int | None = None,
                                  log: Callable[[str], None] = print) -> TradeLockerGateway:
     """Build the gateway from the backend environment.
 
     Credentials are read from the settings object and never returned, logged
-    or stored.
+    or stored. ``expected_server`` and ``expected_account_id`` pin the
+    destination; when they are set, a mismatch is refused before any call.
     """
     from rade.config.settings import get_settings
 
     settings = get_settings()
     base_url = settings.tradelocker_base_url
-    assert_demo_environment(settings.tradelocker_env, base_url)
+    assert_destination(settings.tradelocker_env, base_url,
+                       server=settings.tradelocker_server,
+                       account_id=settings.tradelocker_account_id,
+                       expected_server=expected_server,
+                       expected_account_id=expected_account_id)
 
     from tradelocker import TLAPI
 
@@ -496,6 +542,9 @@ def tradelocker_gateway_from_env(*, symbol: str = "XAUUSD",
         symbol=symbol,
         confirmed_contract_units=confirmed_contract_units,
         account_id=settings.tradelocker_account_id,
+        server=settings.tradelocker_server,
+        expected_server=expected_server,
+        expected_account_id=expected_account_id,
         log=log,
     )
     return gateway
