@@ -12,9 +12,9 @@ takes profit in thirds may be wanted again later.
 **``hold_to_final`` — the confirmed policy** (``docs/23`` §4):
 
 * **Two or more targets** — hold the whole position through the first target.
-  When price passes it, move the stop to that first target. Nothing is closed
-  at any intermediate target. The full position closes at the final target,
-  which is attached to the order at the broker.
+  When price passes it, move the stop to **breakeven (the actual fill price)**.
+  Nothing is closed at any intermediate target. The full position closes at the
+  final target, which is attached to the order at the broker.
 * **One target** — close the whole position at that target. There is no earlier
   target to pass, so no earlier stop move is invented.
 
@@ -156,8 +156,8 @@ class ExitPlan:
         parts = []
         for leg in self.legs:
             if leg.action == ACTION_STOP_MOVE:
-                parts.append(f"hold in full, stop to {leg.target:g} once price "
-                             f"passes {leg.target:g}")
+                parts.append(f"hold in full, move the stop to breakeven once "
+                             f"price passes {leg.target:g}")
                 continue
             if leg.action == ACTION_BROKER_TARGET:
                 parts.append(f"close all {leg.quantity:g} at {leg.target:g} "
@@ -243,8 +243,8 @@ def _hold_to_final_plan(*, side: str, entry: float, stop: float,
             quantity=0.0,
             managed=False,
             action=ACTION_STOP_MOVE,
-            stop_after_kind=STOP_TARGET,
-            stop_after_value=first,
+            stop_after_kind=STOP_BREAKEVEN,
+            stop_after_value=None,
             expected_remaining_after=round(float(size), 8),
         ))
         legs.append(ExitLeg(

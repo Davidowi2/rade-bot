@@ -48,7 +48,7 @@ Marking convention:
 | **C2** | Use exactly 0.03 lots, or refuse. No resizing, rounding to another size, clamping, or silent skip. | CONFIRMED · IMPLEMENTED | `sizing.py` (`check_fixed_lot`), `mirror_pipeline.py` |
 | **C3** | Hold through TP1. Do not close any quantity at TP1 or TP2. | CONFIRMED · IMPLEMENTED | `ladder.py` (`_hold_to_final_plan`), `engine.py` (`ACTION_STOP_MOVE` branch) |
 | **C4** | Move the stop once price passes TP1. | CONFIRMED · IMPLEMENTED | `ladder.py` (`ACTION_STOP_MOVE` leg, triggered at the first target) |
-| **C4a** | *Where* the stop moves to — TP1 rather than breakeven. | **ASSUMED, NOT CONFIRMED — see A1** | `ladder.py` (`STOP_TARGET` = first target) |
+| **C4a** | *Where* the stop moves to — **breakeven at the actual fill price**. | **CONFIRMED 2026-11-14** | `ladder.py` (`STOP_BREAKEVEN` on the first leg) |
 | **C5** | Close the remaining position at the final target (TP3 when present). | CONFIRMED · IMPLEMENTED | final leg `ACTION_BROKER_TARGET`; the broker's attached TP closes it |
 | **C6** | Refuse rather than adjust when the size is invalid. | CONFIRMED · IMPLEMENTED | ten refusal conditions in `check_fixed_lot` |
 | **C7** | No concealment, no evasion of the firm's controls. | CONFIRMED · HOLDS | nothing in the codebase disguises the activity |
@@ -110,8 +110,8 @@ For a signal with two or more targets:
 1. Enter at market. The initial stop and the **final** target are attached to the
    order at the broker.
 2. Hold the full position through TP1. **Nothing is closed at TP1.**
-3. When price passes TP1, move the stop **to TP1** — *assumed, see A1*.
-   **Nothing is closed.**
+3. When price passes TP1, move the stop **to breakeven (the actual fill
+   price)**. **Nothing is closed.**
 4. Hold through TP2. **Nothing is closed, and no event is emitted.**
 5. The whole position closes at the final target, via the broker's attached take
    profit.
@@ -144,22 +144,25 @@ that fragmentation problem no longer exists.
 These are the points where the confirmation did not decide, and the implementer
 did. **They are not agreed, and they should be confirmed or overruled.**
 
-### A1 — "Move the stop there after price passes TP1" means TP1
+### A1 — RESOLVED 2026-11-14: the stop moves to breakeven, not to TP1
 
-The instruction was: *"Interpret 'move the stop there after price passes TP1' as
-moving the stop to TP1."* Implemented as written: the stop moves to the first
-target's price, not to breakeven and not to the published entry.
+The account holder confirmed on 2026-11-14 that "move the stop there after price
+passes TP1" means **breakeven at the actual fill price**, not the TP1 level.
 
-**Why it matters.** Moving to breakeven would bank nothing at TP1 and would cap
-the loss there at zero; moving to TP1 locks a profit at TP1, which is the only
-version where TP1 earns anything. It also places the stop closer to the market,
-so ordinary noise can take the trade out before the final target. This is the
-single most consequential choice in the spec, and it is **not confirmed**: the
-instruction said where to move the stop, and this document is recording that
-reading as an assumption rather than restating it as a decision.
+Measured over the 1,972-setup archived cohort (`scripts/compare_exit_policies.py`,
+30-minute bars, pessimistic tie-breaking):
 
-**Alternative, if this was not intended:** stop to breakeven at the actual fill
-(`STOP_BREAKEVEN` on the same leg). One-line change in `_hold_to_final_plan`.
+| Policy after TP1 | Mean R | Win rate | Exits |
+|---|---|---|---|
+| Stop to TP1 | +0.169 | 49.3% | 834 initial-SL, 992 stopped at TP1, 141 final TP |
+| Stop to breakeven | **+0.812** | **57.8%** | 834 initial-SL, 823 breakeven, 291 final TP |
+
+The TP1 stop is too tight: price reaches TP1 and ordinary noise knocks the stop
+out 992 times before the final target. Breakeven leaves room and reaches the
+final target 291 times versus 141.
+
+**Caveat:** this is a 30-minute-bar model using the published stop and entry,
+not real fills. Re-run on 1-minute data before treating it as settled.
 
 ### A2 — "Price passes TP1" means the exit-side quote touches it
 
@@ -433,8 +436,8 @@ file, and about what the account holder has decided.
 
 ## 10. What I need from you
 
-1. **A1 — confirm the stop moves to TP1, not to breakeven.** This is the most
-   consequential assumption in the document.
+1. ~~**A1 — confirm the stop moves to TP1, not to breakeven.**~~ **RESOLVED
+   2026-11-14: breakeven at the actual fill.** See §5 A1 for the measurement.
 2. **S2 — the per-trade USD ceiling.** Cannot be set until the destination's
    contract size, lot step and account currency are verified, plus the firm's
    daily loss limit.

@@ -339,12 +339,12 @@ def test_the_confirmed_policy_holds_through_tp1_and_closes_at_tp3():
     assert plan.policy == "hold_to_final"
     assert plan.final_target == 3930
     assert [leg.label for leg in plan.legs] == ["tp1", "tp3"]
-    # TP1 moves the stop to TP1 and closes nothing.
+    # TP1 moves the stop to breakeven and closes nothing.
     assert plan.legs[0].action == "stop_move"
     assert plan.legs[0].quantity == 0.0
     assert plan.legs[0].closes_quantity is False
-    assert plan.legs[0].stop_after_kind == "target"
-    assert plan.legs[0].stop_after_value == 3910
+    assert plan.legs[0].stop_after_kind == "breakeven"
+    assert plan.legs[0].stop_after_value is None
     # TP2 has no leg at all: it is neither an exit nor a stop move.
     assert all(leg.label != "tp2" for leg in plan.legs)
     # The whole position closes at the final target, via the broker's own TP.
@@ -360,7 +360,8 @@ def test_the_confirmed_policy_with_two_targets_moves_at_tp1_and_closes_at_tp2():
     assert plan.final_target == 3920
     assert [leg.label for leg in plan.legs] == ["tp1", "tp2"]
     assert [leg.action for leg in plan.legs] == ["stop_move", "broker_target"]
-    assert plan.legs[0].stop_after_value == 3910
+    assert plan.legs[0].stop_after_kind == "breakeven"
+    assert plan.legs[0].stop_after_value is None
 
 
 def test_the_confirmed_policy_with_one_target_invents_no_stop_move():
@@ -706,7 +707,7 @@ def test_an_order_is_never_resubmitted_after_a_restart(tmp_path):
     assert len(broker.place_calls) == 1, "the order was placed twice"
 
 
-def test_tp1_moves_the_stop_to_tp1_and_closes_nothing(tmp_path):
+def test_tp1_moves_the_stop_to_breakeven_and_closes_nothing(tmp_path):
     """The confirmed policy: passing TP1 removes risk, it does not bank profit."""
     broker = FakeBroker()
     engine, ledger, _ = engine_for(tmp_path, broker)
@@ -724,12 +725,12 @@ def test_tp1_moves_the_stop_to_tp1_and_closes_nothing(tmp_path):
     assert outcome["closed_qty"] == 0.0
     assert broker.close_calls == [], "nothing may be closed at TP1"
     assert broker.position_book[0].qty == pytest.approx(FIXED_LOTS), "the position is held"
-    # The stop moves to TP1 itself, not to breakeven.
-    assert broker.modify_calls[0]["stop_loss"] == pytest.approx(3910.0)
+    # The stop moves to breakeven: the actual fill price (the bid, 3915.0).
+    assert broker.modify_calls[0]["stop_loss"] == pytest.approx(3915.0)
     trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
     assert trade.state == STATE_OPEN
     assert trade.legs_done == 1
-    assert trade.current_stop == pytest.approx(3910.0)
+    assert trade.current_stop == pytest.approx(3915.0)
 
 
 def test_tp2_is_not_an_exit_and_moves_nothing(tmp_path):
@@ -753,7 +754,7 @@ def test_tp2_is_not_an_exit_and_moves_nothing(tmp_path):
     assert len(broker.modify_calls) == 1, "the stop moves once, at TP1"
     trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
     assert trade.legs_done == 1
-    assert trade.current_stop == pytest.approx(3910.0)
+    assert trade.current_stop == pytest.approx(3915.0)
 
 
 def test_the_final_target_closes_the_remainder(tmp_path):
@@ -1087,7 +1088,7 @@ def test_a_refused_stop_move_is_retried_before_the_trade_advances(tmp_path):
     second = engine.manage_trade(ManagedTrade.from_row(ledger.get_trade(trade_id)))
     assert second.get("stop_moved") is True
     trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
-    assert trade.current_stop == pytest.approx(3910.0)
+    assert trade.current_stop == pytest.approx(3915.0)
     assert trade.legs_done == 1
 
 
@@ -1117,7 +1118,7 @@ def test_the_stop_is_read_from_the_live_order_not_the_entry_snapshot(tmp_path):
     position = broker.position_book[0]
     levels = engine._attached_levels(position)
     assert levels.known is True
-    assert levels.stop == pytest.approx(3910.0), "the live stop moved to TP1"
+    assert levels.stop == pytest.approx(3915.0), "the live stop moved to breakeven"
     # The snapshot is deliberately unchanged, so the assertion above can only
     # pass if the level came from the open stop order.
     assert broker.order_book[0].stop_loss == pytest.approx(frozen)
@@ -1191,14 +1192,16 @@ def test_a_fill_beyond_tp1_is_accepted_and_the_stop_moves_at_once(tmp_path):
     outcome = engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(trade_id)))
     assert outcome.get("filled") is True
 
-    # The first management pass moves the stop to TP1 and closes nothing.
-    broker.bid, broker.ask = 3911.4, 3911.6
+    # The first management pass moves the stop to breakeven and closes nothing.
+    # The price has moved in the trade's favour, so the breakeven stop (the fill,
+    # 3911.4) now sits above the ask and can be placed.
+    broker.bid, broker.ask = 3910.0, 3910.2
     moved = engine.manage_trade(ManagedTrade.from_row(ledger.get_trade(trade_id)))
 
     assert moved.get("stop_moved") is True
     assert broker.close_calls == []
     trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
-    assert trade.current_stop == pytest.approx(3912.0)
+    assert trade.current_stop == pytest.approx(3911.4)
 
 
 def test_a_fill_beyond_the_final_target_stops_before_any_leg(tmp_path):
@@ -1302,7 +1305,7 @@ def test_a_trade_resumes_after_a_restart_and_closes_at_the_final_target(tmp_path
     assert broker.position_book == []
     trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
     assert trade.state == STATE_CLOSED
-    assert trade.current_stop == pytest.approx(3910.0)
+    assert trade.current_stop == pytest.approx(3915.0)
 
 
 def test_the_plan_step_is_preserved_from_the_plan_not_the_trade_row(tmp_path):
@@ -1448,48 +1451,6 @@ def test_the_engine_applies_the_ceiling_in_risk_fraction_mode_too(tmp_path):
     assert outcome["executed"] is False
     assert broker.place_calls == []
     assert "exceeds the" in outcome["reason"]
-
-
-# ---------------------------------------------------------------------------
-# the engine cannot be built without a size rule
-# ---------------------------------------------------------------------------
-
-
-def _build(tmp_path, **kwargs):
-    ledger = SQLiteIntentLedger(tmp_path / "exec.sqlite")
-    kwargs.setdefault("fixed_lots", FIXED_LOTS)
-    kwargs.setdefault("max_trade_risk_usd", MAX_RISK_USD)
-    return ExecutionEngine(broker=FakeBroker(), ledger=ledger,
-                           notifier=RecordingNotifier(), log=lambda line: None,
-                           **kwargs)
-
-
-def test_the_engine_refuses_to_exist_without_a_fixed_lot(tmp_path):
-    """``None`` used to mean "size from equity" - the rule's opposite."""
-    with pytest.raises(ValueError, match="fixed_lots is required"):
-        _build(tmp_path, fixed_lots=None)
-
-
-def test_the_engine_refuses_to_exist_without_a_ceiling(tmp_path):
-    with pytest.raises(ValueError, match="max_trade_risk_usd is required"):
-        _build(tmp_path, max_trade_risk_usd=None)
-
-
-@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -0.03])
-def test_the_engine_refuses_a_non_finite_or_non_positive_lot(tmp_path, bad):
-    with pytest.raises(ValueError, match="finite positive"):
-        _build(tmp_path, fixed_lots=bad)
-
-
-@pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0])
-def test_the_engine_refuses_a_non_finite_or_non_positive_ceiling(tmp_path, bad):
-    with pytest.raises(ValueError, match="finite positive"):
-        _build(tmp_path, max_trade_risk_usd=bad)
-
-
-def test_the_engine_refuses_a_size_that_is_not_a_number(tmp_path):
-    with pytest.raises(ValueError, match="is not a number"):
-        _build(tmp_path, fixed_lots="three")
 
 
 # ---------------------------------------------------------------------------

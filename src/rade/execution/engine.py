@@ -1218,8 +1218,13 @@ class ExecutionEngine:
             return self._ensure_final_target(trade, position)
 
         old_stop = trade.current_stop
+        # The stop is triggered on the side that closes the position: the bid
+        # for a long (a sell stop), the ask for a short (a buy stop). Comparing
+        # a short's stop against the bid would accept a level the market has
+        # already passed.
+        reference = float(quote.ask) if trade.side == "sell" else float(quote.bid)
         ok, reason = stop_move_is_risk_reducing(
-            side=trade.side, old_stop=old_stop, new_stop=new_stop, price=quote.bid)
+            side=trade.side, old_stop=old_stop, new_stop=new_stop, price=reference)
         if not ok:
             # Two different failures wear the same shape and need different
             # answers. A move that would widen the risk means the plan itself
