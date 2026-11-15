@@ -1,7 +1,8 @@
 # 26 — Live execution spec (BLBRY, real orders)
 
-Status: **SPECIFICICATION, not built.** Nothing here is implemented until the
-account holder approves it. Written 2026-11-14.
+Status: **PARTIALLY BUILT.** G4, G5 and G6 are implemented (measured guard
+values, startup report, drawdown fraction from the challenge rule). G1–G3 and
+G7 remain, and are the live flip described in §7. Written 2026-11-14.
 
 ## 1. What "live" actually means here
 
@@ -139,3 +140,37 @@ None of these is optional. In order:
    (`LOGIN`/`PASSWORD`/`SERVER`) and a PLEXY set (`TRADELOCKER_*`,
    account 2509174). Confirm BLBRY is the trading destination and PLEXY is
    dropped.
+
+## 7. The live flip (runbook)
+
+Not a redeploy of new code. Five environment values change, in this order, and
+each one is a gate:
+
+| # | Setting | Paper | Live |
+|---|---|---|---|
+| 1 | `MIRROR_DESTINATION_SERVER` | `BLBRY` | `BLBRY` |
+| 2 | `MIRROR_DESTINATION_ACCOUNT_ID` | `2346225` | `2346225` |
+| 3 | `MIRROR_CONTRACT_UNITS_PER_LOT` | `100` | `100` |
+| 4 | `MIRROR_CONTRACT_UNITS_CONFIRMED` | `0` | `1` |
+| 5 | `MIRROR_QUOTE_PROVIDER` | `none` | `tradelocker` |
+| 6 | `MIRROR_EXECUTE` | `0` | `1` |
+
+Steps:
+
+1. Confirm the broker still reports `lotSize` 100 for XAUUSD on account
+   2346225 (`scripts/check_blueberry_account.py`). If it differs, stop.
+2. Confirm the account has **no open positions and no pending orders**. If it
+   has, resolve them first; the executor reconciles on startup but does not
+   close anything it did not open.
+3. Set rows 1–5 only. Redeploy. The startup report must say
+   `contract 100/lot CONFIRMED` and `mode: PAPER (no orders)`.
+4. Post a known signal to a private test channel and confirm the bot records
+   it, sizes it at 0.03 lots, notifies it, and places **no** order.
+5. Only then set row 6 (`MIRROR_EXECUTE=1`) and redeploy. The startup report
+   must say `mode: EXECUTING ORDERS`.
+6. Watch the first trade end to end: entry, stop attached, stop move to TP1,
+   final target.
+
+To stop: set `MIRROR_EXECUTE=0` and redeploy (hard stop), or set
+`execution_paused=1` in `mirror_control` (stops new entries, open trades are
+still managed to closure).

@@ -24,6 +24,7 @@ from rade.observer.service import (
     _max_trade_risk_usd,
     main as service_main,
     make_handler,
+    send_startup_report,
     start_listener_if_configured,
 )
 
@@ -887,3 +888,59 @@ def test_execution_mode_with_a_complete_rule_is_ready(tmp_path, monkeypatch):
     assert intake["execution_sizing_ready"] is True
     assert intake["execution_sizing_problem"] == ""
     assert intake["sizing"]["ready"] is True
+
+
+def test_the_startup_report_says_what_is_switched_off(tmp_path, monkeypatch):
+    """A silent boot and a broken boot look the same; the report must name
+    every guard and say DISABLED when one is off."""
+    monkeypatch.setenv("MIRROR_EXECUTE", "0")
+    monkeypatch.setenv("MIRROR_CHANNEL", "@XAUUSD_FOREX4")
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "0.03")
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "25")
+    monkeypatch.setenv("MIRROR_MAX_SPREAD", "1.0")
+    monkeypatch.setenv("MIRROR_MAX_SLIPPAGE", "2.0")
+    monkeypatch.setenv("MIRROR_MAX_DRAWDOWN_FRACTION", "0.0335")
+    monkeypatch.setenv("MIRROR_MAX_OPEN_POSITIONS", "1")
+    monkeypatch.setenv("MIRROR_DAILY_LOSS_FRACTION", "0")  # switched off
+    heartbeat = tmp_path / "hb.json"
+    heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=heartbeat)
+
+    sent: list[str] = []
+
+    class Recorder:
+        def send(self, text: str):
+            sent.append(text)
+            return True, "ok"
+
+    logs: list[str] = []
+    send_startup_report(service, Recorder(), logs.append)
+
+    assert len(sent) == 1
+    report = sent[0]
+    assert "RADE BOT - STARTUP" in report
+    assert "mode: PAPER (no orders)" in report
+    assert "@XAUUSD_FOREX4" in report
+    assert "daily loss DISABLED" in report
+    assert "max spread 1.0" in report
+    assert "max slippage 2.0" in report
+    assert "max drawdown 0.0335" in report
+    assert any("startup report sent: True" in line for line in logs)
+
+
+def test_the_startup_report_names_the_executing_mode(tmp_path, monkeypatch):
+    """The single most important line: is this process allowed to spend money."""
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json",
+                            executor=object())
+    sent: list[str] = []
+
+    class Recorder:
+        def send(self, text: str):
+            sent.append(text)
+            return True, "ok"
+
+    send_startup_report(service, Recorder(), lambda _line: None)
+    assert "mode: EXECUTING ORDERS" in sent[0]

@@ -1012,6 +1012,62 @@ def _management_loop(engine: Any, stop_event: Any, log: Any, interval_s: float) 
             log(f"management: {summary}")
 
 
+def send_startup_report(service: "MirrorService", notifier: Any, log: Any) -> None:
+    """Tell the operator, on the phone, what this process is and is not doing.
+
+    A service that boots silently and a service that is broken look the same
+    from the outside. This message exists so the first thing the operator knows
+    is the state, including which safety controls are switched off.
+    """
+    cfg = service.config_summary()
+    ex = service.execution_state()
+    listener = service.listener_state()
+
+    lines = ["RADE BOT - STARTUP"]
+    lines.append("mode: EXECUTING ORDERS" if cfg["broker_writes"]
+                 else "mode: PAPER (no orders)")
+
+    spec = ex.get("broker")
+    if spec:
+        state = "CONFIRMED" if spec.get("verified") else "UNCONFIRMED"
+        lines.append(
+            f"destination: {spec.get('environment')} "
+            f"account {spec.get('account_number') or '?'} "
+            f"contract {spec.get('contract_units_per_lot'):g}/lot {state}")
+        if not spec.get("verified") and spec.get("unconfirmed_reason"):
+            lines.append(f"  not verified: {spec['unconfirmed_reason']}")
+    else:
+        lines.append("destination: none (paper mirror)")
+
+    lines.append(f"listener: {listener.get('phase') or 'unknown'} "
+                 f"(heartbeat {listener.get('heartbeat_age_s')}s)")
+    lines.append(f"channel: {os.getenv('MIRROR_CHANNEL') or os.getenv('TELEGRAM_CHANNEL') or 'unset'}")
+
+    def guard(name: str, label: str, unit: str = "") -> str:
+        raw = (os.getenv(name) or "").strip()
+        try:
+            off = not raw or float(raw) == 0.0
+        except ValueError:
+            off = True
+        return f"{label} {'DISABLED' if off else raw + unit}"
+
+    lines.append("guards: " + " | ".join([
+        guard("MIRROR_MAX_OPEN_POSITIONS", "max positions"),
+        guard("MIRROR_DAILY_LOSS_FRACTION", "daily loss"),
+        guard("MIRROR_MAX_DRAWDOWN_FRACTION", "max drawdown"),
+        guard("MIRROR_MAX_SPREAD", "max spread"),
+        guard("MIRROR_MAX_SLIPPAGE", "max slippage"),
+    ]))
+    paused = ex.get("paused") or {}
+    lines.append(f"pause switch: {'PAUSED' if paused.get('paused') else 'armed'}")
+    lines.append(f"store: {'Supabase' if cfg['supabase'] else 'LOCAL SQLITE'}")
+    lines.append(f"ceiling: ${os.getenv('MIRROR_MAX_TRADE_RISK_USD') or 'unset'} | "
+                 f"lots: {os.getenv('MIRROR_FIXED_LOTS') or 'unset'}")
+
+    ok, detail = notifier.send("\n".join(lines))
+    log(f"startup report sent: {ok} {detail or ''}".strip())
+
+
 def main(argv: list[str] | None = None) -> int:
     port = int(os.getenv("PORT", "8000"))
     token = os.getenv("MIRROR_API_TOKEN", "").strip()
@@ -1051,6 +1107,22 @@ def main(argv: list[str] | None = None) -> int:
                              executor=execution.executor,
                              broker_spec=execution.spec,
                              execution_error=execution.error)
+
+    # Loud startup: the operator learns what this process is from the phone,
+    # not from a log they have to go and read.
+    from rade.observer.notify import notifier_from_env
+    notifier = notifier_from_env()
+    if notifier is None:
+        print("WARNING: notifications are not configured "
+              "(TELEGRAM_BOT_TOKEN / TELEGRAM_NOTIFY_CHAT_ID); "
+              "the bot will be silent", file=sys.stderr, flush=True)
+    else:
+        try:
+            send_startup_report(service, notifier, lambda line: print(line, flush=True))
+        except Exception as exc:
+            print(f"startup report failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr, flush=True)
+
     handler = make_handler(service, log=lambda line: print(line, flush=True))
     intake = service.intake_limits()
     print(f"intake limits: {intake}", flush=True)

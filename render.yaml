@@ -182,17 +182,19 @@ services:
       - key: MIRROR_DAILY_LOSS_FRACTION   # of the day's opening equity
         value: "0.01"
       - key: MIRROR_MAX_DRAWDOWN_FRACTION # of the peak equity
-        value: "0.05"
-      # VERIFY BEFORE USE. Both are in PRICE UNITS, not points or pips, and the
-      # value below is far too wide for the instrument this channel trades:
-      # XAUUSD's normal spread is about 0.2, so a limit of 5 accepts a book
-      # roughly 25 times wider than normal. That is not a filter. The value is
-      # left as it is rather than guessed at, because a number invented here
-      # would look like a verified one.
+        value: "0.0335"
+      # Measured on the destination feed 2026-11-14 (BLBRY, XAUUSD).
+      # Spread: 30 quote samples over 60 s; min = p50 = p99 = max = 0.31. The
+      # broker quotes a fixed spread, so 1.0 is a tripwire for a real widening
+      # rather than a filter that fires on noise.
       - key: MIRROR_MAX_SPREAD
-        value: "5"
+        value: "1.0"
+      # Slippage: price units from the published entry, over the 15 s catch-up
+      # poll. The 2026-11-14 re-measure returned 0.000 because the market was
+      # closed; the value below is the p95 of the earlier open-market run
+      # (1.55) plus headroom. RE-MEASURE with the market open before trusting it.
       - key: MIRROR_MAX_SLIPPAGE          # price units from the published entry
-        value: "5"
+        value: "2.0"
       # The channel re-posts the same call as a second message with its own id,
       # and the id-based uniqueness constraint cannot see that they are one
       # idea. An identical text inside this window is copied once. 0 disables

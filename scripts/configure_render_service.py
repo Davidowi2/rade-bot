@@ -37,7 +37,22 @@ def telegram_string_session() -> str:
     return StringSession.save(client.session)
 
 
-def build_env_vars() -> list[dict]:
+def broker_credentials() -> dict:
+    """The approved destination credentials: the BLBRY funded account.
+
+    ``BLUEBERRY_*`` is preferred; the older ``Login``/``Password``/``Server``
+    names and the ``TRADELOCKER_*`` set are accepted as fallbacks so a
+    configuration is never silently read from the wrong account.
+    """
+    return {
+        "email": env("BLUEBERRY_EMAIL") or env("Login"),
+        "password": env("BLUEBERRY_PASSWORD") or env("Password"),
+        "server": env("BLUEBERRY_SERVER") or env("Server") or "BLBRY",
+        "account": env("BLUEBERRY_ACCOUNT_ID") or env("TRADELOCKER_ACCOUNT_ID"),
+    }
+
+
+def build_env_vars() -> dict[str, str]:
     session = telegram_string_session()
     api_token = "mirror_" + pysecrets.token_urlsafe(32)
 
@@ -73,12 +88,11 @@ def build_env_vars() -> list[dict]:
         # --- pre-trade risk controls ----------------------------------------
         "MIRROR_MAX_OPEN_POSITIONS": "1",
         "MIRROR_DAILY_LOSS_FRACTION": "0.01",
-        "MIRROR_MAX_DRAWDOWN_FRACTION": "0.05",
-        "MIRROR_MAX_SPREAD": "5",
-        "MIRROR_MAX_SLIPPAGE": "5",
+        "MIRROR_MAX_DRAWDOWN_FRACTION": "0.0335",
+        "MIRROR_MAX_SPREAD": "1.0",
+        "MIRROR_MAX_SLIPPAGE": "2.0",
         # --- broker ---------------------------------------------------------
         "TRADELOCKER_ENV": "demo",
-        "MIRROR_DESTINATION_SERVER": env("TRADELOCKER_SERVER", "PLEXY"),
         # --- secrets --------------------------------------------------------
         "MIRROR_API_TOKEN": api_token,
         "SUPABASE_URL": env("SUPABASE_URL"),
@@ -88,13 +102,17 @@ def build_env_vars() -> list[dict]:
         "TELEGRAM_SESSION": session,
         "TELEGRAM_BOT_TOKEN": env("TELEGRAM_BOT_TOKEN"),
         "TELEGRAM_NOTIFY_CHAT_ID": "8077145837",
-        "TRADELOCKER_EMAIL": env("TRADELOCKER_EMAIL"),
-        "TRADELOCKER_PASSWORD": env("TRADELOCKER_PASSWORD"),
-        "TRADELOCKER_SERVER": env("TRADELOCKER_SERVER"),
-        "TRADELOCKER_ACCOUNT_ID": env("TRADELOCKER_ACCOUNT_ID"),
-        "MIRROR_DESTINATION_ACCOUNT_ID": env("TRADELOCKER_ACCOUNT_ID"),
     }
-    return [{"key": k, "value": v} for k, v in values.items() if v]
+    creds = broker_credentials()
+    values.update({
+        "TRADELOCKER_EMAIL": creds["email"],
+        "TRADELOCKER_PASSWORD": creds["password"],
+        "TRADELOCKER_SERVER": creds["server"],
+        "TRADELOCKER_ACCOUNT_ID": creds["account"],
+        "MIRROR_DESTINATION_SERVER": creds["server"],
+        "MIRROR_DESTINATION_ACCOUNT_ID": creds["account"],
+    })
+    return {k: v for k, v in values.items() if v}
 
 
 def main() -> int:
@@ -122,7 +140,7 @@ def main() -> int:
         print(r.text[:500])
         return 1
 
-    env_vars = build_env_vars()
+    env_vars = [{"key": k, "value": v} for k, v in build_env_vars().items()]
     r = requests.put(f"{API}/services/{SERVICE_ID}/env-vars", headers=headers,
                      json=env_vars, timeout=60)
     print("env vars put:", r.status_code, f"({len(env_vars)} keys)")
