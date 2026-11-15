@@ -39,7 +39,7 @@ is deliberately fail-closed, plus four gaps below.
 - Listener → parser → pipeline → Supabase ledger → per-result notification.
 - Kill switch table (`mirror_control`) with `set_paused` / `pause_state`.
 - Startup reconciliation against the broker.
-- 481 tests passing; the service is **deployed and live in paper mode**.
+- 483 tests passing; the service is **deployed and live in paper mode**.
 
 ## 3. What is missing for a real order
 
