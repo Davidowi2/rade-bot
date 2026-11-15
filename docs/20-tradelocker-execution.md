@@ -1,5 +1,13 @@
 # 20 — TradeLocker DEMO execution path
 
+> **SUPERSEDED on the exit policy.** This document describes a partial-exit
+> ladder (thirds at TP1/TP2, stop to breakeven) at §147-148, §397-398 and
+> §440. That is **not** what is implemented. The implemented policy is
+> **hold the full position, move the stop to TP1 after price passes TP1, close
+> nothing until the final target**. See `docs/23-behavior-and-risk-spec.md`
+> §5 A1, which also records the measurement (and the sign error that briefly
+> reversed it). Everything else in this document stands.
+
 **Status: step 1 of the execution spec — the safeguard audit — is complete.
 The broker write surface did not exist before this work; §1 records what was
 already enforced and what was missing.**

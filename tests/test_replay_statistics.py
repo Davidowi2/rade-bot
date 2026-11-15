@@ -193,7 +193,7 @@ def test_policy_c_can_lose_runner_eligibility_to_its_own_stop():
     assert r_c.exit_reason == "tp1_stop" and not r_c.ftl_open
 
 
-def test_paired_stats_reports_both_populations():
+def test_paired_stats_counts_ftl_touches_by_population():
     live = mk_bars([(100, 101, 99, 100), (100, 106, 100, 105), (105, 111, 104, 110)])
     dead = mk_bars([(100, 101, 99, 100), (100, 100.5, 89, 90)])
     setups = [mk_setup(setup_id=1), mk_setup(setup_id=2)]

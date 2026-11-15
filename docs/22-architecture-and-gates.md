@@ -1,5 +1,12 @@
 # 22 — Architecture and the gates to a verified mirror
 
+> **SUPERSEDED on the exit ladder.** The ladder row in §"What exists" describes
+> a partial-exit ladder (thirds at TP1/TP2, stop to breakeven) and already
+> carries a note that it does not match the recorded preference. The
+> implemented policy is **hold the full position, move the stop to TP1 after
+> price passes TP1, close nothing until the final target** — see
+> `docs/23-behavior-and-risk-spec.md` §5 A1.
+
 Status: **plan only**. Nothing in this document has been implemented, deployed or
 committed as a change to behaviour. It records what the repository does today,
 what the intended behaviour is, and the ordered evidence required to close the
