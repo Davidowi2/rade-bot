@@ -37,11 +37,15 @@ class RiskLimits:
     mistaken for a passing one.
     """
 
-    max_open_positions: int = 3
-    daily_loss_fraction: float = 0.02
-    max_drawdown_fraction: float = 0.05
-    max_spread: float = 5.0
-    max_slippage: float = 5.0
+    # These defaults are deliberately the *tight* values, not permissive ones.
+    # An unset environment variable must not silently widen a limit: the
+    # measured values are spread 1.0 (the broker quotes 0.31), slippage 2.0,
+    # drawdown 3.35% (the challenge's 6% floor) and one position at a time.
+    max_open_positions: int = 1
+    daily_loss_fraction: float = 0.01
+    max_drawdown_fraction: float = 0.0335
+    max_spread: float = 1.0
+    max_slippage: float = 2.0
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "RiskLimits":

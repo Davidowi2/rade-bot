@@ -140,7 +140,7 @@ def test_unusable_equity_blocks_because_no_size_can_be_computed():
 def test_a_disabled_check_is_reported_as_disabled_not_as_passing():
     described = RiskLimits(max_spread=0.0, max_slippage=0.0).describe()
     assert set(described["disabled"]) == {"max_spread", "max_slippage"}
-    assert described["max_open_positions"] == 3
+    assert described["max_open_positions"] == 1
 
 
 def test_limits_come_from_the_environment_and_reject_nonsense():
@@ -152,6 +152,21 @@ def test_limits_come_from_the_environment_and_reject_nonsense():
         RiskLimits.from_env({"MIRROR_MAX_SPREAD": "wide"})
     with pytest.raises(GuardError):
         RiskLimits.from_env({"MIRROR_MAX_OPEN_POSITIONS": "-1"})
+
+
+def test_an_unset_limit_falls_back_to_the_tight_value_not_a_permissive_one():
+    """A missing environment variable must not silently widen a limit.
+
+    The defaults are the measured values, so a deployment that forgets to set
+    ``MIRROR_MAX_SPREAD`` gets a 1.0 tripwire rather than a 5.0 hole.
+    """
+    limits = RiskLimits.from_env({})
+    assert limits.max_open_positions == 1
+    assert limits.daily_loss_fraction == pytest.approx(0.01)
+    assert limits.max_drawdown_fraction == pytest.approx(0.0335)
+    assert limits.max_spread == pytest.approx(1.0)
+    assert limits.max_slippage == pytest.approx(2.0)
+    assert limits.describe()["disabled"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +385,7 @@ def test_the_guard_state_reports_what_is_enforced(tmp_path):
     engine.limits = RiskLimits(max_spread=0.0)
     described = engine.guard_state()
     assert described["limits"]["disabled"] == ["max_spread"]
-    assert described["limits"]["max_open_positions"] == 3
+    assert described["limits"]["max_open_positions"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -406,9 +421,14 @@ def test_the_same_call_posted_twice_is_copied_once(tmp_path):
 
 
 def test_a_different_call_is_still_copied(tmp_path):
-    """The duplicate check is about identical text, not about frequency."""
+    """The duplicate check is about identical text, not about frequency.
+
+    The position limit is raised here so the test is about the duplicate rule:
+    with the production limit of one, a second call is correctly refused.
+    """
     broker = FakeBroker()
     engine, ledger, _ = engine_for(tmp_path, broker)
+    engine.limits = RiskLimits(max_open_positions=2, max_slippage=10.0)
     engine.execute(evaluated(sell(3915), mid=890), envelope(sell(3915), mid=890))
     other = sell(3918)
     outcome = engine.execute(evaluated(other, mid=891), envelope(other, mid=891))

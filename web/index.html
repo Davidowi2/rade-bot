@@ -3,98 +3,207 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rade mirror — demo account</title>
+<meta name="referrer" content="no-referrer">
+<title>Rade mirror</title>
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #5c6370;
-    --line: #dfe3ea; --accent: #1f4e79; --ok: #1c6b3f; --warn: #8a5a00; --bad: #a1231f;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14161a; --panel: #1c1f25; --ink: #e8eaee; --muted: #9aa3b2;
-      --line: #2c313a; --accent: #7fb2e5; --ok: #6fce9a; --warn: #e0b25c; --bad: #f0857f;
-    }
+    --bg: #0a0c0f;
+    --bg-2: #0f1216;
+    --panel: #14181d;
+    --panel-2: #191e24;
+    --line: #232a32;
+    --line-soft: #1c2229;
+    --ink: #e8ebef;
+    --muted: #8b95a3;
+    --faint: #5d6672;
+    --gold: #e0b25c;
+    --gold-dim: #a8843f;
+    --ok: #4ec98a;
+    --bad: #f0655d;
+    --warn: #e0b25c;
+    --radius: 12px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  header {
-    padding: 20px 24px; border-bottom: 1px solid var(--line); background: var(--panel);
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
-  }
-  h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .2px; }
-  .sub { color: var(--muted); font-size: 13px; }
-  main { padding: 20px 24px 48px; max-width: 1100px; margin: 0 auto; }
-  .badges { display: flex; gap: 8px; flex-wrap: wrap; }
-  .badge {
-    font-size: 12px; padding: 3px 9px; border-radius: 999px;
-    border: 1px solid var(--line); color: var(--muted); background: var(--bg);
-  }
-  .badge.warn { color: var(--warn); border-color: var(--warn); }
-  .badge.ok { color: var(--ok); border-color: var(--ok); }
-  .badge.bad { color: var(--bad); border-color: var(--bad); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-  .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
-  .card .value { font-size: 20px; font-weight: 600; margin-top: 4px; }
-  .card .note { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
-  .panel h2 { font-size: 14px; margin: 0; padding: 13px 16px; border-bottom: 1px solid var(--line); font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
-  tr:last-child td { border-bottom: none; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-  .empty { padding: 16px; color: var(--muted); font-size: 13px; }
-  form { display: flex; gap: 8px; flex-wrap: wrap; }
-  input {
-    flex: 1 1 260px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line);
-    background: var(--bg); color: var(--ink); font-size: 14px;
-  }
-  button {
-    padding: 9px 16px; border-radius: 8px; border: 1px solid var(--accent);
-    background: var(--accent); color: #fff; font-size: 14px; cursor: pointer;
-  }
-  button.ghost { background: transparent; color: var(--accent); }
   .hidden { display: none !important; }
-  .err { color: var(--bad); font-size: 13px; margin-top: 8px; }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+
+  /* ---------------------------------------------------------------- login */
+  #login-view {
+    min-height: 100%; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    background:
+      radial-gradient(1100px 600px at 15% -10%, rgba(224,178,92,.10), transparent 60%),
+      radial-gradient(900px 500px at 90% 110%, rgba(78,120,180,.10), transparent 60%),
+      var(--bg);
+  }
+  .login-card {
+    width: 100%; max-width: 380px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 16px; padding: 30px 28px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.5);
+  }
+  .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 6px; }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 9px; flex: none;
+    background: linear-gradient(140deg, var(--gold), #8a6a2c);
+    display: flex; align-items: center; justify-content: center;
+    color: #1a1408; font-weight: 700; font-size: 16px; letter-spacing: -.5px;
+  }
+  .login-card h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -.2px; }
+  .login-sub { color: var(--muted); font-size: 13px; margin: 4px 0 22px; }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); margin-bottom: 6px;
+  }
+  .field input {
+    width: 100%; padding: 11px 12px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--bg-2); color: var(--ink);
+    font-size: 14px; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  .field input:focus { border-color: var(--gold-dim); box-shadow: 0 0 0 3px rgba(224,178,92,.13); }
+  .login-btn {
+    width: 100%; padding: 11px; border-radius: 9px; border: 0; margin-top: 4px;
+    background: var(--gold); color: #1a1408; font-size: 14px; font-weight: 650;
+    cursor: pointer; transition: filter .15s;
+  }
+  .login-btn:hover { filter: brightness(1.07); }
+  .login-btn:disabled { opacity: .6; cursor: default; }
+  .login-err { color: var(--bad); font-size: 13px; min-height: 18px; margin: 12px 0 0; }
+  .login-note { color: var(--faint); font-size: 12px; margin: 16px 0 0; }
+
+  /* ------------------------------------------------------------- dashboard */
+  header.top {
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    padding: 15px 24px;
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 5;
+  }
+  .title { display: flex; align-items: center; gap: 11px; }
+  .title h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.2px; }
+  .title .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .who { display: flex; align-items: center; gap: 12px; }
+  .who .email { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  .badges { display: flex; gap: 7px; flex-wrap: wrap; }
+  .badge {
+    font-size: 11.5px; padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); background: var(--bg-2);
+    white-space: nowrap;
+  }
+  .badge.ok { color: var(--ok); border-color: rgba(78,201,138,.35); background: rgba(78,201,138,.08); }
+  .badge.warn { color: var(--warn); border-color: rgba(224,178,92,.35); background: rgba(224,178,92,.08); }
+  .badge.bad { color: var(--bad); border-color: rgba(240,101,93,.35); background: rgba(240,101,93,.08); }
+
+  main { padding: 22px 24px 60px; max-width: 1180px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 15px 17px;
+  }
+  .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+  .card .value { font-size: 21px; font-weight: 640; margin-top: 6px; letter-spacing: -.3px; }
+  .card .value.mono { font-size: 17px; }
+  .card .note { font-size: 12px; color: var(--faint); margin-top: 4px; line-height: 1.45; }
+  .card.is-bad .value { color: var(--bad); }
+  .card.is-warn .value { color: var(--warn); }
+  .card.is-ok .value { color: var(--ok); }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; margin-bottom: 14px;
+  }
+  .panel > h2 {
+    font-size: 12px; margin: 0; padding: 12px 17px; border-bottom: 1px solid var(--line-soft);
+    font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 10px 17px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { color: var(--faint); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr[data-click] { cursor: pointer; }
+  tbody tr[data-click]:hover { background: var(--panel-2); }
+  .empty { padding: 20px 17px; color: var(--faint); font-size: 13px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .err { color: var(--bad); font-size: 13px; }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px 17px; }
+  .toolbar input {
+    flex: 1 1 240px; padding: 9px 11px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg-2); color: var(--ink); font-size: 13px;
+    outline: none;
+  }
+  .toolbar input:focus { border-color: var(--gold-dim); }
+  button {
+    padding: 9px 15px; border-radius: 8px; border: 1px solid var(--gold-dim);
+    background: var(--gold); color: #1a1408; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--muted); border-color: var(--line); }
+  button.ghost:hover { color: var(--ink); border-color: var(--faint); }
+  button:disabled { opacity: .45; cursor: default; }
+  .signout {
+    padding: 7px 12px; font-size: 12px; background: transparent; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+  }
+  .signout:hover { color: var(--ink); border-color: var(--faint); }
+  footer.foot { color: var(--faint); font-size: 12px; padding: 8px 2px 0; }
+  .flash {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
+    padding: 10px 16px; font-size: 13px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
 </style>
 </head>
 <body>
-<header>
-  <div>
-    <h1>Rade mirror</h1>
-    <div class="sub">Telegram → validation → demo execution. Read-only view.</div>
-  </div>
-  <div class="badges" id="badges">
-    <span class="badge">loading</span>
-  </div>
-</header>
 
-<main>
-  <section id="gate" class="panel hidden">
-    <h2>Dashboard token</h2>
-    <div style="padding:16px">
-      <form id="gate-form">
-        <input id="token" type="password" autocomplete="off" placeholder="DASHBOARD_TOKEN">
-        <button type="submit">Open</button>
-        <button type="button" class="ghost" id="forget">Forget</button>
-      </form>
-      <div class="err" id="gate-err"></div>
-      <div class="sub" style="margin-top:8px">
-        The token is kept in this tab only. It is checked by the server; it is not the
-        backend or database key.
+<div id="login-view">
+  <form class="login-card" id="login-form" autocomplete="on">
+    <div class="brand">
+      <div class="brand-mark">R</div>
+      <h1>Rade mirror</h1>
+    </div>
+    <div class="login-sub">Telegram signals &rarr; validation &rarr; the BLBRY account.</div>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" type="email" name="username" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button class="login-btn" type="submit" id="login-btn">Sign in</button>
+    <div class="login-err" id="login-err"></div>
+    <div class="login-note">Sessions last 12 hours. This page is the only place the password is typed.</div>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header class="top">
+    <div class="title">
+      <div class="brand-mark">R</div>
+      <div>
+        <h1>Rade mirror</h1>
+        <div class="sub">Telegram &rarr; validation &rarr; execution</div>
       </div>
     </div>
-  </section>
+    <div class="who">
+      <div class="badges" id="badges"><span class="badge">connecting</span></div>
+      <span class="email" id="who"></span>
+      <button class="signout" id="signout">Sign out</button>
+    </div>
+  </header>
 
-  <section id="dash" class="hidden">
-    <div class="grid" id="cards"></div>
+  <main>
+    <section class="grid" id="cards"></section>
 
     <div class="panel">
-      <h2>Broker position — demo account</h2>
+      <h2>Broker position</h2>
       <div id="broker"></div>
     </div>
 
@@ -119,8 +228,10 @@
     </div>
 
     <div class="panel hidden" id="detail-panel">
-      <h2>Trade detail <button type="button" class="ghost" id="detail-close"
-            style="float:right;padding:2px 10px;font-size:12px">close</button></h2>
+      <h2>Trade detail
+        <button type="button" class="ghost" id="detail-close"
+                style="padding:3px 11px;font-size:11px">close</button>
+      </h2>
       <div id="detail"></div>
     </div>
 
@@ -139,41 +250,17 @@
       <div id="events"></div>
     </div>
 
-    <div class="sub" id="foot"></div>
-  </section>
-</main>
+    <footer class="foot" id="foot"></footer>
+  </main>
+</div>
 
 <script>
-const TOKEN_KEY = "rade.dashboard.token";
 let timer = null;
-
-function token() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
-
-async function api(path) {
-  const res = await fetch(path, { headers: { "x-dashboard-token": token() } });
-  if (res.status === 401) throw new Error("unauthorised");
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-  return body;
-}
-
-// The only write the dashboard makes. It reaches /api/pause or /api/resume,
-// which set one boolean in the store; nothing here can place or close an order.
-async function post(path, payload) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "x-dashboard-token": token(), "Content-Type": "application/json" },
-    body: JSON.stringify(payload || {}),
-  });
-  if (res.status === 401) throw new Error("unauthorised");
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-  return body;
-}
+let me = null;
 
 function esc(value) {
-  return String(value == null ? "" : value).replace(/[&<>"']/g, c => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  return String(value == null ? "" : value).replace(/[&<>"]/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
   ));
 }
 
@@ -183,20 +270,80 @@ function shortTime(iso) {
   return isNaN(d) ? esc(iso) : d.toLocaleString();
 }
 
+async function api(path) {
+  const res = await fetch(path, { credentials: "same-origin" });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    // A rejected session is not an error to render: it is the login screen.
+    showLogin();
+    throw new Error("unauthorised");
+  }
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+async function post(path, payload) {
+  const res = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) { showLogin(); throw new Error("unauthorised"); }
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+function flash(message) {
+  const el = document.createElement("div");
+  el.className = "flash";
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function showLogin() {
+  if (timer) { clearInterval(timer); timer = null; }
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("login-view").classList.remove("hidden");
+}
+
+function showApp() {
+  document.getElementById("login-view").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  document.getElementById("who").textContent = me || "";
+}
+
 function badge(status) {
   const cls = status === "paper_intent" ? "ok"
     : (status === "blocked" || status === "conflict") ? "bad"
-    // A stale signal is the listener's problem, not the market's: it arrived
-    // too late to act on. Warning, not failure.
     : (status === "manual_review" || status === "stale") ? "warn" : "";
   return `<span class="badge ${cls}">${esc(status)}</span>`;
 }
 
-function table(rows, columns) {
+function stateBadge(state) {
+  const cls = (state === "open" || state === "partial") ? "ok"
+    : (state === "blocked" || state === "rejected" || state === "review") ? "bad"
+    : state === "closed" ? "" : "warn";
+  return `<span class="badge ${cls}">${esc(state)}</span>`;
+}
+
+function table(rows, columns, clickable) {
   if (!rows.length) return '<div class="empty">Nothing here.</div>';
   const head = columns.map(c => `<th>${esc(c.label)}</th>`).join("");
-  const body = rows.map(r => "<tr>" + columns.map(c => `<td>${c.render(r)}</td>`).join("") + "</tr>").join("");
+  const body = rows.map(r =>
+    `<tr${clickable ? " data-click=\"1\"" : ""}>` +
+    columns.map(c => `<td>${c.render(r)}</td>`).join("") + "</tr>").join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function card(label, value, note, tone) {
+  return `<div class="card ${tone || ""}">
+    <div class="label">${esc(label)}</div>
+    <div class="value">${value}</div>
+    <div class="note">${note || ""}</div>
+  </div>`;
 }
 
 function renderCards(status) {
@@ -205,24 +352,20 @@ function renderCards(status) {
   const total = Object.values(counts).reduce((a, b) => a + (typeof b === "number" ? b : 0), 0);
   const listenerValue = !listener.known ? "unknown"
     : listener.stale ? "stale" : (listener.phase || "unknown");
-  const cards = [
-    { label: "Mode", value: status.paper_only ? "paper" : "demo execution",
-      note: `store: ${esc(status.store || "?")}` },
-    { label: "Listener", value: listenerValue,
-      note: listener.heartbeat_age_s != null ? `heartbeat ${listener.heartbeat_age_s}s ago` : "no heartbeat file",
-      warn: listener.stale || !listener.known },
-    { label: "Events stored", value: String(total),
-      note: Object.entries(counts).filter(([, v]) => typeof v === "number")
-        .map(([k, v]) => `${k} ${v}`).join(" · ") || "none yet" },
-    { label: "Uptime", value: `${Math.round((status.uptime_s || 0) / 60)}m`,
-      note: "this process, not the listener" },
-  ];
-  document.getElementById("cards").innerHTML = cards.map(c => `
-    <div class="card">
-      <div class="label">${esc(c.label)}</div>
-      <div class="value">${esc(c.value)}</div>
-      <div class="note">${c.note}</div>
-    </div>`).join("");
+  const listenerTone = (listener.stale || !listener.known) ? "is-bad"
+    : listener.phase === "listening" ? "is-ok" : "";
+  document.getElementById("cards").innerHTML = [
+    card("Mode", esc(status.paper_only ? "paper" : "executing"),
+      `store ${esc(status.store || "?")}`, status.paper_only ? "" : "is-ok"),
+    card("Listener", esc(listenerValue),
+      listener.heartbeat_age_s != null ? `heartbeat ${esc(listener.heartbeat_age_s)}s ago` : "no heartbeat file",
+      listenerTone),
+    card("Events stored", `<span class="mono">${total}</span>`,
+      Object.entries(counts).filter(([, v]) => typeof v === "number")
+        .map(([k, v]) => `${esc(k)} ${esc(v)}`).join(" · ") || "none yet"),
+    card("Uptime", `${Math.round((status.uptime_s || 0) / 60)}m`,
+      "this process, not the listener"),
+  ].join("");
 }
 
 function renderBadges(status) {
@@ -230,35 +373,28 @@ function renderBadges(status) {
   const broker = exec.broker || {};
   const items = [];
   if (exec.enabled) {
-    items.push('<span class="badge ok">demo execution</span>');
-    items.push(`<span class="badge ${broker.verified ? "ok" : "bad"}">broker spec ${broker.verified ? "verified" : "unverified"}</span>`);
-    items.push(`<span class="badge">${esc(broker.symbol || "?")} · instrument ${esc(broker.instrument_id)}</span>`);
+    items.push('<span class="badge ok">executing</span>');
+    items.push(`<span class="badge ${broker.verified ? "ok" : "bad"}">broker ${broker.verified ? "verified" : "unverified"}</span>`);
+    items.push(`<span class="badge">${esc(broker.symbol || "?")} · ${esc(broker.instrument_id)}</span>`);
   } else {
     items.push('<span class="badge ok">paper only</span>');
     items.push('<span class="badge">broker writes disabled</span>');
   }
-  items.push('<span class="badge bad">live trading disabled</span>');
-  items.push(`<span class="badge ${status.exit_policy === "tp_ladder" ? "ok" : "warn"}">exit policy ${esc(status.exit_policy || "unresolved")}</span>`);
+  items.push(`<span class="badge ${status.exit_policy === "tp_ladder" ? "ok" : "warn"}">exit ${esc(status.exit_policy || "unresolved")}</span>`);
   if (exec.error) items.push('<span class="badge bad">execution error</span>');
   const paused = exec.paused;
-  if (paused && paused.paused === true) {
-    items.push('<span class="badge bad">paused</span>');
-  } else if (paused && paused.paused === null) {
-    items.push('<span class="badge bad">pause state unreadable</span>');
-  }
+  if (paused && paused.paused === true) items.push('<span class="badge bad">paused</span>');
+  else if (paused && paused.paused === null) items.push('<span class="badge bad">pause state unreadable</span>');
   document.getElementById("badges").innerHTML = items.join("");
 }
 
-// The guards are only claimed when the backend says they are running, and any
-// that are switched off are listed as disabled rather than omitted. A control
-// that is off must not read as a control that passed.
+// A control that is switched off must read as off, never as passed.
 function renderGuards(status) {
   const el = document.getElementById("guards");
   const exec = status.execution || {};
   const guards = exec.guards;
   if (!exec.enabled || !guards || !guards.limits) {
-    el.innerHTML = '<div class="empty">No pre-trade controls are running: ' +
-      'the execution path is not enabled.</div>';
+    el.innerHTML = '<div class="empty">No pre-trade controls are running: the execution path is not enabled.</div>';
     return;
   }
   const limits = guards.limits;
@@ -272,18 +408,13 @@ function renderGuards(status) {
     { key: "max_slippage", label: "Max slippage", value: limits.max_slippage },
   ];
   const last = guards.last_verdict;
-  el.innerHTML = `<div class="grid" style="padding:14px 16px;margin:0">` +
-    rows.map(r => `
-      <div class="card">
-        <div class="label">${esc(r.label)}</div>
-        <div class="value">${esc(r.value)}</div>
-        <div class="note">${disabled.has(r.key) ? "disabled by configuration" : "enforced"}</div>
-      </div>`).join("") +
-    `<div class="card">
-       <div class="label">Last pre-trade verdict</div>
-       <div class="value">${last ? (last.allowed ? "passed" : "blocked") : "—"}</div>
-       <div class="note">${esc(last ? last.reason : "no order attempted yet")}</div>
-     </div>` +
+  el.innerHTML = `<div class="grid" style="margin:0">` +
+    rows.map(r => card(r.label, `<span class="mono">${esc(r.value)}</span>`,
+      disabled.has(r.key) ? "disabled by configuration" : "enforced",
+      disabled.has(r.key) ? "is-bad" : "")).join("") +
+    card("Last pre-trade verdict", last ? (last.allowed ? "passed" : "blocked") : "—",
+      esc(last ? last.reason : "no order attempted yet"),
+      last ? (last.allowed ? "is-ok" : "is-bad") : "") +
     `</div>`;
 }
 
@@ -295,53 +426,30 @@ function renderIntake(status) {
   const sizing = intake.sizing || {};
   const seconds = v => v === undefined ? "unknown"
     : Number(v) <= 0 ? "disabled" : `${Number(v)}s`;
-  const money = v => v === undefined || v === null ? "not set"
-    : `$${Number(v).toFixed(2)}`;
-  const sizeCard = sizing.mode === "fixed_lots"
-    ? `<div class="card">
-      <div class="label">Position size</div>
-      <div class="value">${esc(`${Number(sizing.fixed_lots)} lot`)}</div>
-      <div class="note">${sizing.ready
-        ? `fixed, or the signal is refused. Per-trade ceiling ${esc(money(sizing.max_trade_risk_usd))}.`
-        : `NOT READY: ${esc(sizing.problem)}`}</div>
-    </div>`
-    : sizing.blocks_execution
-    ? `<div class="card">
-      <div class="label">Position size</div>
-      <div class="value">not configured</div>
-      <div class="note">NOT READY: ${esc(sizing.problem)}</div>
-    </div>`
-    : `<div class="card">
-      <div class="label">Position size</div>
-      <div class="value">risk fraction</div>
-      <div class="note">fixed lot is not configured; size is a fraction of equity</div>
-    </div>`;
-  el.innerHTML = `<div class="grid" style="padding:14px 16px;margin:0">
+  const money = v => v === undefined || v === null ? "not set" : `$${Number(v).toFixed(2)}`;
+  let sizeCard;
+  if (sizing.mode === "fixed_lots") {
+    sizeCard = card("Position size", `<span class="mono">${esc(Number(sizing.fixed_lots))} lot</span>`,
+      sizing.ready
+        ? `fixed, or the signal is refused. Ceiling ${esc(money(sizing.max_trade_risk_usd))}.`
+        : `NOT READY: ${esc(sizing.problem)}`,
+      sizing.ready ? "" : "is-bad");
+  } else if (sizing.blocks_execution) {
+    sizeCard = card("Position size", "not configured", `NOT READY: ${esc(sizing.problem)}`, "is-bad");
+  } else {
+    sizeCard = card("Position size", "risk fraction", "no fixed lot; size is a fraction of equity");
+  }
+  el.innerHTML = `<div class="grid" style="margin:0">
     ${sizeCard}
-    <div class="card">
-      <div class="label">Signal age limit</div>
-      <div class="value">${esc(seconds(age))}</div>
-      <div class="note">${age === undefined ? "not reported"
-        : Number(age) <= 0 ? "disabled by configuration"
-        : "older NOW signals are refused as stale"}</div>
-    </div>
-    <div class="card">
-      <div class="label">Quote age limit</div>
-      <div class="value">${esc(seconds(quoteAge))}</div>
-      <div class="note">the price must be this fresh at sizing time</div>
-    </div>
-    <div class="card">
-      <div class="label">Delivery interval</div>
-      <div class="value">${esc(seconds(intake.delivery_interval_seconds))}</div>
-      <div class="note">${intake.delivery_within_age_limit === false
-        ? "outside the age limit: late signals are refused, so nothing is copied"
-        : "the poll that fetches a signal when no push arrives"}</div>
-    </div>
-    <div class="card">
-      <div class="label">Stale signals</div>
-      <div class="value">${esc((status.counts || {}).stale || 0)}</div>
-      <div class="note">arrived too late to act on; no order was sent</div>
-    </div>
+    ${card("Signal age limit", esc(seconds(age)),
+      age === undefined ? "not reported" : Number(age) <= 0 ? "disabled by configuration" : "older NOW signals refused as stale")}
+    ${card("Quote age limit", esc(seconds(quoteAge)), "the price must be this fresh at sizing time")}
+    ${card("Delivery interval", esc(seconds(intake.delivery_interval_seconds)),
+      intake.delivery_within_age_limit === false
+        ? "outside the age limit: late signals refused, nothing copied"
+        : "the poll that fetches a signal when no push arrives")}
+    ${card("Stale signals", `<span class="mono">${esc((status.counts || {}).stale || 0)}</span>`,
+      "arrived too late to act on; no order was sent")}
   </div>`;
 }
 
@@ -349,100 +457,74 @@ function renderPause(status) {
   const el = document.getElementById("pause");
   const exec = status.execution || {};
   if (!exec.enabled) {
-    el.innerHTML = '<div class="empty">The pause switch controls the execution ' +
-      'path, which is not enabled.</div>';
+    el.innerHTML = '<div class="empty">The pause switch controls the execution path, which is not enabled.</div>';
     return;
   }
   const paused = exec.paused || {};
   const isPaused = paused.paused === true;
   const unreadable = paused.paused === null;
-  el.innerHTML = `
-    <div class="row" style="padding:14px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <span class="badge ${isPaused ? "bad" : unreadable ? "bad" : "ok"}">
-        ${isPaused ? "paused" : unreadable ? "unreadable" : "running"}
-      </span>
-      <span style="opacity:.8">${esc(paused.reason || "")}</span>
-      <input id="pause-reason" placeholder="reason (required to pause)" maxlength="200"
-             style="flex:1;min-width:220px;padding:6px 8px;border-radius:6px;
-                    border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit">
-      <button id="pause-btn" ${isPaused || unreadable ? "disabled" : ""}>Pause</button>
-      <button id="resume-btn" ${!isPaused ? "disabled" : ""}>Resume</button>
-    </div>`;
+  el.innerHTML = `<div class="toolbar">
+    <span class="badge ${isPaused || unreadable ? "bad" : "ok"}">
+      ${isPaused ? "paused" : unreadable ? "unreadable" : "running"}
+    </span>
+    <span class="sub">${esc(paused.reason || "")}</span>
+    <input id="pause-reason" placeholder="reason (required to pause)" maxlength="200">
+    <button id="pause-btn" ${isPaused || unreadable ? "disabled" : ""}>Pause</button>
+    <button id="resume-btn" class="ghost" ${!isPaused ? "disabled" : ""}>Resume</button>
+  </div>`;
   const send = async (path) => {
     const reason = (document.getElementById("pause-reason").value || "").trim();
-    if (path === "/api/pause" && !reason) {
-      alert("A reason is required to pause execution.");
-      return;
-    }
+    if (path === "/api/pause" && !reason) { flash("A reason is required to pause execution."); return; }
     try {
       await post(path, { reason, by: "dashboard" });
       await refresh();
     } catch (err) {
-      alert(`Could not ${path === "/api/pause" ? "pause" : "resume"}: ${err.message}`);
+      flash(`Could not ${path === "/api/pause" ? "pause" : "resume"}: ${err.message}`);
     }
   };
   document.getElementById("pause-btn").addEventListener("click", () => send("/api/pause"));
   document.getElementById("resume-btn").addEventListener("click", () => send("/api/resume"));
 }
 
-function stateBadge(state) {
-  const cls = (state === "open" || state === "partial") ? "ok"
-    : (state === "blocked" || state === "rejected" || state === "review") ? "bad"
-    : state === "closed" ? "" : "warn";
-  return `<span class="badge ${cls}">${esc(state)}</span>`;
-}
-
 function renderBroker(status, trades) {
   const exec = status.execution || {};
   const el = document.getElementById("broker");
   if (!exec.enabled) {
-    el.innerHTML = '<div class="empty">The execution path is not enabled. ' +
-      'This service is the paper mirror: it sizes and records intents, and writes nothing to a broker.</div>';
+    el.innerHTML = '<div class="empty">The execution path is not enabled. This service is the paper mirror: it sizes and records intents, and writes nothing to a broker.</div>';
     return;
   }
   const active = trades.find(t => t.state === "open" || t.state === "partial");
   if (!active) {
-    el.innerHTML = '<div class="empty">No open position in the demo account.</div>';
+    el.innerHTML = '<div class="empty">No open position on the BLBRY account.</div>';
     return;
   }
-  const rows = [
-    { label: "Position", value: active.broker_position_id, note: `order ${active.broker_order_id}` },
-    { label: "Side / size", value: `${(active.side || "").toUpperCase()} ${active.size_lots}`, note: active.symbol },
-    { label: "Fill", value: active.fill_price, note: `published ${active.published_entry}` },
-    { label: "Stop (broker)", value: active.current_stop, note: `initial ${active.initial_stop}` },
-    { label: "Final target", value: active.final_target, note: `policy ${active.policy}` },
-    { label: "Ladder", value: `${active.legs_done} / ${active.legs_total}`, note: active.management_stopped ? "management stopped" : "managing" },
-  ];
-  el.innerHTML = `<div class="grid" style="padding:14px 16px;margin:0">` + rows.map(r => `
-    <div class="card">
-      <div class="label">${esc(r.label)}</div>
-      <div class="value">${esc(r.value)}</div>
-      <div class="note">${esc(r.note)}</div>
-    </div>`).join("") + `</div>`;
+  el.innerHTML = `<div class="grid" style="margin:0">` + [
+    card("Position", `<span class="mono">${esc(active.broker_position_id)}</span>`, `order ${esc(active.broker_order_id)}`),
+    card("Side / size", `${esc((active.side || "").toUpperCase())} <span class="mono">${esc(active.size_lots)}</span>`, esc(active.symbol)),
+    card("Fill", `<span class="mono">${esc(active.fill_price)}</span>`, `published ${esc(active.published_entry)}`),
+    card("Stop (broker)", `<span class="mono">${esc(active.current_stop)}</span>`, `initial ${esc(active.initial_stop)}`),
+    card("Final target", `<span class="mono">${esc(active.final_target)}</span>`, `policy ${esc(active.policy)}`),
+    card("Ladder", `<span class="mono">${esc(active.legs_done)} / ${esc(active.legs_total)}</span>`,
+      active.management_stopped ? "management stopped" : "managing"),
+  ].join("") + `</div>`;
 }
 
 function renderTrades(rows) {
   const el = document.getElementById("trades");
-  if (!rows.length) {
-    el.innerHTML = '<div class="empty">No trades yet.</div>';
-    return;
-  }
+  if (!rows.length) { el.innerHTML = '<div class="empty">No trades yet.</div>'; return; }
   el.innerHTML = table(rows, [
     { label: "Created", render: r => esc(shortTime(r.created_at)) },
     { label: "Trade", render: r => `<code>${esc(r.trade_id)}</code>` },
     { label: "Side", render: r => `${esc((r.side || "").toUpperCase())} ${esc(r.symbol || "")}` },
     { label: "State", render: r => stateBadge(r.state) },
-    { label: "Size", render: r => `${esc(r.size_lots)} lot` },
-    { label: "Entry", render: r => esc(r.fill_price || r.published_entry) },
-    { label: "Stop", render: r => esc(r.current_stop || r.initial_stop) },
+    { label: "Size", render: r => `<span class="mono">${esc(r.size_lots)}</span>` },
+    { label: "Entry", render: r => `<span class="mono">${esc(r.fill_price || r.published_entry)}</span>` },
+    { label: "Stop", render: r => `<span class="mono">${esc(r.current_stop || r.initial_stop)}</span>` },
     { label: "Broker", render: r =>
-        `pos <code>${esc(r.broker_position_id || "—")}</code><br>
-         <span class="sub">order ${esc(r.broker_order_id || "—")}</span>` },
+        `pos <code>${esc(r.broker_position_id || "—")}</code><br><span class="sub">order ${esc(r.broker_order_id || "—")}</span>` },
     { label: "Note", render: r => `<span class="sub">${esc(r.note)}</span>` },
-  ]);
-  // The rows are clickable so the transition history is one click away.
+  ], true);
   Array.from(el.querySelectorAll("tbody tr")).forEach((tr, index) => {
-    tr.style.cursor = "pointer";
     tr.addEventListener("click", () => showTradeDetail(rows[index].trade_id));
   });
 }
@@ -463,14 +545,14 @@ async function showTradeDetail(tradeId) {
       { label: "Detail", render: t => `<span class="sub">${esc(t.detail)}</span>` },
       { label: "Broker", render: t =>
           `pos <code>${esc(t.broker_position_id || "—")}</code> order <code>${esc(t.broker_order_id || "—")}</code>` },
-    ]) + `<div class="sub" style="padding:10px 16px">
-      ${esc(trade.side || "").toUpperCase()} ${esc(trade.symbol || "")} ·
+    ]) + `<div class="sub" style="padding:12px 17px">
+      ${esc((trade.side || "").toUpperCase())} ${esc(trade.symbol || "")} ·
       policy ${esc(trade.policy || "—")} ·
       final target ${esc(trade.final_target)} ·
       ignored ${esc((trade.ignored_targets || []).join(", ") || "none")}
     </div>`;
   } catch (err) {
-    el.innerHTML = `<div class="err" style="padding:12px 16px">${esc(err.message)}</div>`;
+    el.innerHTML = `<div class="err" style="padding:14px 17px">${esc(err.message)}</div>`;
   }
 }
 
@@ -480,21 +562,19 @@ function renderIntents(rows) {
     { label: "Message", render: r => `<code>${esc(r.message_id)}</code> rev ${esc(r.revision)}` },
     { label: "Signal", render: r => {
         const s = r.signal_json || {};
-        const tps = (s.take_profits || []).join(", ");
         return `${esc((s.side || "").toUpperCase())} ${esc(s.instrument || "")}<br>
-                <span class="sub">entry ${esc(s.published_entry)} · SL ${esc(s.stop_loss)} · TP ${esc(tps)}</span>`;
+                <span class="sub">entry ${esc(s.published_entry)} · SL ${esc(s.stop_loss)} · TP ${esc((s.take_profits || []).join(", "))}</span>`;
       } },
     { label: "Intent", render: r => {
         const i = r.intent_json || {};
-        return `${esc(i.size_lots)} lot · ${esc(i.order_state)}<br>
-                <span class="sub">filled: ${esc(i.filled)} · risk $${esc(i.risk_budget)}</span>`;
+        return `<span class="mono">${esc(i.size_lots)} lot</span> · ${esc(i.order_state)}<br>
+                <span class="sub">filled ${esc(i.filled)} · risk $${esc(i.risk_budget)}</span>`;
       } },
   ]);
 }
 
-function renderEvents(rows, columns) {
-  const el = document.getElementById(columns.target);
-  el.innerHTML = table(rows, [
+function renderEvents(rows, target) {
+  document.getElementById(target).innerHTML = table(rows, [
     { label: "Received", render: r => esc(shortTime(r.received_at)) },
     { label: "Message", render: r => `<code>${esc(r.message_id)}</code> rev ${esc(r.revision)}` },
     { label: "Status", render: r => badge(r.status) },
@@ -520,54 +600,74 @@ async function refresh() {
     renderPause(status);
     renderTrades(tradeRows);
     renderIntents(intents.events || []);
-    renderEvents(review.events || [], { target: "review" });
-    renderEvents(events.events || [], { target: "events" });
+    renderEvents(review.events || [], "review");
+    renderEvents(events.events || [], "events");
     document.getElementById("foot").textContent =
-      `Updated ${new Date().toLocaleTimeString()} · refresh every 30s · ` +
-      `account scope: ${status.account_scope || "none"} · ` +
-      `exit policy: ${status.exit_policy || "unresolved"}`;
-    document.getElementById("gate").classList.add("hidden");
-    document.getElementById("dash").classList.remove("hidden");
-    document.getElementById("gate-err").textContent = "";
+      `Updated ${new Date().toLocaleTimeString()} · refresh 30s · ` +
+      `account ${status.account_scope || "none"} · exit ${status.exit_policy || "unresolved"}`;
   } catch (err) {
-    document.getElementById("dash").classList.add("hidden");
-    document.getElementById("gate").classList.remove("hidden");
-    document.getElementById("gate-err").textContent =
-      err.message === "unauthorised" ? "Token rejected." : `Cannot reach the service: ${err.message}`;
+    if (err.message !== "unauthorised") flash(`Cannot reach the service: ${err.message}`);
   }
 }
 
-function start() {
-  if (!token()) {
-    document.getElementById("gate").classList.remove("hidden");
-    return;
-  }
-  refresh();
+function startRefresh() {
   if (timer) clearInterval(timer);
+  refresh();
   timer = setInterval(refresh, 30000);
 }
 
-document.getElementById("gate-form").addEventListener("submit", e => {
+document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const value = document.getElementById("token").value.trim();
-  if (!value) return;
-  sessionStorage.setItem(TOKEN_KEY, value);
-  document.getElementById("token").value = "";
-  start();
+  const btn = document.getElementById("login-btn");
+  const err = document.getElementById("login-err");
+  err.textContent = "";
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: document.getElementById("email").value,
+        password: document.getElementById("password").value,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      err.textContent = body.error || "Sign-in failed.";
+      btn.disabled = false;
+      return;
+    }
+    me = body.email || "";
+    document.getElementById("password").value = "";
+    showApp();
+    startRefresh();
+  } catch (exc) {
+    err.textContent = `Cannot reach the service: ${exc.message}`;
+    btn.disabled = false;
+  }
 });
 
-document.getElementById("forget").addEventListener("click", () => {
-  sessionStorage.removeItem(TOKEN_KEY);
-  if (timer) clearInterval(timer);
-  document.getElementById("dash").classList.add("hidden");
-  document.getElementById("gate").classList.remove("hidden");
+document.getElementById("signout").addEventListener("click", async () => {
+  try { await post("/api/logout"); } catch (_err) { /* the cookie is cleared anyway */ }
+  me = null;
+  showLogin();
 });
 
 document.getElementById("detail-close").addEventListener("click", () => {
   document.getElementById("detail-panel").classList.add("hidden");
 });
 
-start();
+// Who is already signed in? A 401 here is the normal first visit.
+(async () => {
+  try {
+    const who = await api("/api/me");
+    me = who.email || "";
+    showApp();
+    startRefresh();
+  } catch (_err) {
+    showLogin();
+  }
+})();
 </script>
 </body>
 </html>

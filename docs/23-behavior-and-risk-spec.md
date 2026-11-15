@@ -402,7 +402,7 @@ report did not reflect. The number was true and the conclusion was wrong.
 | Stage | What it needs | Status |
 |---|---|---|
 | **A — Spec freeze** | every item confirmed, no OPEN remaining | **not frozen** — A1-A5 need review, S2 and S3 are open |
-| **B — Sizing and exit change** | the mismatch table closed; tests per refusal | **code complete, 471 tests passing**; the refusal cases are covered at unit, pipeline and engine level |
+| **B — Sizing and exit change** | the mismatch table closed; tests per refusal | **code complete, 484 tests passing**; the refusal cases are covered at unit, pipeline and engine level |
 | **C — Shadow on the real channel** | real quotes, no orders, five trading days | **not started** — blocked on a quote provider; `MIRROR_QUOTE_PROVIDER` is `none` |
 | **D — Demo execution matrix** | the full case list on the private channel | **not run against the new policy** — the code path is tested, the live demo run is not |
 | **E — Deployment readiness** | kill/restart drill, pause drill, alerts | **not started** |

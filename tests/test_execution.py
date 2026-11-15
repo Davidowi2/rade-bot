@@ -49,6 +49,7 @@ from rade.execution.engine import (
     trade_id_for,
 )
 from rade.execution.gateway import TradeLockerGateway, assert_demo_environment, assert_destination
+from rade.execution.guards import RiskLimits
 from rade.execution.ladder import (
     LadderError,
     build_exit_plan,
@@ -1206,6 +1207,9 @@ def test_a_fill_beyond_tp1_is_accepted_and_the_stop_moves_at_once(tmp_path):
     """
     broker = FakeBroker(bid=3915.0, ask=3915.2)
     engine, ledger, _ = engine_for(tmp_path, broker)
+    # The fill moves 3.6 price units. The production slippage limit is 2.0, so
+    # this test — which is about the stop move, not slippage — sets its own.
+    engine.limits = RiskLimits(max_slippage=10.0)
     # A SELL whose TP1 sits close to the entry, so an adverse fill can pass it
     # while still being inside the slippage limit.
     text = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3912\nTp : 3905\nTp : 3900"
@@ -1232,6 +1236,9 @@ def test_a_fill_beyond_the_final_target_stops_before_any_leg(tmp_path):
     """A fill already at the target the trade exists to reach leaves nothing to do."""
     broker = FakeBroker(bid=3915.0, ask=3915.2)
     engine, ledger, _ = engine_for(tmp_path, broker)
+    # The fill moves 4.2 price units; this test is about the exhausted ladder,
+    # not about slippage, so it sets its own limit.
+    engine.limits = RiskLimits(max_slippage=10.0)
     # Two targets, the final one close to the entry, so a fill can pass it
     # while staying inside the slippage limit.
     text = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3913\nTp : 3911"
