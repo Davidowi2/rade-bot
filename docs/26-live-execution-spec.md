@@ -1,8 +1,9 @@
 # 26 — Live execution spec (BLBRY, real orders)
 
-Status: **PARTIALLY BUILT.** G4, G5 and G6 are implemented (measured guard
-values, startup report, drawdown fraction from the challenge rule). G1–G3 and
-G7 remain, and are the live flip described in §7. Written 2026-11-14.
+Status: **PARTIALLY BUILT.** Done: G3 (destination pinned to BLBRY/2346225 with
+the BLBRY credentials), G4 (measured guard values), G5 (startup report), G6
+(drawdown fraction from the challenge rule). Remaining: G1, G2 and G7, which
+are the live flip in §7. Written 2026-11-14.
 
 ## 1. What "live" actually means here
 
