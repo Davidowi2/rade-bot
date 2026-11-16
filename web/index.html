@@ -731,7 +731,7 @@ function renderBroker(status, trades) {
   if (!active) {
     const rows = [
       ["Environment", broker.environment || "?"],
-      ["Account", broker.account_number || "?",
+      ["Account", broker.account_number || "?"],
       ["Symbol", `${broker.symbol || "?"} · instrument ${broker.instrument_id ?? "?"}`],
       ["Contract", `${broker.contract_units_per_lot ?? "?"} units/lot · step ${broker.lot_step ?? "?"} · min ${broker.min_lot ?? "?"} · max ${broker.max_lot ?? "?"}`],
       ["Status", `${broker.symbol_status || "?"} · ${broker.verified ? "verified" : "unverified"}`],
