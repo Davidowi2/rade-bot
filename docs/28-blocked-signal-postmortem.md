@@ -116,6 +116,33 @@ Both real signals from 2026-11-15 now size: 0.02 lots, $20.00 risk.
 To change it: one value, `MIRROR_FIXED_LOTS`, in Render. The service reports
 the resulting stop width as `max_stop_distance` on `/api/status`.
 
+## Post-flip audit (independent review, 2026-11-16)
+
+An independent pass over the execution path found one defect worth the name,
+plus a sibling of it:
+
+* **`_existing_order` failed open.** It returned `None` when the broker's order
+  feed could not be read, and every caller read `None` as "the broker has no
+  order here". `submit()` would then place a **second order** for a trade the
+  broker already had, and `reconcile_trade` would conclude "never submitted" —
+  which is what lets a later pass send it again. It now returns an
+  `ORDERS_UNREADABLE` sentinel, matching the positions sentinel. Submission
+  sends nothing and leaves the trade actionable; reconciliation leaves the
+  state alone.
+* **The gateway read a broken feed as an empty one.** `get_all_positions()`
+  returning `None`, or anything that was not a table, produced `[]` — so a
+  failed read looked like "no position open", which is how a live position gets
+  written off as closed. `positions()` and `orders()` now raise.
+
+Both are the same failure: **a read that could not be made was treated as a
+read that found nothing.** Every such site in the execution path now
+distinguishes the two.
+
+Not addressed, because it is not reachable under the confirmed policy: under
+`exit_policy="ladder"` a refused close followed by an unreadable position read
+retries the close and can close twice. `hold_to_final` closes the remainder
+once. The ladder policy is retained but not the default.
+
 ## Also worth knowing
 
 * The channel emits an edit event for messages whose text is unchanged. It was
