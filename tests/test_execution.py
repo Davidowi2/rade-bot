@@ -918,6 +918,58 @@ def test_a_submitted_trade_is_reconciled_rather_than_ignored(tmp_path):
     assert ManagedTrade.from_row(ledger.get_trade(trade_id)).state == STATE_OPEN
 
 
+def test_the_deployed_configuration_copies_the_channels_own_call(tmp_path):
+    """The numbers actually deployed must admit the channel's real stop width.
+
+    The channel posts ~10-point stops. At 0.02 lots x 100 units/lot that is
+    $2.00 a point, so the $25 ceiling admits 12.5 points. At the 0.03 lots an
+    earlier configuration used, the same ceiling admitted 8.33 points and
+    refused every signal the channel posts. Every other test here sizes at
+    0.03/$50, so nothing else would notice this pair drifting apart.
+    """
+    deployed_risk = RiskConfig(
+        equity=4862.73, risk_fraction=0.005, quote_max_age_seconds=2.0,
+        fixed_lots=0.02, max_trade_risk_usd=25.0)
+    # Verbatim from the channel's held review queue.
+    text = "XAUUSD SELL NOW 3877\ufe0f\nSl : 3887\nTp : 3870\nTp : 3865"
+    result = evaluate_message(
+        envelope(text, mid=18845), instrument=INSTRUMENT, risk=deployed_risk,
+        quote=MarketQuote(3876.8, 3877.0, NOW))
+
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == pytest.approx(0.02)
+    assert result.order_intent["risk_budget"] == pytest.approx(20.0, abs=0.5)
+
+    broker = FakeBroker(bid=3876.8, ask=3877.0)
+    engine, ledger, _ = engine_for(
+        tmp_path, broker, fixed_lots=0.02, max_trade_risk_usd=25.0)
+    outcome = engine.execute(result, envelope(text, mid=18845))
+
+    assert outcome.get("executed") is True
+    assert len(broker.place_calls) == 1
+    assert broker.place_calls[0]["qty"] == pytest.approx(0.02)
+    assert broker.place_calls[0]["stop_loss"] == pytest.approx(3887.0)
+    assert broker.place_calls[0]["take_profit"] == pytest.approx(3865.0)
+
+
+def test_the_earlier_lot_size_refuses_the_same_call(tmp_path):
+    """0.03 lots against the same $25 ceiling cannot take a 10-point stop.
+
+    This is the failure that made the copier look dead: the size was changed
+    without the ceiling, and every signal the channel posts was refused.
+    """
+    tight = RiskConfig(equity=4862.73, risk_fraction=0.005,
+                       quote_max_age_seconds=2.0, fixed_lots=0.03,
+                       max_trade_risk_usd=25.0)
+    text = "XAUUSD SELL NOW 3877\ufe0f\nSl : 3887\nTp : 3870\nTp : 3865"
+    result = evaluate_message(
+        envelope(text, mid=18845), instrument=INSTRUMENT, risk=tight,
+        quote=MarketQuote(3876.8, 3877.0, NOW))
+
+    assert result.status == "blocked"
+    assert "ceiling" in result.reason or "risk" in result.reason
+
+
 def test_a_trade_opened_but_never_submitted_is_submitted_after_a_restart(tmp_path):
     """The window between open_trade and place_market must not be a dead end.
 

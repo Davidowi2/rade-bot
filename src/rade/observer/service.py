@@ -4,14 +4,16 @@ Two endpoints are public: ``/healthz`` (for Render's health check) and
 ``/robots.txt``. Everything under ``/api`` requires a bearer token, because the
 data includes the trader's calls and the account's paper sizing.
 
-There is no write endpoint. The only state this process can change is nothing:
-every handler is a read against the ledger.
+There is no order endpoint. Reads are the default; the only writes are
+``/api/pause`` and ``/api/resume``, which flip the kill switch in the ledger and
+nothing else. Every other POST is a 405.
 
 Run locally:
     MIRROR_API_TOKEN=dev .venv/Scripts/python.exe -m rade.observer.service
 """
 from __future__ import annotations
 
+import hmac
 import json
 import math
 import os
@@ -714,7 +716,14 @@ def make_handler(service: MirrorService, *, log: Any = None):
             if not service.token:
                 return False
             header = self.headers.get("Authorization", "")
-            return header.startswith("Bearer ") and header[7:].strip() == service.token
+            if not header.startswith("Bearer "):
+                return False
+            supplied = header[7:].strip()
+            # Constant time. A plain == short-circuits on the first differing
+            # character, so the response time leaks the token one byte at a
+            # time; the web tier already uses timingSafeEqual for the same
+            # reason.
+            return hmac.compare_digest(supplied, service.token)
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
