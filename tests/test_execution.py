@@ -1026,6 +1026,49 @@ def test_the_final_target_closes_the_remainder(tmp_path):
     assert broker.position_book == []
 
 
+def test_a_close_whose_confirming_read_failed_is_not_closed_again(tmp_path):
+    """A close that worked but could not be confirmed must not be repeated.
+
+    The first pass closes and then cannot read the position, so it reports an
+    error without advancing the ladder. Retrying the same leg would close the
+    same step a second time; the broker's quantity is the truth about what has
+    closed, so the ledger is brought forward to match it.
+    """
+    class FlakyPositions(FakeBroker):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.fail_next_position_read = False
+
+        def positions(self):
+            if self.fail_next_position_read:
+                self.fail_next_position_read = False
+                raise BrokerError("429 on /positions")
+            return super().positions()
+
+        def close_quantity(self, *, position_id, qty):
+            result = super().close_quantity(position_id=position_id, qty=qty)
+            self.fail_next_position_read = True
+            return result
+
+    broker = FlakyPositions()
+    engine, ledger, _ = engine_for(tmp_path, broker, exit_policy="ladder")
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+    broker.bid, broker.ask = 3909.5, 3909.7
+
+    first = engine.manage_trade(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+    assert first.get("error") is True, "an unconfirmed close is not a completed one"
+    assert len(broker.close_calls) == 1
+
+    engine.manage_trade(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+
+    assert len(broker.close_calls) == 1, "the same ladder step was closed twice"
+    row = ledger.get_trade(trade_id)
+    assert row["legs_done"] >= 1, "the close that did happen was never recorded"
+
+
 def test_the_earlier_ladder_still_partially_closes_through_the_engine(tmp_path):
     """The earlier policy is still executable end to end, not merely buildable."""
     broker = FakeBroker()

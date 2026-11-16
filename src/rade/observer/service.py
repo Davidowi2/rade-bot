@@ -1001,7 +1001,11 @@ def start_executor_if_configured(ledger: Any, log: Any = print) -> "ExecutorHand
         # configuration should be allowed to take by omission.
         dest_server = os.getenv("MIRROR_DESTINATION_SERVER", "").strip()
         dest_account = _optional_int(os.getenv("MIRROR_DESTINATION_ACCOUNT_ID", ""))
-        if not dest_server or dest_account is None:
+        # ``0`` parses as an integer and is not ``None``, so a literal 0 would
+        # pass this check and then skip the account comparison in
+        # ``assert_destination`` (which treats a falsy pin as unset). A pin that
+        # is not a real account id is not a pin.
+        if not dest_server or dest_account is None or dest_account <= 0:
             handle.error = (
                 "the destination is not pinned: MIRROR_DESTINATION_SERVER and "
                 "MIRROR_DESTINATION_ACCOUNT_ID must both be set; the executor "

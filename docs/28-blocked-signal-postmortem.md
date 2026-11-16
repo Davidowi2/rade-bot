@@ -118,7 +118,7 @@ the resulting stop width as `max_stop_distance` on `/api/status`.
 
 ## Post-flip audit (independent review, 2026-11-16)
 
-An independent pass over the execution path found five defects worth the name.
+An independent pass over the execution path found six defects worth the name.
 All are fixed.
 
 * **A market that crossed the published stop between intake and submission was
@@ -146,14 +146,34 @@ All are fixed.
   `PipelineResult` from, and the retry pass skipped them forever: a failed
   `[FILLED]` or `[STOP MOVED]` was silently dropped. The retry now rebuilds a
   message from the trade row.
+* **A close whose confirming read failed was closed again.** The ladder closed
+  a leg, could not read the position afterwards, and reported an error without
+  advancing — so the retry closed the same step a second time. The broker's
+  quantity is the truth about what has closed, so the ledger is now brought
+  forward to match it (never backward, never past the last leg).
 
 The first four are one mistake in different places: **a read that could not be
 made was treated as a read that found nothing.**
 
-Not addressed, because it is not reachable under the confirmed policy: under
-`exit_policy="ladder"` a refused close followed by an unreadable position read
-retries the close and can close twice. `hold_to_final` closes the remainder
-once. The ladder policy is retained but is not the default.
+## Two status fields that stated things the service did not know
+
+Same family, in the reporting rather than the execution path:
+
+* `exit_policy` was the literal `"tp_ladder"` whenever an executor existed — a
+  name the engine does not accept. The confirmed policy is `hold_to_final`. It
+  now reads the policy off the engine.
+* `account_scope` was the literal `"demo"`. It is a host fact, so it now comes
+  from the broker specification.
+
+A status field that names a configuration the bot is not using is worse than no
+field: it is exactly what makes an operator distrust the dashboard.
+
+## Also fixed
+
+`MIRROR_DESTINATION_ACCOUNT_ID=0` parsed as an integer and is not `None`, so it
+passed the "destination is pinned" check and then skipped the account
+comparison in `assert_destination` (which treats a falsy pin as unset). A pin
+that is not a real account id is now treated as no pin.
 
 ## Also worth knowing
 

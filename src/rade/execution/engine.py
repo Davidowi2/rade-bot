@@ -1187,6 +1187,13 @@ class ExecutionEngine:
                           "not by this manager")
             return self._finish(trade, reason=reason)
 
+        # The broker's quantity is the truth about what has already closed. A
+        # close whose confirming read failed leaves the ledger behind, and
+        # without this the retry would close the same step a second time.
+        reconciled = self._reconcile_legs(trade, position)
+        if reconciled is not None:
+            trade = reconciled
+
         try:
             quote = self.broker.quote()
         except BrokerError as exc:
@@ -1496,6 +1503,50 @@ class ExecutionEngine:
             return False, (f"the broker reports a stop of {levels.stop:g}, not "
                            f"{expected:g}")
         return True, f"the broker reports a stop of {levels.stop:g}"
+
+    def _reconcile_legs(self, trade: ManagedTrade, position: Any) -> ManagedTrade | None:
+        """Advance ``legs_done`` to what the broker's quantity already shows.
+
+        A close that succeeded but whose confirming read failed leaves the
+        ledger behind the broker. Retrying the same leg would then close the
+        same step twice. The broker's quantity is the truth about what has
+        closed, so the ledger is brought *forward* to match it - never backward,
+        and never past the last leg.
+        """
+        legs = trade.plan.legs
+        if not legs:
+            return None
+
+        def remaining_after(index: int) -> float:
+            if index <= 0:
+                return trade.plan.total_size
+            return legs[index - 1].expected_remaining_after
+
+        if position.qty >= remaining_after(trade.legs_done) - 1e-6:
+            return None
+
+        index = trade.legs_done
+        while index < len(legs) and remaining_after(index) > position.qty + 1e-6:
+            index += 1
+        # Running off the end means the quantity matches no step of the plan;
+        # leave the ledger alone rather than inventing a position in the ladder.
+        if index == trade.legs_done or index >= len(legs):
+            return None
+
+        applied = legs[trade.legs_done:index]
+        self._transition(
+            trade, applied[0].label, "legs_reconciled",
+            f"the broker's position shows {position.qty:g} lots, fewer than the "
+            f"{remaining_after(trade.legs_done):g} the ledger expected after "
+            f"{trade.legs_done} step(s); {len(applied)} close(s) had already "
+            "taken effect without being confirmed",
+            payload={"observed_qty": position.qty,
+                     "expected_qty": remaining_after(trade.legs_done),
+                     "legs_done": index})
+        trade.legs_done = index
+        trade.state = STATE_PARTIAL
+        self._save(trade)
+        return trade
 
     def _next_leg(self, trade: ManagedTrade) -> ExitLeg | None:
         index = trade.legs_done
