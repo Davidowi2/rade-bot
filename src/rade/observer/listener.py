@@ -81,7 +81,7 @@ class MirrorState:
                 # the first catch-up window is larger.
                 self.last_message_id = 0
 
-    def advance(self, message_id: int) -> None:
+    def advance(self, message_id: int, *, persist: bool = True) -> None:
         """Move the cursor, but only once the move is on disk.
 
         The in-memory cursor used to be advanced *before* the write. When the
@@ -91,11 +91,18 @@ class MirrorState:
         to the store. The gap fill promises that an unprocessed message is
         retried on the next pass; that promise only holds if a failed write
         rolls the cursor back.
+
+        ``persist=False`` moves only the in-memory cursor. The gap fill uses it
+        while working through a batch so that a crash halfway through cannot
+        leave the *file* ahead of a message that never processed - the file is
+        written once, afterwards, to the position the batch actually reached.
         """
         if message_id <= self.last_message_id:
             return
         previous = self.last_message_id
         self.last_message_id = message_id
+        if not persist:
+            return
         try:
             self._write()
         except Exception:
@@ -156,6 +163,10 @@ class MirrorListener:
     #: Optional demo execution engine. When absent the listener is exactly the
     #: paper mirror it was before: it produces intents and nothing else.
     executor: Any = None
+    #: Set while a catch-up batch is running, so per-message cursor moves are
+    #: held in memory and the file is written once at the end. See
+    #: :meth:`MirrorState.advance`.
+    defer_cursor_writes: bool = False
 
     # -- per message ------------------------------------------------------
     def process_message(self, message: Any, *, revision: int | None = None,
@@ -217,7 +228,7 @@ class MirrorListener:
         }
         if execution is not None:
             payload["execution"] = execution
-        self.state.advance(mid)
+        self.state.advance(mid, persist=not self.defer_cursor_writes)
         self.log(
             f"{source} id={mid} rev={revision} -> {result.status}"
             + (f" ({result.reason})" if result.status != "paper_intent" else "")
@@ -420,14 +431,22 @@ class Runtime:
         kwargs: dict[str, Any] = {"reverse": False, "limit": None}
         if floor:
             kwargs["min_id"] = floor
-        async for message in self.client.iter_messages(self.entity, **kwargs):
-            mid = int(message.id)
-            payload = self._process_safely(message, source="catchup")
-            seen.append(mid)
-            if payload.get("status") == "error":
-                failed.append(mid)
-            if payload.get("status") != "duplicate":
-                self.events += 1
+        # Nothing is written to the cursor file while the batch runs. Writing it
+        # per message would leave the file ahead of a message that failed, and a
+        # crash halfway through would reload that position - losing the message
+        # even though the batch never finished.
+        self.listener.defer_cursor_writes = True
+        try:
+            async for message in self.client.iter_messages(self.entity, **kwargs):
+                mid = int(message.id)
+                payload = self._process_safely(message, source="catchup")
+                seen.append(mid)
+                if payload.get("status") == "error":
+                    failed.append(mid)
+                if payload.get("status") != "duplicate":
+                    self.events += 1
+        finally:
+            self.listener.defer_cursor_writes = False
 
         highest = max(seen) if seen else floor
         if failed:

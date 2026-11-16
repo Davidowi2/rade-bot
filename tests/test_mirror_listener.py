@@ -331,6 +331,7 @@ def test_a_message_that_fails_mid_batch_is_retried_not_dropped(tmp_path):
         state=MirrorState(tmp_path / "state.json"),
         log=lambda *_: None,
     )
+    state_path = tmp_path / "state.json"
     runtime = Runtime(client=ReverseClient([msg(1), msg(2), msg(3)]),
                       listener=listener, channel="@source",
                       heartbeat_path=tmp_path / "beat.json", log=lambda *_: None)
@@ -339,11 +340,16 @@ def test_a_message_that_fails_mid_batch_is_retried_not_dropped(tmp_path):
     assert runtime.listener.state.last_message_id == 1, \
         "the cursor moved past a message that never processed"
     assert runtime.listener.ledger.counts().get("paper_intent") == 2
+    # The file matters as much as memory: restore_cursor() takes the larger of
+    # the file and the stored cursor, so a file left ahead by a crashed batch
+    # would skip the failed message just as surely.
+    assert json.loads(state_path.read_text(encoding="utf-8"))["last_message_id"] == 1
 
     listener.fail = False
     assert asyncio.run(runtime.gap_fill()) == [2, 3]
     assert runtime.listener.ledger.counts().get("paper_intent") == 3, \
         "the message that failed was never retried"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["last_message_id"] == 3
 
 
 def test_gap_fill_twice_stores_nothing_new(tmp_path):
