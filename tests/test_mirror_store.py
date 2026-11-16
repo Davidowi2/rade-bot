@@ -436,6 +436,37 @@ def test_a_failed_notification_is_picked_up_by_a_later_retry_pass(tmp_path):
     assert ledger.notification_status(result.event_key, "accepted") == "sent"
 
 
+def test_a_failed_lifecycle_notification_is_retried_from_the_trade_row(tmp_path):
+    """Engine notifications are keyed by trade id, not by event key.
+
+    There is no ``mirror_events`` row for a trade id, so rebuilding a
+    PipelineResult finds nothing and the retry pass used to skip it forever - a
+    failed [FILLED] or [STOP MOVED] was silently dropped.
+    """
+    from rade.observer.notify import retry_failed_notifications
+
+    ledger = SQLiteIntentLedger(tmp_path / "life.sqlite")
+    trade_id = "RADE-abcdef0123456789abcdef"
+    ledger.open_trade({
+        "trade_id": trade_id, "event_key": "evt", "channel": "@source",
+        "message_id": 1, "revision": 0, "symbol": "XAUUSD", "side": "buy",
+        "size": 0.02, "entry": 3915.0, "stop": 3905.0, "current_stop": 3905.0,
+        "targets": [3920.0], "state": "open", "legs_done": 0,
+        "plan": {"policy": "hold_to_final", "final_target": 3920.0},
+        "note": "",
+    })
+    ledger.begin_notification(trade_id, "filled")
+    ledger.complete_notification(trade_id, "filled", False, "HTTP 500: boom")
+    assert ledger.notification_status(trade_id, "filled") == "failed"
+
+    working = RecordingNotifier()
+    summary = retry_failed_notifications(ledger, working, attempts=2)
+
+    assert summary == {"considered": 1, "sent": 1, "failed": 0, "skipped": 0}
+    assert "[FILLED] BUY XAUUSD" in working.sent[0]
+    assert ledger.notification_status(trade_id, "filled") == "sent"
+
+
 def test_a_delivered_notification_is_never_sent_again(tmp_path):
     ledger, result = _stored_intent(tmp_path)
     notifier = RecordingNotifier()

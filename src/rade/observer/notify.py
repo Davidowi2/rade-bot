@@ -302,6 +302,42 @@ def result_from_row(row: dict) -> PipelineResult | None:
     )
 
 
+def lifecycle_text(row: dict, ledger: Any) -> str | None:
+    """Rebuild a retryable message for an execution-lifecycle notification.
+
+    The engine notifies under the **trade id**, not the event key, so there is
+    no ``mirror_events`` row to rebuild a :class:`PipelineResult` from and
+    :func:`result_from_row` returns ``None``. Without this fallback the retry
+    pass skips those notifications forever, so a failed ``[FILLED]`` or
+    ``[STOP MOVED]`` is silently dropped. The trade row carries what a useful
+    retry needs.
+    """
+    trade_id = str(row.get("event_key") or "")
+    if not trade_id:
+        return None
+    trade = None
+    if ledger is not None and hasattr(ledger, "get_trade"):
+        try:
+            trade = ledger.get_trade(trade_id)
+        except Exception:
+            trade = None
+    if not trade:
+        return None
+    kind = str(row.get("kind") or "event")
+    heading = f"[{kind.upper()}] " \
+              f"{str(trade.get('side') or '').upper()} " \
+              f"{trade.get('symbol') or ''}".rstrip()
+    stop = trade.get("current_stop") or trade.get("stop")
+    lines = [heading,
+             f"trade {trade_id}",
+             f"state {trade.get('state')} · size {trade.get('size')} · "
+             f"entry {trade.get('entry')} · stop {stop}"]
+    note = str(trade.get("note") or "").strip()
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
+
 def retry_failed_notifications(ledger: Any, notifier: Notifier, *,
                                limit: int = 20,
                                attempts: int = 2,
@@ -327,6 +363,10 @@ def retry_failed_notifications(ledger: Any, notifier: Notifier, *,
             continue
         result = result_from_row(row)
         text = build_notification(result) if result is not None else None
+        if text is None:
+            # An execution-lifecycle notification is keyed by trade id and has
+            # no event row; rebuild it from the trade rather than drop it.
+            text = lifecycle_text(row, ledger)
         if text is None:
             summary["skipped"] += 1
             continue

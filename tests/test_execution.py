@@ -44,6 +44,7 @@ from rade.execution.engine import (
     STATE_PARTIAL,
     STATE_REJECTED,
     STATE_REVIEW,
+    STATE_SUBMITTED,
     STATE_VALIDATED,
     ExecutionEngine,
     ManagedTrade,
@@ -828,6 +829,51 @@ def test_reconciliation_leaves_a_trade_alone_when_the_orders_are_unreadable(
     assert outcome.get("unreadable") is True
     assert ledger.get_trade(trade_id)["state"] == before, \
         "reconciliation concluded 'never submitted' from a read it could not make"
+
+
+def test_a_market_that_crossed_the_stop_since_intake_is_not_submitted(tmp_path):
+    """The stop side is a property of the market, so it is re-checked late.
+
+    The pipeline validated the stop against the quote it had at intake. This
+    engine runs on a second quote, and in that gap the market can cross the
+    published stop - sending then fills and stops out immediately.
+    """
+    broker = FakeBroker(bid=3914.0, ask=3914.2)
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    msg = envelope("XAUUSD BUY NOW 3915\nSl : 3914.5\nTp : 3920")
+    result = evaluate_message(msg, instrument=INSTRUMENT, risk=RISK,
+                              quote=MarketQuote(3915.0, 3915.2, NOW))
+    # Intake was happy: the stop was below the entry when the signal was priced.
+    assert result.status == "paper_intent"
+
+    outcome = engine.execute(result, msg)
+
+    assert outcome.get("executed") is False
+    assert outcome.get("guard") is True
+    assert "crossed the published stop" in outcome["reason"]
+    assert broker.place_calls == []
+
+
+def test_a_submitted_trade_is_reconciled_rather_than_ignored(tmp_path):
+    """A trade interrupted between submission and acknowledgement.
+
+    It used to be skipped by every management pass: the broker may already hold
+    the position, so it has to be reconciled rather than managed or ignored.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+    row = ledger.get_trade(trade_id)
+    row["state"] = STATE_SUBMITTED
+    ledger.update_trade(row)
+
+    summary = engine.manage()
+
+    assert summary["considered"] == 1
+    assert ManagedTrade.from_row(ledger.get_trade(trade_id)).state == STATE_OPEN
 
 
 def test_a_trade_opened_but_never_submitted_is_submitted_after_a_restart(tmp_path):

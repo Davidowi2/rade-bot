@@ -727,6 +727,21 @@ class ExecutionEngine:
         reference = float(quote.ask) if trade.side == "buy" else float(quote.bid)
         slippage = abs(reference - float(trade.entry)) if trade.entry else 0.0
 
+        # The pipeline checked the stop against the quote it held at intake.
+        # This is a second quote, read later, and in that gap the market can
+        # cross the published stop. Placing anyway would send an order whose
+        # stop is already triggered - a fill followed immediately by a stop-out,
+        # paying the spread for nothing. The stop side is a property of the
+        # market, not of the signal, so it is re-checked here.
+        if ((trade.side == "buy" and float(trade.stop) >= reference)
+                or (trade.side == "sell" and float(trade.stop) <= reference)):
+            side_word = "below" if trade.side == "buy" else "above"
+            return self._guard_blocked(
+                trade,
+                f"the market has crossed the published stop: a {trade.side} "
+                f"stop at {trade.stop:g} is not {side_word} the current "
+                f"reference price {reference:g}")
+
         # The size is verified here, against this quote and this broker spec,
         # rather than trusted from the intent that arrived from the pipeline.
         if spec is None:
@@ -1064,8 +1079,9 @@ class ExecutionEngine:
         """Run one management pass over every open trade."""
         summary = {"considered": 0, "closed": 0, "partial": 0, "stops_moved": 0,
                    "stopped": 0, "pending_fill": 0, "errors": 0}
-        for row in self.ledger.list_trades(states=(STATE_VALIDATED, STATE_ACCEPTED,
-                                                   STATE_OPEN, STATE_PARTIAL)):
+        for row in self.ledger.list_trades(states=(STATE_VALIDATED, STATE_SUBMITTED,
+                                                   STATE_ACCEPTED, STATE_OPEN,
+                                                   STATE_PARTIAL)):
             trade = ManagedTrade.from_row(row)
             if trade is None:
                 continue
@@ -1078,6 +1094,13 @@ class ExecutionEngine:
                     # only accepted and open trades, so the signal was recorded
                     # and then never acted on.
                     outcome = self._submit_validated(trade)
+                elif trade.state == STATE_SUBMITTED:
+                    # Interrupted between recording the submission and the
+                    # broker's acknowledgement. Reconcile rather than manage:
+                    # the broker may already hold the position, and managing it
+                    # as if it were open would move a stop on a position this
+                    # process has not confirmed.
+                    outcome = self.reconcile_trade(trade)
                 else:
                     if trade.state == STATE_ACCEPTED:
                         filled = self.confirm_fill(trade)
