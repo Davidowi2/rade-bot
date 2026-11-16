@@ -165,12 +165,11 @@ only remaining change is row 6.
 
 Steps:
 
-0. **Resolve the sizing mismatch first.** `0.03` lots × 100 units/lot is
-   $3.00/point, so the $25 ceiling admits an **8.33-point** stop and the channel
-   posts 10-point stops. `/api/status` reports `max_stop_distance`. As
-   configured, the executor would refuse every signal — the same silent
-   non-trading state as before, one layer further in. Raise the ceiling or
-   lower the lot before step 5. See `docs/28`.
+0. **Sizing mismatch — resolved 2026-11-16.** The lot was `0.03` ($3.00/point),
+   so the $25 ceiling admitted an 8.33-point stop while the channel posts
+   10-point stops: the executor would have refused every signal. The lot is now
+   `0.02` ($2.00/point), admitting 12.5 points. `/api/status` reports
+   `max_stop_distance` so this can be checked at a glance. See `docs/28`.
 1. Confirm the broker still reports `lotSize` 100 for XAUUSD on account
    2346225 (`scripts/check_blueberry_account.py`). If it differs, stop.
 2. Confirm the account has **no open positions and no pending orders**. If it

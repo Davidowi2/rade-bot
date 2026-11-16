@@ -79,8 +79,15 @@ services:
       # start if this is unset: there is no fallback to risk-fraction sizing,
       # because "size each order from equity" is the opposite of "exactly 0.03
       # lots or refuse". The service logs why and reports executor: not started.
+      # READ THIS BEFORE CHANGING EITHER NUMBER. At 100 units/lot the lot and
+      # the ceiling together decide the widest stop that can be taken:
+      #   0.02 lots = $2.00/point -> a $25 ceiling admits 12.5 points
+      #   0.03 lots = $3.00/point -> a $25 ceiling admits only 8.33 points
+      # The channel posts 10-point stops, so 0.03 lots at this ceiling refused
+      # every signal it had ever posted. /api/status reports `max_stop_distance`
+      # so the pair can be checked at a glance.
       - key: MIRROR_FIXED_LOTS
-        value: "0.03"
+        value: "0.02"
       # The ceiling that turns a fixed lot into a risk limit: 0.03 lots on a
       # 10-unit stop and 0.03 on a 30-unit stop are the same order and three
       # times the money.

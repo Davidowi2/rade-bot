@@ -16,11 +16,12 @@ The project has two halves, and it matters which one you are looking at:
 
 ## Status
 
-> **The mirror runs in paper mode against a TradeLocker demo account.**
-> Telegram intake, validation, sizing and the pre-trade guards are live; no
-> order is placed. `MIRROR_EXECUTE=0`, and flipping it is a deliberate,
-> separately documented step — see
-> [`docs/26-live-execution-spec.md`](docs/26-live-execution-spec.md) §7.
+> **The mirror is executing orders against the pinned TradeLocker account.**
+> `MIRROR_EXECUTE=1`, destination BLBRY / 2346225, demo host, one position at a
+> time. Flipped 2026-11-16; before that it ran in paper mode since
+> 2026-11-15. The kill switch is `mirror_control.execution_paused` in Supabase
+> (stops new entries, open trades are still managed) or `MIRROR_EXECUTE=0`
+> (hard stop) — see [`docs/26-live-execution-spec.md`](docs/26-live-execution-spec.md) §5.
 >
 > **Deployment:** Render (the service, `rade-bot.onrender.com`), Vercel (the
 > dashboard, `rade-bot.vercel.app`), Supabase (the ledger).

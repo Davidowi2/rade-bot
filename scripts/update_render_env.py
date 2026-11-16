@@ -50,7 +50,12 @@ DESIRED: dict[str, str] = {
     # sizing. 100 units/lot is the broker's own lotSize for XAUUSD on the
     # destination account, read 2026-11-15. CONFIRMED=1 is what lets a signal
     # be sized at all; while it is 0 every market call is refused.
-    "MIRROR_FIXED_LOTS": "0.03",
+    #
+    # 0.02 lots, not 0.03: at 100 units/lot the lot is $2.00 per point, so the
+    # $25 ceiling admits a 12.5-point stop. The channel posts 10-point stops.
+    # At 0.03 lots ($3.00/point) the same ceiling admitted only 8.33 points and
+    # refused every signal the channel had ever posted.
+    "MIRROR_FIXED_LOTS": "0.02",
     "MIRROR_MAX_TRADE_RISK_USD": "25",
     "MIRROR_CONTRACT_UNITS_PER_LOT": "100",
     "MIRROR_CONTRACT_UNITS_CONFIRMED": "1",
@@ -58,8 +63,9 @@ DESIRED: dict[str, str] = {
     # quotes: a NOW call cannot be priced without a provider
     "MIRROR_QUOTE_PROVIDER": "tradelocker",
     "MIRROR_QUOTE_MAX_AGE_S": "2",
-    # execution stays off until the live flip is approved
-    "MIRROR_EXECUTE": "0",
+    # execution: ON. Orders go to the pinned demo-host destination (BLBRY
+    # 2346225) only; the gateway refuses any other environment or account.
+    "MIRROR_EXECUTE": "1",
     "MIRROR_MANAGE_EVERY_S": "5",
     "MIRROR_FILL_TIMEOUT_S": "300",
     # pre-trade risk controls

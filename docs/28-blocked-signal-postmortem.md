@@ -90,24 +90,31 @@ Each has a regression test. See `tests/test_cursor_and_quote_guards.py` and
 8. **The status page hid the blocker.** It now reports `units_confirmed`,
    `intake_ready` and `intake_problem` separately from the sizing rule.
 
-## Still open — a risk decision, not a bug
+## The sizing decision — **made 2026-11-16**
 
 `0.03` lots at `100` units/lot is **$3.00 per point**. Against a `$25` ceiling
 that allows a stop of **8.33 points**. Every distinct signal in the recent
 ledger carries a **10-point** stop, i.e. `$30.00` of risk — so the ceiling
-refuses all of them. That is the rule working as written, not a fault.
+refused all of them. That is the rule working as written, not a fault.
 
-Options, with the median stop (10 pts) costed:
+**Resolved by lowering the lot, not by raising the ceiling.** The ceiling the
+account holder set ($25) was kept; the lot went from `0.03` to `0.02`.
 
-| Lot | Risk at a 10-pt stop | Max stop at a $25 ceiling |
-|---|---|---|
-| 0.02 | $20.00 | 12.50 pts |
-| 0.025 | $25.00 | 10.00 pts |
-| 0.03 | $30.00 | 8.33 pts |
+| Lot | $/point | Risk at a 10-pt stop | Max stop at a $25 ceiling |
+|---|---|---|---|
+| 0.02 | $2.00 | $20.00 | 12.50 pts |
+| 0.025 | $2.50 | $25.00 | 10.00 pts |
+| 0.03 | $3.00 | $30.00 | 8.33 pts |
 
-Raising the ceiling to `$30` keeps the lot at `0.03`. Lowering the lot to
-`0.02` keeps the ceiling at `$25`. Both are the operator's call; nothing was
-changed.
+`0.02` chosen over `0.025` deliberately: `0.025` lands exactly on the ceiling
+and leaves no headroom for a wider stop, so one 10.5-point call would be
+refused. `0.02` also keeps two losing trades ($40) inside the daily breaker
+(1% of 4,862.73 ≈ $48.63); at `0.03` two losses ($60) would trip it.
+
+Both real signals from 2026-11-15 now size: 0.02 lots, $20.00 risk.
+
+To change it: one value, `MIRROR_FIXED_LOTS`, in Render. The service reports
+the resulting stop width as `max_stop_distance` on `/api/status`.
 
 ## Also worth knowing
 
