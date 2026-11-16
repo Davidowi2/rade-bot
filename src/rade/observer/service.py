@@ -52,6 +52,29 @@ DEFAULT_STARTUP_GRACE_S = 90.0
 TRUTHY = {"1", "true", "yes"}
 
 
+def _configured_exit_policy(executor: Any) -> str:
+    """The exit policy the engine is actually running.
+
+    Read off the engine rather than written as a literal, so the status cannot
+    name a policy the bot is not using. ``unresolved`` means no executor.
+    """
+    if executor is None:
+        return "unresolved"
+    return str(getattr(executor, "exit_policy", "unresolved"))
+
+
+def _account_scope(executor: Any, spec: Any) -> str:
+    """The TradeLocker environment the destination account lives on.
+
+    A fact about the host, not a mode - but it was written as the literal
+    ``"demo"``, so pointing the bot at another environment would still be
+    reported as demo. Read it from the broker specification.
+    """
+    if executor is None or spec is None:
+        return "none"
+    return str(getattr(spec, "environment", "") or "unknown")
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -452,16 +475,20 @@ class MirrorService:
             "broker_writes": executing,
             "paper_only": not executing,
             # Which host the destination account lives on. Not a mode.
-            "account_scope": "demo" if executing else "none",
+            "account_scope": _account_scope(self.executor, self.broker_spec),
             "live_trading": executing,
-            "exit_policy": "tp_ladder" if executing else "unresolved",
+            # The policy actually configured on the engine. This was hardcoded
+            # as "tp_ladder", which is not a policy name the engine accepts -
+            # the confirmed policy is "hold_to_final". A status field that
+            # names a policy the bot is not running is worse than no field.
+            "exit_policy": _configured_exit_policy(self.executor),
         }
 
     def execution_state(self) -> dict:
         """What the demo execution path is doing, for the dashboard."""
         state: dict[str, Any] = {
             "enabled": self.executor is not None,
-            "account_scope": "demo",
+            "account_scope": _account_scope(self.executor, self.broker_spec),
             "live_trading": self.executor is not None,
         }
         if self.execution_error:
@@ -535,11 +562,11 @@ class MirrorService:
                 "service": "rade-mirror",
                 "paper_only": self.executor is None,
                 "broker_writes": self.executor is not None,
-                "account_scope": "demo" if self.executor is not None else "none",
+                "account_scope": _account_scope(self.executor, self.broker_spec),
                 # Whether this process places orders. Not the same question as
                 # account_scope, which is the host the account lives on.
                 "live_trading": self.executor is not None,
-                "exit_policy": "tp_ladder" if self.executor is not None else "unresolved",
+                "exit_policy": _configured_exit_policy(self.executor),
                 "uptime_s": round(time.time() - self.started_at, 1),
                 "time": _now_iso(),
                 "counts": self.counts(),

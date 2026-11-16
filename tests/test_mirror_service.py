@@ -432,23 +432,33 @@ class _Spec:
     unconfirmed_reason = None
 
 
-@pytest.fixture()
+class _StatusExecutor:
+    """Just enough executor for the status routes."""
+
+    def __init__(self, exit_policy):
+        self.exit_policy = exit_policy
+
+
+def _serve(tmp_path, *, executor, ledger=None):
+    ledger = ledger if ledger is not None else SQLiteIntentLedger(tmp_path / "s.sqlite")
+    heartbeat = tmp_path / "hb.json"
+    heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat,
+                             executor=executor, broker_spec=_Spec())
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, thread
+
+
+@pytest.fixture
 def live_exec(tmp_path):
     ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
     seed(ledger)
     seed_trade(ledger)
-    heartbeat = tmp_path / "hb.json"
-    heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
-    service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat,
-                             executor=object(), broker_spec=_Spec())
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
-    # With the default (daemon_threads = False) an occasional request that lands
-    # during fixture teardown surfaced as a one-off connection failure in an
-    # otherwise green suite. A test server has no reason to keep a handler
-    # alive past its fixture.
-    httpd.daemon_threads = True
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
+    httpd, thread = _serve(tmp_path, executor=_StatusExecutor("hold_to_final"),
+                           ledger=ledger)
     yield httpd.server_address[1]
     httpd.shutdown()
     httpd.server_close()
@@ -504,10 +514,60 @@ def test_status_reports_the_execution_path(live_exec):
     assert body["broker_writes"] is True
     assert body["paper_only"] is False
     assert body["live_trading"] is True
-    assert body["exit_policy"] == "tp_ladder"
+    # The policy the engine is actually running, not a label written into the
+    # status handler. This used to be hardcoded "tp_ladder", which is not a
+    # policy name the engine accepts.
+    assert body["exit_policy"] == "hold_to_final"
     assert body["execution"]["enabled"] is True
     assert body["execution"]["broker"]["verified"] is True
     assert body["execution"]["broker"]["instrument_id"] == 1808
+
+
+def test_the_status_reports_the_policy_the_engine_is_running(tmp_path):
+    """The status must name the policy on the engine, not a literal.
+
+    It used to say "tp_ladder" whenever an executor existed - a name the engine
+    does not accept, and not the confirmed policy. A different configuration
+    must show up here, or the field is decoration.
+    """
+    httpd, thread = _serve(tmp_path, executor=_StatusExecutor("ladder"))
+    try:
+        status, body = call(httpd.server_address[1], "/api/status", token=TOKEN)
+        assert status == 200
+        assert body["exit_policy"] == "ladder"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_the_status_reports_the_destination_environment_from_the_broker(tmp_path):
+    """``account_scope`` is a host fact, so it must come from the broker.
+
+    It was the literal ``"demo"``: pointing the bot at another environment
+    would still have been reported as demo.
+    """
+    spec = _Spec()
+    spec.environment = "live"
+    ledger = SQLiteIntentLedger(tmp_path / "scope.sqlite")
+    heartbeat = tmp_path / "hb.json"
+    heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
+    service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat,
+                             executor=_StatusExecutor("hold_to_final"),
+                             broker_spec=spec)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = call(httpd.server_address[1], "/api/status", token=TOKEN)
+        assert status == 200
+        assert body["account_scope"] == "live"
+        assert body["execution"]["account_scope"] == "live"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
 
 
 def test_no_executor_is_configured_by_default(monkeypatch, tmp_path):

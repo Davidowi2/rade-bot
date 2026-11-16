@@ -103,7 +103,7 @@ test("the live mode reads as live, not as demo", () => {
     // A funded account sits on the broker's demo host; the host is a fact, not
     // a mode. The page must say live when orders are being placed.
     const live = {...STATUS, paper_only: false, broker_writes: true,
-                  live_trading: true, exit_policy: "tp_ladder",
+                  live_trading: true, exit_policy: "hold_to_final",
                   execution: {enabled: true, error: null, paused: {paused: false},
                               guards: null,
                               broker: {verified: true, symbol: "XAUUSD",

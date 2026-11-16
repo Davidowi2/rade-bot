@@ -436,6 +436,10 @@
 let timer = null;
 let me = null;
 
+// The exit policy the engine is confirmed to run. Anything else is worth a
+// warning on the dashboard rather than a silent "ok".
+const CONFIRMED_EXIT_POLICY = ["hold_to_final"];
+
 function esc(value) {
   return String(value == null ? "" : value).replace(/[&<>"]/g, c => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
@@ -589,7 +593,7 @@ function renderBadges(status) {
     items.push('<span class="badge ok">paper only</span>');
     items.push('<span class="badge">broker writes disabled</span>');
   }
-  items.push(`<span class="badge ${status.exit_policy === "tp_ladder" ? "ok" : "warn"}">exit ${esc(status.exit_policy || "unresolved")}</span>`);
+  items.push(`<span class="badge ${CONFIRMED_EXIT_POLICY.includes(status.exit_policy) ? "ok" : "warn"}">exit ${esc(status.exit_policy || "unresolved")}</span>`);
   if (exec.error) items.push('<span class="badge bad">execution error</span>');
   const paused = exec.paused;
   if (paused && paused.paused === true) items.push('<span class="badge bad">paused</span>');
