@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,7 @@ from rade.execution.broker import (
     BrokerRefused,
     BrokerSpec,
     OrderAck,
+    quote_problem,
 )
 from rade.execution.guards import (
     GuardVerdict,
@@ -378,6 +380,11 @@ class ExecutionEngine:
                                                 max_trade_risk_usd)
         #: The startup read of what the guards depend on, once it has been made.
         self._preflight: dict | None = None
+        #: Serialises order submission. The listener thread and the management
+        #: thread can both reach a trade that has not been submitted yet, and
+        #: two concurrent submissions would each pass the "does the broker
+        #: already have this order" check before either had placed one.
+        self._submit_lock = threading.Lock()
 
     def guard_state(self) -> dict:
         """What the pre-trade guards are enforcing, and the last verdict.
@@ -669,6 +676,14 @@ class ExecutionEngine:
             return self._guard_blocked(
                 trade, f"the quote could not be read: {type(exc).__name__}: {exc}")
 
+        # The price itself is checked before any guard that compares against
+        # it. A crossed or non-positive book produces numbers that pass every
+        # inequality below - a negative spread is under any positive limit -
+        # so the quote has to be refused as data, not measured as a market.
+        unusable = quote_problem(quote)
+        if unusable is not None:
+            return self._guard_blocked(trade, unusable)
+
         try:
             equity = float(self.broker.equity())
         except Exception as exc:
@@ -816,8 +831,47 @@ class ExecutionEngine:
         return {"executed": False, "trade_id": trade_id, "reason": reason,
                 "state": STATE_BLOCKED}
 
+    def _submit_validated(self, trade: ManagedTrade) -> dict:
+        """Carry a validated-but-unsubmitted trade through entry.
+
+        ``execute`` leaves a trade in ``validated`` between opening its ledger
+        row and sending the order. A restart in that window used to leave the
+        row there for good: the management pass walked only accepted and open
+        trades, so the signal was recorded and then never acted on, with
+        nothing in the ledger saying so.
+
+        The guards run again here, against a quote read now, because the
+        market the signal was sized against is gone by the time this runs.
+        """
+        try:
+            spec = self.broker.spec()
+        except Exception as exc:
+            return self._guard_blocked(
+                trade, "the broker specification could not be read, so the "
+                       f"order cannot be verified: {type(exc).__name__}: {exc}")
+        blocked = self._pre_trade_check(trade, spec)
+        if blocked is not None:
+            return blocked
+        self._notify(trade.trade_id, "signal",
+                     f"[SIGNAL] {trade.side.upper()} {trade.symbol} market "
+                     f"{trade.size:g} lot; SL {trade.stop:g}, final TP "
+                     f"{trade.plan.final_target:g}. "
+                     f"Plan: {trade.plan.description()}")
+        return self.submit(trade)
+
     def submit(self, trade: ManagedTrade) -> dict:
-        """Send the entry order, unless the broker already knows about it."""
+        """Send the entry order, unless the broker already knows about it.
+
+        Serialised by :attr:`_submit_lock`. A trade can be reached by the
+        listener (a new signal) and by the management pass (a trade left
+        unsubmitted by an earlier restart) at the same moment, and the
+        "already has this order?" check is only safe if the two cannot run it
+        concurrently.
+        """
+        with self._submit_lock:
+            return self._submit_order(trade)
+
+    def _submit_order(self, trade: ManagedTrade) -> dict:
         existing = self._existing_order(trade.trade_id)
         if existing is not None:
             self.log(f"trade {trade.trade_id}: the broker already has order "
@@ -924,7 +978,11 @@ class ExecutionEngine:
             else:
                 return {"filled": False, "trade_id": trade.trade_id}
         else:
-            trade.fill_price = float(position.avg_price) or trade.entry
+            average = float(position.avg_price or 0.0)
+            # ``or trade.entry`` treated a genuine 0.0 as missing and recorded
+            # the published entry as the fill price. Only a non-positive
+            # average is actually absent.
+            trade.fill_price = average if average > 0 else float(trade.entry)
             trade.broker_position_id = position.id
 
         trade.state = STATE_OPEN
@@ -987,19 +1045,28 @@ class ExecutionEngine:
         """Run one management pass over every open trade."""
         summary = {"considered": 0, "closed": 0, "partial": 0, "stops_moved": 0,
                    "stopped": 0, "pending_fill": 0, "errors": 0}
-        for row in self.ledger.list_trades(states=(STATE_ACCEPTED, STATE_OPEN, STATE_PARTIAL)):
+        for row in self.ledger.list_trades(states=(STATE_VALIDATED, STATE_ACCEPTED,
+                                                   STATE_OPEN, STATE_PARTIAL)):
             trade = ManagedTrade.from_row(row)
             if trade is None:
                 continue
             summary["considered"] += 1
             try:
-                if trade.state == STATE_ACCEPTED:
-                    filled = self.confirm_fill(trade)
-                    if not filled.get("filled"):
-                        summary["pending_fill"] += 1
-                        continue
-                    trade = ManagedTrade.from_row(self.ledger.get_trade(trade.trade_id)) or trade
-                outcome = self.manage_trade(trade)
+                if trade.state == STATE_VALIDATED:
+                    # A trade opened but never submitted: the window between
+                    # open_trade and place_market, which a restart can leave
+                    # behind. It used to be permanent, because this pass walked
+                    # only accepted and open trades, so the signal was recorded
+                    # and then never acted on.
+                    outcome = self._submit_validated(trade)
+                else:
+                    if trade.state == STATE_ACCEPTED:
+                        filled = self.confirm_fill(trade)
+                        if not filled.get("filled"):
+                            summary["pending_fill"] += 1
+                            continue
+                        trade = ManagedTrade.from_row(self.ledger.get_trade(trade.trade_id)) or trade
+                    outcome = self.manage_trade(trade)
             except Exception as exc:
                 summary["errors"] += 1
                 self.log(f"management error for {trade.trade_id}: "
@@ -1078,7 +1145,21 @@ class ExecutionEngine:
                           "not by this manager")
             return self._finish(trade, reason=reason)
 
-        quote = self.broker.quote()
+        try:
+            quote = self.broker.quote()
+        except BrokerError as exc:
+            # Not a failure of the trade: the position is still protected by
+            # the stop and target attached at the broker, and the next pass
+            # asks again.
+            return {"error": True, "trade_id": trade.trade_id,
+                    "reason": f"the broker's quote could not be read: {exc}"}
+        unusable = quote_problem(quote)
+        if unusable is not None:
+            # The quote drives which target is reached and which side of the
+            # market a stop move is compared against, so a crossed book here
+            # would decide the ladder from broken prices.
+            return {"error": True, "trade_id": trade.trade_id,
+                    "reason": unusable}
 
         # A leg's stop move can be refused - the price can move between the
         # close and the modification, which puts breakeven on the wrong side
@@ -1556,7 +1637,9 @@ class ExecutionEngine:
             return {"state": STATE_ACCEPTED, "trade_id": trade.trade_id}
 
         trade.broker_position_id = position.id
-        trade.fill_price = float(position.avg_price) or trade.fill_price or trade.entry
+        average = float(position.avg_price or 0.0)
+        trade.fill_price = (average if average > 0
+                            else float(trade.fill_price or trade.entry))
 
         # The ladder must still describe the position. If the broker's
         # attached target is not the final target of the plan, the ordering

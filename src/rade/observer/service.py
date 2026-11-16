@@ -37,6 +37,7 @@ from rade.observer.store import StorageError, hosted_mode, make_ledger
 REVIEW_STATUSES = [STATUS_MANUAL_REVIEW, STATUS_CONFLICT]
 INTENT_STATUSES = [STATUS_PAPER_INTENT]
 MAX_LIMIT = 200
+DEFAULT_LIMIT = 50
 #: A pause request carries a reason and a name. Anything larger is not that.
 MAX_WRITE_BODY = 4096
 
@@ -57,6 +58,22 @@ def _now_iso() -> str:
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY
+
+
+def _limit_from(query: dict[str, list[str]]) -> int:
+    """The ``limit`` query parameter, clamped to a usable page size.
+
+    An unparseable value used to raise out of the route and surface as a 500,
+    which said the service was broken rather than the request. A negative value
+    sliced from the end of the list, returning everything but the last few
+    rows, which is not a small page.
+    """
+    raw = (query.get("limit") or [str(DEFAULT_LIMIT)])[0]
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_LIMIT
+    return max(1, min(value, MAX_LIMIT))
 
 
 def _optional_int(raw: str) -> int | None:
@@ -330,6 +347,23 @@ class MirrorService:
         delivery = min(intervals) if intervals else 0.0
         sizing = describe_fixed_lot(lots=_fixed_lots(),
                                     max_risk_usd=_max_trade_risk_usd())
+        # The sizing rule is only half the answer. The pipeline refuses every
+        # signal before it sizes while the contract size is unconfirmed, so a
+        # service that reported only its sizing rule read as a copier whose
+        # rule was fine while it could never copy anything. That is a separate
+        # fact from "is the rule configured", so it is reported separately
+        # rather than by overwriting ``ready``: a paper mirror sizing from
+        # equity really is configured, and denying that would be the opposite
+        # mistake.
+        units_confirmed = (self.executor is not None
+                           or _truthy(os.getenv("MIRROR_CONTRACT_UNITS_CONFIRMED")))
+        intake_ready = bool(sizing["ready"]) and units_confirmed
+        if not units_confirmed:
+            intake_problem = ("MIRROR_CONTRACT_UNITS_CONFIRMED is not set, so the "
+                              "contract size is unconfirmed and every signal is "
+                              "refused before it is sized")
+        else:
+            intake_problem = "" if sizing["ready"] else sizing["problem"]
         # Execution has no sizing fallback: without both numbers the executor
         # refuses to start. Reporting the rule as "ready" (or as a working
         # "risk fraction" mode) while the executor is down would be the same
@@ -359,6 +393,12 @@ class MirrorService:
             # than as a copier that quietly never copies.
             "sizing": sizing,
             "sizing_mode": sizing["mode"],
+            # Whether a signal can actually become an intent: the sizing rule
+            # being configured is not enough while the contract size is
+            # unconfirmed, which is a refusal before any sizing happens.
+            "units_confirmed": units_confirmed,
+            "intake_ready": intake_ready,
+            "intake_problem": intake_problem,
             "fixed_lot_ready": sizing["ready"],
             "fixed_lot_problem": sizing["problem"],
             # Whether the executor could start with this rule. False means the
@@ -436,7 +476,7 @@ class MirrorService:
 
     # -- routes -----------------------------------------------------------
     def route(self, path: str, query: dict[str, list[str]]) -> tuple[int, dict]:
-        limit = min(int((query.get("limit") or ["50"])[0] or 50), MAX_LIMIT)
+        limit = _limit_from(query)
         statuses = query.get("status")
 
         if path == "/healthz":

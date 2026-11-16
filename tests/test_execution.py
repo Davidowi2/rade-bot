@@ -44,6 +44,7 @@ from rade.execution.engine import (
     STATE_PARTIAL,
     STATE_REJECTED,
     STATE_REVIEW,
+    STATE_VALIDATED,
     ExecutionEngine,
     ManagedTrade,
     trade_id_for,
@@ -732,6 +733,83 @@ def test_an_order_is_never_resubmitted_after_a_restart(tmp_path):
     restarted.execute(result, envelope())
 
     assert len(broker.place_calls) == 1, "the order was placed twice"
+
+
+def test_a_trade_opened_but_never_submitted_is_submitted_after_a_restart(tmp_path):
+    """The window between open_trade and place_market must not be a dead end.
+
+    ``execute`` writes the trade row before it sends the order. If the process
+    dies in between, the row is left in ``validated`` - and the management pass
+    used to walk only accepted and open trades, so the signal was recorded and
+    then never acted on, with nothing in the ledger saying so.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    trade_id = trade_id_for(result.event_key)
+    signal = result.signal
+
+    plan = build_exit_plan(side=signal["side"], entry=signal["published_entry"],
+                           stop=signal["stop_loss"], targets=signal["take_profits"],
+                           size=result.order_intent["size_lots"],
+                           lot_step=0.01, min_lot=0.01)
+    row = ManagedTrade(
+        trade_id=trade_id, event_key=result.event_key, channel="@source",
+        message_id=100, revision=0, symbol="XAUUSD", side=signal["side"],
+        size=result.order_intent["size_lots"], entry=signal["published_entry"],
+        stop=signal["stop_loss"], targets=signal["take_profits"], plan=plan,
+        current_stop=signal["stop_loss"], state=STATE_VALIDATED,
+    ).to_row()
+    assert ledger.open_trade(row) == "inserted"
+
+    # A restart: reconcile, then one management pass.
+    restarted = ExecutionEngine(broker=broker, ledger=ledger,
+                                notifier=RecordingNotifier(), log=lambda line: None,
+                                fixed_lots=FIXED_LOTS,
+                                max_trade_risk_usd=MAX_RISK_USD)
+    restarted.reconcile()
+    restarted.manage()
+
+    assert len(broker.place_calls) == 1, "the unsubmitted trade was never sent"
+    after = ManagedTrade.from_row(ledger.get_trade(trade_id))
+    assert after.state != STATE_VALIDATED
+
+
+def test_the_management_pass_does_not_submit_the_same_trade_twice(tmp_path):
+    """Two threads reaching one unsubmitted trade must still place one order."""
+    import threading
+
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    trade_id = trade_id_for(result.event_key)
+    signal = result.signal
+    plan = build_exit_plan(side=signal["side"], entry=signal["published_entry"],
+                           stop=signal["stop_loss"], targets=signal["take_profits"],
+                           size=result.order_intent["size_lots"],
+                           lot_step=0.01, min_lot=0.01)
+    ledger.open_trade(ManagedTrade(
+        trade_id=trade_id, event_key=result.event_key, channel="@source",
+        message_id=100, revision=0, symbol="XAUUSD", side=signal["side"],
+        size=result.order_intent["size_lots"], entry=signal["published_entry"],
+        stop=signal["stop_loss"], targets=signal["take_profits"], plan=plan,
+        current_stop=signal["stop_loss"], state=STATE_VALIDATED,
+    ).to_row())
+
+    outcomes = []
+    barrier = threading.Barrier(2)
+
+    def run() -> None:
+        barrier.wait()
+        outcomes.append(engine.manage())
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(broker.place_calls) == 1, "concurrent passes placed two orders"
 
 
 def test_tp1_moves_the_stop_to_tp1_and_closes_nothing(tmp_path):

@@ -297,9 +297,34 @@ def build_exit_plan(*, side: str, entry: float, stop: float,
     if policy not in {POLICY_HOLD_TO_FINAL, POLICY_LADDER}:
         raise LadderError(f"unknown exit policy {policy!r}")
 
+    # The geometry is validated here as well as in the pipeline, because this
+    # function is a second entry point: the engine builds its plan from the
+    # signal it was handed, and a plan built from a stop on the wrong side of
+    # the entry would be sent to the broker as a stop that is already
+    # triggered. One implementation of the check, both callers.
+    if not math.isfinite(entry) or entry <= 0:
+        raise LadderError(
+            f"the entry price must be a finite positive number, got {entry!r}")
+    if not math.isfinite(stop) or stop <= 0:
+        raise LadderError(
+            f"the stop price must be a finite positive number, got {stop!r}")
+    if (side == "buy" and stop >= entry) or (side == "sell" and stop <= entry):
+        raise LadderError(
+            f"the stop {stop:g} is on the wrong side of the entry {entry:g} "
+            f"for a {side}; the position would be stopped out on entry")
+
     ordered = list(targets)
     if not ordered:
         raise LadderError("a trade needs at least one target")
+
+    for target in ordered:
+        if not math.isfinite(target) or target <= 0:
+            raise LadderError(
+                f"a target is not a finite positive number: {target!r}")
+        if (side == "buy" and target <= entry) or (side == "sell" and target >= entry):
+            raise LadderError(
+                f"the target {target:g} is on the wrong side of the entry "
+                f"{entry:g} for a {side}")
 
     is_long = side == "buy"
     # Nearest first: the first target is the closest to the entry.

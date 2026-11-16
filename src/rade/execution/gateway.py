@@ -142,6 +142,7 @@ class TradeLockerGateway:
                  server: str = "",
                  expected_server: str | None = None,
                  expected_account_id: int | None = None,
+                 secrets: tuple[str, ...] = (),
                  log: Callable[[str], None] = print):
         assert_destination(environment, base_url, server=server or "",
                            account_id=account_id if account_id is not None else int(
@@ -157,7 +158,10 @@ class TradeLockerGateway:
             getattr(client, "account_id", 0) or 0)
         self.log = log
         self._spec: BrokerSpec | None = None
-        self._secrets: tuple[str | None, ...] = ()
+        #: Values that must never survive into an error message. Populated by
+        #: the factory from the credentials it used; empty means the scrubber
+        #: can only catch ``key=value`` shapes, not a bare secret in a URL.
+        self._secrets = tuple(secret for secret in secrets if secret)
 
     # -- internals --------------------------------------------------------
 
@@ -545,6 +549,7 @@ def tradelocker_gateway_from_env(*, symbol: str = "XAUUSD",
         server=settings.tradelocker_server,
         expected_server=expected_server,
         expected_account_id=expected_account_id,
+        secrets=(settings.tradelocker_email, settings.tradelocker_password),
         log=log,
     )
     return gateway

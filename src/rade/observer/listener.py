@@ -81,10 +81,25 @@ class MirrorState:
                 self.last_message_id = 0
 
     def advance(self, message_id: int) -> None:
+        """Move the cursor, but only once the move is on disk.
+
+        The in-memory cursor used to be advanced *before* the write. When the
+        write failed - a locked file, a full disk, a syncing folder - the
+        message was left unclaimed in the ledger while the cursor had already
+        moved past it, and ``save_cursor`` then persisted that skipped position
+        to the store. The gap fill promises that an unprocessed message is
+        retried on the next pass; that promise only holds if a failed write
+        rolls the cursor back.
+        """
         if message_id <= self.last_message_id:
             return
+        previous = self.last_message_id
         self.last_message_id = message_id
-        self._write()
+        try:
+            self._write()
+        except Exception:
+            self.last_message_id = previous
+            raise
 
     def begin_run(self) -> None:
         self.runs += 1
@@ -95,13 +110,25 @@ class MirrorState:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        try:
+            self._write_tmp(tmp)
+            os.replace(tmp, self.path)
+        except Exception:
+            # A half-written cursor file must not be left behind looking like
+            # the real one.
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+
+    def _write_tmp(self, tmp: Path) -> None:
         tmp.write_text(json.dumps({
             "last_message_id": self.last_message_id,
             "runs": self.runs,
             "start_source": self.start_source,
             "updated_at": _now().isoformat(),
         }, indent=2), encoding="utf-8")
-        os.replace(tmp, self.path)
 
 
 @dataclass

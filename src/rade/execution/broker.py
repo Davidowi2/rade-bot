@@ -23,6 +23,7 @@ Two rules are encoded in the types rather than left to comments:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
@@ -99,6 +100,31 @@ class BrokerQuote:
     def __post_init__(self) -> None:
         if self.quoted_at.tzinfo is None:
             object.__setattr__(self, "quoted_at", self.quoted_at.replace(tzinfo=timezone.utc))
+
+
+def quote_problem(quote: BrokerQuote | None) -> str | None:
+    """Why this quote cannot be used, or ``None`` when it can.
+
+    A quote is the only price evidence the pre-trade guards have, and the
+    checks it feeds are all inequalities: a crossed book (bid above ask) has a
+    *negative* spread, which is ``<=`` any positive spread limit and therefore
+    passes. A non-positive price makes the reference price zero, which turns
+    the stop distance into the whole stop level. Both are the broker's data
+    being wrong rather than the market being extreme, so both are refused
+    before they can reach an order.
+    """
+    if quote is None:
+        return "the broker returned no quote"
+    if not (math.isfinite(quote.bid) and math.isfinite(quote.ask)):
+        return (f"the quote is not a pair of finite numbers "
+                f"(bid={quote.bid!r}, ask={quote.ask!r})")
+    if quote.bid <= 0 or quote.ask <= 0:
+        return (f"the quote is not positive (bid={quote.bid:g}, "
+                f"ask={quote.ask:g})")
+    if quote.ask < quote.bid:
+        return (f"the quote is crossed (bid {quote.bid:g} is above ask "
+                f"{quote.ask:g}); the broker's prices are not usable")
+    return None
 
 
 @dataclass(frozen=True)
