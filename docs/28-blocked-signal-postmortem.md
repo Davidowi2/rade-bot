@@ -118,30 +118,42 @@ the resulting stop width as `max_stop_distance` on `/api/status`.
 
 ## Post-flip audit (independent review, 2026-11-16)
 
-An independent pass over the execution path found one defect worth the name,
-plus a sibling of it:
+An independent pass over the execution path found five defects worth the name.
+All are fixed.
 
+* **A market that crossed the published stop between intake and submission was
+  still traded.** The pipeline checks the stop against the quote it held at
+  intake; the engine acts on a second quote, and in that gap the market can move
+  through the stop. The order then fills and stops out immediately — paying the
+  spread for nothing. The stop side is a property of the market, not of the
+  signal, so it is now re-checked at submission and the trade is blocked.
 * **`_existing_order` failed open.** It returned `None` when the broker's order
   feed could not be read, and every caller read `None` as "the broker has no
   order here". `submit()` would then place a **second order** for a trade the
   broker already had, and `reconcile_trade` would conclude "never submitted" —
   which is what lets a later pass send it again. It now returns an
-  `ORDERS_UNREADABLE` sentinel, matching the positions sentinel. Submission
-  sends nothing and leaves the trade actionable; reconciliation leaves the
-  state alone.
+  `ORDERS_UNREADABLE` sentinel, matching the positions sentinel.
 * **The gateway read a broken feed as an empty one.** `get_all_positions()`
   returning `None`, or anything that was not a table, produced `[]` — so a
   failed read looked like "no position open", which is how a live position gets
   written off as closed. `positions()` and `orders()` now raise.
+* **A trade left in `submitted` was unmanaged.** A process interrupted between
+  recording the submission and the broker's acknowledgement left it skipped by
+  every management pass until a restart. It is now reconciled — the only safe
+  action when the broker may already hold the position.
+* **A failed engine notification was never retried.** Engine notifications are
+  keyed by the **trade id**, so there is no `mirror_events` row to rebuild a
+  `PipelineResult` from, and the retry pass skipped them forever: a failed
+  `[FILLED]` or `[STOP MOVED]` was silently dropped. The retry now rebuilds a
+  message from the trade row.
 
-Both are the same failure: **a read that could not be made was treated as a
-read that found nothing.** Every such site in the execution path now
-distinguishes the two.
+The first four are one mistake in different places: **a read that could not be
+made was treated as a read that found nothing.**
 
 Not addressed, because it is not reachable under the confirmed policy: under
 `exit_policy="ladder"` a refused close followed by an unreadable position read
 retries the close and can close twice. `hold_to_final` closes the remainder
-once. The ladder policy is retained but not the default.
+once. The ladder policy is retained but is not the default.
 
 ## Also worth knowing
 
