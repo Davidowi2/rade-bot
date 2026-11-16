@@ -4,6 +4,48 @@
 The original diagnosis is kept below because the measurement is still the
 measurement.
 
+## The other blocker: the service is asleep most of the time
+
+**This is the bigger one, and it is infrastructure, not code.**
+
+The Render service is on the **free plan**. Render spins a free web service down
+after ~15 minutes with no inbound request and cold-starts it on the next one
+(~30–60 s). The mirror's listener only runs while that process is up, so a
+sleeping service **silently misses every signal posted during the gap**.
+
+The ingestion log shows it plainly. Events arrive in bursts, not on the 15-second
+poll cadence:
+
+```
+received 23:00  61 events   (the initial catch-up)
+received 02:00   8       04:00   1       08:00   1
+received 09:00   1       11:00   7       18:00   4
+received 20:00   1       22:00   1
+```
+
+Signals posted at **10:35:33** were received at **11:08:26 — 33 minutes late**.
+Nothing was ingested between ~09:06 and ~11:08. Each burst lines up with
+something touching the service (a deploy, a dashboard load, a status check),
+which is what wakes it.
+
+The listener itself is healthy — `reconnects: 0`, `errors: []` — because each
+process is short-lived and clean while it is awake. There is nothing to fix in
+the loop.
+
+**Fixes, in order of reliability:**
+
+1. **A paid Render plan (Starter, ~$7/mo).** The service is not suspended. This
+   is the only fix that does not depend on a third party staying up.
+2. **An external ping every few minutes.** A cron or an uptime monitor hitting
+   `/healthz` keeps the instance warm. A Hermes cron doing exactly that has been
+   scheduled (`rade_keepalive.py`, every 5 minutes) — but it only works while
+   this machine is on and Hermes is running, so it is a mitigation, not a fix.
+3. **Move the listener to something that does not sleep** (a VPS, a worker that
+   Render keeps warm). Same effect as (1) with more moving parts.
+
+Until one of these is in place, the bot will keep missing most of the day no
+matter how the intake rules are tuned.
+
 ## The decision
 
 **An edited call is traded as it stands.**
