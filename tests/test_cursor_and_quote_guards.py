@@ -163,6 +163,17 @@ def test_confirmed_units_report_the_intake_as_ready(monkeypatch):
     assert intake["intake_problem"] == ""
 
 
+def test_the_intake_reports_the_stop_width_the_ceiling_allows(monkeypatch):
+    """The mismatch between the lot and the ceiling must be visible, not silent."""
+    monkeypatch.setenv("MIRROR_FIXED_LOTS", "0.03")
+    monkeypatch.setenv("MIRROR_MAX_TRADE_RISK_USD", "25")
+    monkeypatch.setenv("MIRROR_CONTRACT_UNITS_PER_LOT", "100")
+    monkeypatch.setenv("MIRROR_CONTRACT_UNITS_CONFIRMED", "1")
+    monkeypatch.delenv("MIRROR_EXECUTE", raising=False)
+    intake = MirrorService(ledger=object(), token="t").intake_limits()
+    assert intake["max_stop_distance"] == pytest.approx(25.0 / 3.0)
+
+
 # -- the ladder's own geometry ----------------------------------------------
 
 

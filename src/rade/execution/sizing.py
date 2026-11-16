@@ -176,33 +176,51 @@ def check_fixed_lot(*, lots: float, spec: LotSpec, stop_distance: float,
     return usable, ""
 
 
-def describe_fixed_lot(*, lots: float | None, max_risk_usd: float | None) -> dict:
+def describe_fixed_lot(*, lots: float | None, max_risk_usd: float | None,
+                       contract_units: float | None = None) -> dict:
     """What the fixed-lot rule is configured to do, for the status page.
 
     ``ready`` is false when the rule cannot accept any signal, and
     ``problem`` says why. A rule that is switched off must not read as a rule
     that is passing.
+
+    ``max_stop_distance`` is the stop width the ceiling can actually accommodate
+    at this lot and contract size. It is reported because the two settings that
+    produce it are configured independently: a lot and a ceiling that are each
+    plausible can together refuse every signal the channel posts, and neither
+    number alone says so.
     """
+    def with_extras(base: dict) -> dict:
+        if (contract_units and lots and max_risk_usd
+                and math.isfinite(contract_units) and contract_units > 0
+                and math.isfinite(lots) and lots > 0
+                and math.isfinite(max_risk_usd) and max_risk_usd > 0):
+            base["max_stop_distance"] = max_risk_usd / (lots * contract_units)
+        else:
+            base["max_stop_distance"] = None
+        return base
+
     if lots is None:
-        return {"mode": "risk_fraction", "fixed_lots": None,
-                "max_trade_risk_usd": max_risk_usd, "ready": True, "problem": ""}
+        return with_extras({"mode": "risk_fraction", "fixed_lots": None,
+                            "max_trade_risk_usd": max_risk_usd, "ready": True,
+                            "problem": ""})
     # A NaN lot reads as "configured" to every comparison, so it is checked by
     # name before anything else can treat it as a working rule.
     if not math.isfinite(lots) or lots <= 0:
-        return {"mode": "fixed_lots", "fixed_lots": lots,
-                "max_trade_risk_usd": max_risk_usd, "ready": False,
-                "problem": (f"the configured fixed lot {lots!r} is not a usable "
-                            "number; every signal will be refused")}
+        return with_extras({"mode": "fixed_lots", "fixed_lots": lots,
+                            "max_trade_risk_usd": max_risk_usd, "ready": False,
+                            "problem": (f"the configured fixed lot {lots!r} is not a usable "
+                                        f"number; every signal will be refused")})
     if max_risk_usd is None:
-        return {"mode": "fixed_lots", "fixed_lots": float(lots),
-                "max_trade_risk_usd": None, "ready": False,
-                "problem": ("no per-trade USD risk ceiling is configured; every "
-                            "signal will be refused")}
+        return with_extras({"mode": "fixed_lots", "fixed_lots": float(lots),
+                            "max_trade_risk_usd": None, "ready": False,
+                            "problem": ("no per-trade USD risk ceiling is configured; every "
+                                        "signal will be refused")})
     if not math.isfinite(max_risk_usd) or max_risk_usd <= 0:
-        return {"mode": "fixed_lots", "fixed_lots": float(lots),
-                "max_trade_risk_usd": max_risk_usd, "ready": False,
-                "problem": ("the per-trade USD risk ceiling is not a positive "
-                            "number; every signal will be refused")}
-    return {"mode": "fixed_lots", "fixed_lots": float(lots),
-            "max_trade_risk_usd": float(max_risk_usd), "ready": True,
-            "problem": ""}
+        return with_extras({"mode": "fixed_lots", "fixed_lots": float(lots),
+                            "max_trade_risk_usd": max_risk_usd, "ready": False,
+                            "problem": ("the per-trade USD risk ceiling is not a positive "
+                                        "number; every signal will be refused")})
+    return with_extras({"mode": "fixed_lots", "fixed_lots": float(lots),
+                        "max_trade_risk_usd": float(max_risk_usd), "ready": True,
+                        "problem": ""})

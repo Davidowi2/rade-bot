@@ -136,6 +136,25 @@ def _max_trade_risk_usd() -> float | None:
     return value
 
 
+def _contract_units() -> float | None:
+    """The contract size in force, when it is set to a usable number.
+
+    Unset or unusable returns ``None`` rather than raising: this is reported on
+    the status page, and a configuration error there must not take the request
+    down. The intake's own ``units_confirmed`` check is what refuses a signal.
+    """
+    raw = os.getenv("MIRROR_CONTRACT_UNITS_PER_LOT", "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
 def _risk_fraction() -> float:
     """The per-trade risk fraction, capped by the pipeline's hard ceiling.
 
@@ -346,7 +365,8 @@ class MirrorService:
         intervals = [x for x in (catchup, reconnect) if x > 0]
         delivery = min(intervals) if intervals else 0.0
         sizing = describe_fixed_lot(lots=_fixed_lots(),
-                                    max_risk_usd=_max_trade_risk_usd())
+                                    max_risk_usd=_max_trade_risk_usd(),
+                                    contract_units=_contract_units())
         # The sizing rule is only half the answer. The pipeline refuses every
         # signal before it sizes while the contract size is unconfirmed, so a
         # service that reported only its sizing rule read as a copier whose
@@ -393,6 +413,10 @@ class MirrorService:
             # than as a copier that quietly never copies.
             "sizing": sizing,
             "sizing_mode": sizing["mode"],
+            # The stop width the lot and ceiling admit between them. Reported
+            # because a lot and a ceiling that are each plausible can together
+            # refuse every signal the channel posts.
+            "max_stop_distance": sizing.get("max_stop_distance"),
             # Whether a signal can actually become an intent: the sizing rule
             # being configured is not enough while the contract size is
             # unconfirmed, which is a refusal before any sizing happens.
@@ -856,11 +880,14 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
         # can be days - and it would look exactly like a channel that had gone
         # quiet.
         sizing = describe_fixed_lot(lots=_fixed_lots(),
-                                    max_risk_usd=_max_trade_risk_usd())
+                                    max_risk_usd=_max_trade_risk_usd(),
+                                    contract_units=_contract_units())
         if sizing["mode"] == "fixed_lots":
             if sizing["ready"]:
+                stop = sizing.get("max_stop_distance")
                 log(f"sizing: fixed {sizing['fixed_lots']:g} lot, per-trade "
-                    f"ceiling ${sizing['max_trade_risk_usd']:.2f}")
+                    f"ceiling ${sizing['max_trade_risk_usd']:.2f}"
+                    + (f", allows a stop of {stop:.2f} pts" if stop else ""))
             else:
                 log(f"SIZING NOT READY: {sizing['problem']}")
         else:

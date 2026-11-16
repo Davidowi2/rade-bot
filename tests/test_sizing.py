@@ -147,6 +147,27 @@ def test_describe_reports_a_configured_rule_as_ready():
     assert described["max_trade_risk_usd"] == pytest.approx(25.0)
 
 
+def test_describe_reports_the_stop_width_the_ceiling_can_accommodate():
+    """A lot and a ceiling that each look plausible can together refuse everything.
+
+    0.03 lots at 100 units/lot is $3.00 per point, so a $25 ceiling admits an
+    8.33-point stop. The channel posts 10-point stops. Neither number alone
+    says that, so the derived width is reported.
+    """
+    described = describe_fixed_lot(lots=0.03, max_risk_usd=25.0,
+                                   contract_units=100.0)
+    assert described["max_stop_distance"] == pytest.approx(25.0 / 3.0)
+
+
+def test_the_stop_width_is_absent_when_it_cannot_be_computed():
+    assert describe_fixed_lot(lots=0.03, max_risk_usd=25.0)[
+        "max_stop_distance"] is None
+    assert describe_fixed_lot(lots=0.03, max_risk_usd=None,
+                               contract_units=100.0)["max_stop_distance"] is None
+    assert describe_fixed_lot(lots=0.03, max_risk_usd=25.0,
+                               contract_units=0.0)["max_stop_distance"] is None
+
+
 # ---------------------------------------------------------------------------
 # non-finite numbers
 # ---------------------------------------------------------------------------

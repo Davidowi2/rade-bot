@@ -649,9 +649,12 @@ function renderIntake(status) {
 
   let sizeCard;
   if (sizing.mode === "fixed_lots") {
+    const stopNote = Number.isFinite(sizing.max_stop_distance)
+      ? `allows a stop of ${Number(sizing.max_stop_distance).toFixed(2)} pts`
+      : "stop width not computable";
     sizeCard = card("Position size", `<span class="mono">${esc(Number(sizing.fixed_lots))} lot</span>`,
       sizing.ready
-        ? `fixed, or the signal is refused. Ceiling ${esc(money(sizing.max_trade_risk_usd))}.`
+        ? `fixed, or the signal is refused. Ceiling ${esc(money(sizing.max_trade_risk_usd))} · ${stopNote}.`
         : `NOT READY: ${esc(sizing.problem)}`,
       sizing.ready ? "" : "is-bad");
   } else if (sizing.blocks_execution) {
