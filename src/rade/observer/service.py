@@ -797,6 +797,16 @@ def make_handler(service: MirrorService, *, log: Any = None):
                                       "detail": type(exc).__name__}
             self._send(code, payload)
 
+        def do_HEAD(self) -> None:  # noqa: N802
+            """HEAD requests work the same as GET but only return headers.
+            
+            This is what UptimeRobot free tier uses. The base handler
+            automatically calls do_GET and strips the body, but we define
+            this explicitly to ensure HEAD requests are properly logged
+            and counted as activity to keep Render awake.
+            """
+            self.do_GET()
+
         do_PUT = do_PATCH = do_DELETE = _reject_write  # noqa: N815
 
     return Handler

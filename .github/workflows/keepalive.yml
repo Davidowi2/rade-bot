@@ -1,0 +1,37 @@
+name: Keep Render Service Awake
+
+on:
+  schedule:
+    # Run every 5 minutes (free tier is generous with this)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  ping-render:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Ping Render Healthz Endpoint
+        run: |
+          echo "🏓 Pinging Render service at $(date -u)"
+          
+          # Ping the health endpoint
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -m 30 \
+            https://rade-bot.onrender.com/healthz)
+          
+          echo "📊 Response code: $response"
+          
+          if [ "$response" = "200" ]; then
+            echo "✅ Service is healthy"
+            exit 0
+          else
+            echo "⚠️  Service returned non-200 status: $response"
+            echo "This is expected if service is cold-starting (first ping after 15min)"
+            exit 0  # Don't fail the workflow
+          fi
+      
+      - name: Record Ping Time
+        run: |
+          echo "Last ping: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "Target: https://rade-bot.onrender.com/healthz" >> $GITHUB_STEP_SUMMARY

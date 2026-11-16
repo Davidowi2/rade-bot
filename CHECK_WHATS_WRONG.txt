@@ -1,0 +1,205 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                                                                           ║
+║              🚨 SERVICE IS DOWN - WHAT TO CHECK NOW                       ║
+║                                                                           ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+Your UptimeRobot shows the service has been DOWN for 5h 2m 18s.
+
+This means either:
+1. Render deployment FAILED
+2. Service is CRASHING on startup
+3. Service is SUSPENDED (free tier issue)
+
+═══════════════════════════════════════════════════════════════════════════
+
+🔍 STEP 1: CHECK RENDER STATUS (DO THIS NOW!)
+
+1. Open: https://dashboard.render.com
+2. Login
+3. Click on: rade-mirror service
+
+4. LOOK AT THE STATUS BADGE (top right corner):
+
+   🟢 "Live" (green) → Service thinks it's running
+      → But not responding to /healthz
+      → Likely CRASHING on startup
+      → GO TO: Step 2A
+
+   🔴 "Deploy failed" (red) → Deployment error
+      → Code or build issue
+      → GO TO: Step 2B
+
+   🟡 "Deploying" (yellow) → Still deploying
+      → Been 5+ hours? Something stuck
+      → GO TO: Step 2C
+
+   ⚪ "Suspended" (gray) → Free tier suspended
+      → Need to resume
+      → GO TO: Step 2D
+
+═══════════════════════════════════════════════════════════════════════════
+
+📋 STEP 2A: IF STATUS = "LIVE" (but not responding)
+
+This means service is running but crashing/failing health checks.
+
+DO THIS:
+
+1. Click "Logs" tab
+2. Scroll to the VERY BOTTOM
+3. Look for RED ERROR TEXT
+4. COPY the last 30-50 lines
+
+5. SEND ME THE LOGS - I need to see what error it's hitting!
+
+Common errors you might see:
+  • "KeyError: 'SUPABASE_URL'" → Missing environment variable
+  • "Telegram authentication failed" → Bad Telegram credentials  
+  • "No module named 'rade'" → PYTHONPATH issue
+  • "Address already in use" → Port conflict (restart needed)
+
+═══════════════════════════════════════════════════════════════════════════
+
+📋 STEP 2B: IF STATUS = "DEPLOY FAILED"
+
+This means the deployment didn't complete successfully.
+
+DO THIS:
+
+1. Click "Events" tab
+2. Find the LATEST deploy event
+3. Should say "Deploy failed"
+4. Click on it to see details
+
+5. Click "Logs" tab
+6. Look for BUILD ERRORS (usually near the end)
+7. COPY the error message
+
+Common build errors:
+  • "Could not find requirements-mirror.txt"
+  • "SyntaxError: invalid syntax"
+  • "ModuleNotFoundError: No module named 'X'"
+
+═══════════════════════════════════════════════════════════════════════════
+
+📋 STEP 2C: IF STATUS = "DEPLOYING" (stuck)
+
+This means deployment is taking unusually long (should be 3-5 min).
+
+DO THIS:
+
+1. Top right menu (⋯) → "Cancel Deploy"
+2. Wait 1 minute
+3. Click "Manual Deploy" → "Deploy latest commit"
+4. Wait 5 minutes
+5. Check status again
+
+═══════════════════════════════════════════════════════════════════════════
+
+📋 STEP 2D: IF STATUS = "SUSPENDED"
+
+This means Render suspended your free tier service.
+
+DO THIS:
+
+1. Look for "Resume Service" button
+2. Click it
+3. Wait 3 minutes
+4. Service should come back online
+
+If there's no Resume button:
+  • Account might have payment issue
+  • Check Render account settings
+  • May need to verify email/payment method
+
+═══════════════════════════════════════════════════════════════════════════
+
+🆘 QUICK EMERGENCY FIXES TO TRY
+
+FIX #1: Force Restart (try this first)
+  1. Render Dashboard → rade-mirror
+  2. Top right menu (⋯) → "Restart Service"  
+  3. Wait 3-5 minutes
+  4. Check if /healthz responds
+
+FIX #2: Clear Cache and Redeploy
+  1. Render Dashboard → rade-mirror → Settings
+  2. Find "Clear Build Cache & Deploy"
+  3. Click it
+  4. Wait 5-7 minutes
+  5. Check if /healthz responds
+
+FIX #3: Verify Environment Variables
+  1. Render Dashboard → rade-mirror → Environment
+  2. Count how many variables are there (should be ~44)
+  3. Check these 3 are set:
+     • MIRROR_MAX_SIGNAL_AGE_S = 900
+     • MIRROR_MAX_TRADE_RISK_USD = 30
+     • MIRROR_MAX_SLIPPAGE = 3.0
+  4. If any are missing, add them and save
+
+═══════════════════════════════════════════════════════════════════════════
+
+📸 WHAT I NEED TO HELP YOU
+
+To diagnose the exact problem, I need:
+
+1. RENDER STATUS:
+   Current status badge (Live/Failed/Deploying/Suspended): _______________
+
+2. LAST 30 LINES OF LOGS:
+   [Go to Render → Logs tab → Copy last 30 lines]
+
+3. LAST DEPLOY EVENT:
+   [Go to Render → Events tab → What does latest event say?]
+
+4. ANY ERROR MESSAGES:
+   [Any red error text you see in logs]
+
+═══════════════════════════════════════════════════════════════════════════
+
+⚡ DO THIS RIGHT NOW
+
+1. Open Render Dashboard
+2. Check what STATUS badge shows
+3. Copy last 30-50 lines from LOGS tab
+4. Send me the logs
+
+Without seeing the logs, I can only guess. The logs will show EXACTLY
+what's wrong:
+  • Python exception? → Code bug
+  • Build failed? → Missing dependency  
+  • No logs? → Service suspended
+  • "Application started"? → Different issue
+
+═══════════════════════════════════════════════════════════════════════════
+
+💡 MY BEST GUESS (without seeing logs)
+
+Based on timing (down for 5+ hours right after deployment):
+
+MOST LIKELY: Deployment failed or service is crashing on startup
+
+REASON: Either:
+  1. Our code changes broke something (unlikely - we verified code)
+  2. Environment variable issue (possible)
+  3. Render free tier issue (possible)
+  4. Telegram/Supabase credentials invalid (possible)
+
+SOLUTION: Get me the logs and I'll tell you exactly what's wrong!
+
+═══════════════════════════════════════════════════════════════════════════
+
+📞 REPORT BACK WITH
+
+Status: _________________ (Live/Failed/Deploying/Suspended)
+
+Last 30 lines of logs:
+[Paste here]
+
+═══════════════════════════════════════════════════════════════════════════
+
+🚀 ONCE WE SEE THE LOGS, I CAN FIX IT IN 5 MINUTES!
+
+═══════════════════════════════════════════════════════════════════════════
