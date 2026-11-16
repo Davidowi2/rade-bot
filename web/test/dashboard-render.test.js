@@ -99,6 +99,26 @@ test("every render function runs against a realistic payload", () => {
     "the events table did not render the row status");
 });
 
+test("the live mode reads as live, not as demo", () => {
+    // A funded account sits on the broker's demo host; the host is a fact, not
+    // a mode. The page must say live when orders are being placed.
+    const live = {...STATUS, paper_only: false, broker_writes: true,
+                  live_trading: true, exit_policy: "tp_ladder",
+                  execution: {enabled: true, error: null, paused: {paused: false},
+                              guards: null,
+                              broker: {verified: true, symbol: "XAUUSD",
+                                       instrument_id: 4231, account_number: 1}}};
+    const { api, elements } = load();
+    api.renderCards(live);
+    api.renderBadges(live);
+    assert.ok(elements.cards.innerHTML.includes(">live</div>"),
+      "the mode card must read live when the executor is running");
+    assert.ok(!elements.cards.innerHTML.includes(">demo<"),
+      "the mode card must not describe the host as a mode");
+    assert.ok(elements.badges.innerHTML.includes("live · orders placed"));
+    assert.ok(elements.badges.innerHTML.includes("XAUUSD"));
+});
+
 test("the helpers escape and classify", () => {
   const { api } = load();
   assert.ok(api.esc("<script>").includes("&lt;"), "esc must escape HTML");

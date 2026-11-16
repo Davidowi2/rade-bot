@@ -62,6 +62,11 @@ def live(tmp_path):
                          encoding="utf-8")
     service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    # With the default (daemon_threads = False) an occasional request that lands
+    # during fixture teardown surfaced as a one-off connection failure in an
+    # otherwise green suite. A test server has no reason to keep a handler
+    # alive past its fixture.
+    httpd.daemon_threads = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield httpd.server_address[1]
@@ -437,6 +442,11 @@ def live_exec(tmp_path):
     service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat,
                              executor=object(), broker_spec=_Spec())
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    # With the default (daemon_threads = False) an occasional request that lands
+    # during fixture teardown surfaced as a one-off connection failure in an
+    # otherwise green suite. A test server has no reason to keep a handler
+    # alive past its fixture.
+    httpd.daemon_threads = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield httpd.server_address[1]
@@ -481,13 +491,19 @@ def test_the_trade_endpoints_refuse_a_write(live_exec):
     assert status == 405
 
 
-def test_status_reports_the_demo_execution_path(live_exec):
+def test_status_reports_the_execution_path(live_exec):
+    """Executing is not the same question as which host the account is on.
+
+    ``account_scope`` names the TradeLocker host (a funded account can sit on a
+    broker's demo host); ``live_trading`` says whether this process places
+    orders. Reporting the host as the mode made a live service call itself demo.
+    """
     status, body = call(live_exec, "/api/status", token=TOKEN)
     assert status == 200
     assert body["account_scope"] == "demo"
-    assert body["live_trading"] is False
     assert body["broker_writes"] is True
     assert body["paper_only"] is False
+    assert body["live_trading"] is True
     assert body["exit_policy"] == "tp_ladder"
     assert body["execution"]["enabled"] is True
     assert body["execution"]["broker"]["verified"] is True
@@ -543,6 +559,11 @@ def live_pause(tmp_path):
     service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat,
                             executor=_PauseableExecutor(ledger), broker_spec=_Spec())
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    # With the default (daemon_threads = False) an occasional request that lands
+    # during fixture teardown surfaced as a one-off connection failure in an
+    # otherwise green suite. A test server has no reason to keep a handler
+    # alive past its fixture.
+    httpd.daemon_threads = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield httpd.server_address[1]
@@ -607,6 +628,11 @@ def test_pausing_without_an_executor_is_a_conflict(monkeypatch, tmp_path):
     heartbeat.write_text(json.dumps({"phase": "listening"}), encoding="utf-8")
     service = MirrorService(ledger, token=TOKEN, heartbeat_path=heartbeat)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    # With the default (daemon_threads = False) an occasional request that lands
+    # during fixture teardown surfaced as a one-off connection failure in an
+    # otherwise green suite. A test server has no reason to keep a handler
+    # alive past its fixture.
+    httpd.daemon_threads = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:

@@ -548,14 +548,18 @@ function renderCards(status) {
   const listenerTone = (listener.stale || !listener.known) ? "is-bad"
     : listener.phase === "listening" ? "is-ok" : "";
 
-  const mode = status.paper_only ? "paper" : "executing";
+  const mode = status.paper_only ? "paper" : "live";
   const modeTone = status.paper_only ? "" : "is-ok";
-  const dest = broker.environment
-    ? `${broker.environment} · ${esc(broker.account_number || "?")}`
+  // The account, not the host: the host is a broker fact, not a mode, and a
+  // funded account can sit on a broker's demo host.
+  const dest = broker.account_number
+    ? `XAUUSD · acct ${esc(broker.account_number)}`
     : "not resolved";
 
   document.getElementById("cards").innerHTML = [
-    card("Mode", esc(mode), status.paper_only ? "no broker writes" : "orders enabled", modeTone),
+    card("Mode", esc(mode), status.paper_only
+      ? "no broker writes"
+      : "orders placed on the destination account", modeTone),
     card("Listener", esc(listenerValue),
       listener.heartbeat_age_s != null
         ? `heartbeat ${esc(listener.heartbeat_age_s)}s ago`
@@ -564,7 +568,9 @@ function renderCards(status) {
       Object.entries(counts).filter(([, v]) => typeof v === "number")
         .map(([k, v]) => `${esc(k)} ${esc(v)}`).join(" · ") || "none yet"),
     card("Destination", `<span class="mono">${esc(dest)}</span>`,
-      broker.verified ? "broker specification verified" : "execution disabled"),
+      broker.verified
+        ? "pinned TradeLocker destination · specification verified"
+        : "execution disabled"),
     card("Uptime", `${Math.round((status.uptime_s || 0) / 60)}m`,
       "this process, not the listener"),
   ].join("");
@@ -575,7 +581,8 @@ function renderBadges(status) {
   const broker = exec.broker || {};
   const items = [];
   if (exec.enabled) {
-    items.push('<span class="badge ok">executing</span>');
+    items.push('<span class="badge ok">live · orders placed</span>');
+    items.push('<span class="badge">pinned destination</span>');
     items.push(`<span class="badge ${broker.verified ? "ok" : "bad"}">broker ${broker.verified ? "verified" : "unverified"}</span>`);
     items.push(`<span class="badge">${esc(broker.symbol || "?")} · ${esc(broker.instrument_id)}</span>`);
   } else {
@@ -852,7 +859,7 @@ async function refresh() {
       `service time ${status.time ? new Date(status.time).toLocaleString() : "—"}`;
     document.getElementById("foot").innerHTML =
       `<span><span class="dot ${status.listener && status.listener.healthy ? "ok" : "bad"}"></span>listener</span>` +
-      `<span>account ${esc(status.account_scope || "none")}</span>` +
+      `<span>host ${esc(status.account_scope || "none")}</span>` +
       `<span>exit ${esc(status.exit_policy || "unresolved")}</span>` +
       `<span>store ${esc(status.store || "?")}</span>` +
       `<span>refresh 30s</span>`;

@@ -432,7 +432,14 @@ class MirrorService:
         }
 
     def config_summary(self) -> dict:
-        """Presence only. Never a value, never a prefix of a value."""
+        """Presence only. Never a value, never a prefix of a value.
+
+        ``live_trading`` is whether this process will place orders at all. It is
+        deliberately separate from ``account_scope``, which names the TradeLocker
+        **host** the account lives on - a funded account can sit on a broker's
+        demo host, and conflating the two made a live service report itself as
+        demo.
+        """
         supabase = bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
         executing = self.executor is not None
         return {
@@ -440,13 +447,13 @@ class MirrorService:
             "durable_store": supabase or not hosted_mode(),
             "notifier": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_NOTIFY_CHAT_ID")),
             "contract_units_confirmed": _truthy(os.getenv("MIRROR_CONTRACT_UNITS_CONFIRMED")),
-            # The paper mirror and the demo executor are different states and
-            # the status says which one this process is in. There is no live
-            # account path either way.
+            # The paper mirror and the executor are different states and the
+            # status says which one this process is in.
             "broker_writes": executing,
             "paper_only": not executing,
+            # Which host the destination account lives on. Not a mode.
             "account_scope": "demo" if executing else "none",
-            "live_trading": False,
+            "live_trading": executing,
             "exit_policy": "tp_ladder" if executing else "unresolved",
         }
 
@@ -455,7 +462,7 @@ class MirrorService:
         state: dict[str, Any] = {
             "enabled": self.executor is not None,
             "account_scope": "demo",
-            "live_trading": False,
+            "live_trading": self.executor is not None,
         }
         if self.execution_error:
             state["error"] = self.execution_error
@@ -529,7 +536,9 @@ class MirrorService:
                 "paper_only": self.executor is None,
                 "broker_writes": self.executor is not None,
                 "account_scope": "demo" if self.executor is not None else "none",
-                "live_trading": False,
+                # Whether this process places orders. Not the same question as
+                # account_scope, which is the host the account lives on.
+                "live_trading": self.executor is not None,
                 "exit_policy": "tp_ladder" if self.executor is not None else "unresolved",
                 "uptime_s": round(time.time() - self.started_at, 1),
                 "time": _now_iso(),
