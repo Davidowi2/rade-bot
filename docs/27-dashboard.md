@@ -46,3 +46,19 @@ proxy checks it, and only then calls Render with the backend token.
 `node --test web/test/proxy.test.js` — 15 tests covering the query whitelist,
 the trade-id path check, the write body whitelist, and that a forged, expired
 or absent session is refused while a valid one is accepted.
+
+## Panels
+
+Overview (mode, listener, stored events, destination, uptime) · signal funnel
+(stored → intents / blocked / review / stale / ignored) · broker position ·
+**intake readiness** · pre-trade controls · execution switch · trades (a row
+opens its full transition history) · paper intents · review required · recent
+messages.
+
+The **intake readiness** panel is the one that matters when nothing is being
+copied: it reports `units_confirmed`, `intake_ready` and `intake_problem`
+separately from the sizing rule, because a configured sizing rule can still be
+unable to accept any signal — and it reports `max_stop_distance`, the stop width
+the lot and ceiling admit between them. On 2026-11-15 both of those were the
+difference between "the copier is fine" and "nothing can ever be copied". See
+`docs/28`.

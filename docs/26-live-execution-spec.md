@@ -42,7 +42,10 @@ is deliberately fail-closed, plus four gaps below.
 - 502 tests passing; the service is **deployed and live in paper mode**, with
   the contract size confirmed and a quote provider set.
 
-## 3. What is missing for a real order
+## 3. What was missing for a real order
+
+G1–G7 are closed as of 2026-11-15. What remains before a real order is not a
+build task: it is the sizing decision in `docs/28` and the demo run in §4.
 
 ### G1 — Contract size is not confirmed — **done 2026-11-15**
 The broker's own specification for XAUUSD on account 2346225 was read:
@@ -83,34 +86,30 @@ deployment that forgot an env var silently got the permissive limit. The
 defaults are now the tight values (spread 1.0, slippage 2.0, drawdown 3.35%, one
 position), with a regression test that an empty environment yields them.
 
-### G5 — No startup report
-The service logs to stdout (Render captures it) but sends nothing to Telegram.
-The account holder asked for the opposite: loud, no silent failures.
+### G5 — No startup report — **done**
+`send_startup_report()` in `src/rade/observer/service.py` sends one Telegram
+message on boot: listener state and heartbeat, channel, destination (server +
+account), contract size and whether it is confirmed, sizing mode, quote
+provider, execution mode, every risk control with its value or `DISABLED`, the
+pause switch, the store, and the lot and ceiling.
 
-**Build:** on boot, send one message containing listener state, channel,
-destination (server + account), contract size, sizing mode, quote provider,
-execution mode, and **every risk control with its value or `disabled`**.
+### G6 — Max drawdown fraction is too loose for this account — **done**
+Was the 5% blueprint default, which from 4,862.73 permits $243 of drawdown
+against a $162.73 room. Now `MIRROR_MAX_DRAWDOWN_FRACTION=0.0335`, and that is
+also the code default, so an unset variable cannot restore the loose value.
 
-### G6 — Max drawdown fraction is too loose for this account
-Blueprint default is 5% of peak. The challenge floor is 6% of $5,000 = $4,700.
-From the current 4,862.73 the room is **$162.73 = 3.35%**. A 5% limit permits
-$243 of drawdown and would breach the account.
-
-**Build:** set the fraction from the challenge rule, not from a default.
-
-### G7 — Fill and error notification coverage
-Per-result notifications exist; it is not yet verified that a *fill* and a
-*management* event reach Telegram.
-
-**Build:** verify each event kind end to end; notify on fill, on stop move, on
-close, and on every refusal with its reason.
+### G7 — Fill and error notification coverage — **code complete**
+The engine notifies on signal, accepted, rejected, filled, blocked,
+not-copied, partial close, stop move, review and close, each with a distinct
+`kind` so the notification ledger's `(trade, kind)` dedupe cannot drop a later
+event. End-to-end delivery of a *fill* and a *management* event has not been
+observed on the demo account yet; that is part of the demo run in §4 step 3.
 
 ## 4. The gate before the first real order
 
 None of these is optional. In order:
 
-1. **G1–G4 built and unit-tested** — done 2026-11-15. G5–G7 below are the
-   remaining work. No config-only shortcuts.
+1. **G1–G7 built and unit-tested** — done 2026-11-15. No config-only shortcuts.
 2. **Paper mode still clean** — the deployed service records real channel
    signals and notifies, with zero orders.
 3. **Fake-channel end-to-end test.** Post a known signal to a private test
