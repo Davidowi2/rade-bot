@@ -7,7 +7,7 @@
 and that document disagree, that document is correct.
 
 > Test counts in this report are **as of its date**. The current suite is
-> **484 Python tests and 15 web tests**. The exit policy described in §A1 was
+> **502 Python tests and 15 web tests**. The exit policy described in §A1 was
 > later corrected — see `docs/23` §5 A1.
 
 ---

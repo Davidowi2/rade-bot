@@ -35,7 +35,7 @@ services:
     runtime: python
     plan: free
     region: frankfurt
-    branch: feature/tradelocker-demo-execution
+    branch: main
     buildCommand: pip install -r requirements-mirror.txt
     startCommand: python -m rade.observer.service
     healthCheckPath: /healthz
@@ -81,13 +81,16 @@ services:
       # lots or refuse". The service logs why and reports executor: not started.
       - key: MIRROR_FIXED_LOTS
         value: "0.03"
-      # VERIFY BEFORE USE, and deliberately left empty. A fixed lot is not a
-      # risk limit: 0.03 lots on a 10-unit stop and 0.03 on a 30-unit stop are
-      # the same order and three times the money. This ceiling is what turns the
-      # lot into a limit, so it has no default here. While it is empty the
-      # fixed-lot rule refuses EVERY signal with a named reason, which is the
-      # intended fail-closed behaviour, not a bug. It cannot be set until the
-      # destination's contract size, lot step and account currency are known.
+      # The ceiling that turns a fixed lot into a risk limit: 0.03 lots on a
+      # 10-unit stop and 0.03 on a 30-unit stop are the same order and three
+      # times the money.
+      #
+      # READ THIS BEFORE CHANGING EITHER NUMBER. At 100 units/lot, 0.03 lots is
+      # $3.00 per point, so a $25 ceiling admits an 8.33-point stop. The channel
+      # posts 10-point stops, i.e. $30.00 - so this pair refuses every signal the
+      # channel has posted. Both numbers are individually plausible, which is why
+      # the mismatch is not obvious; /api/status reports `max_stop_distance`
+      # (8.33) precisely so it is visible.
       #
       # REQUIRED FOR EXECUTION. The executor does not start without it, rather
       # than running a copier that refuses every signal while looking healthy.
@@ -97,24 +100,31 @@ services:
       # --- non-secret settings ---
       - key: MIRROR_RUN_LISTENER
         value: "1"
-      # The contract size is NOT committed here. It was read once from a
-      # broker response and has never been confirmed by a fill, so a preset
-      # number here would silently size every intent with an unverified
-      # value. The value may be left empty: while the contract size is
-      # unconfirmed the listener still starts and records every message as
-      # blocked rather than sized. It becomes required the moment
-      # MIRROR_CONTRACT_UNITS_CONFIRMED=1 is set, and it must be entered in
-      # the dashboard after being checked against the broker's own
-      # specification.
+      # The contract size for XAUUSD on BLBRY, read from the broker's own
+      # instrument specification on 2026-11-15: lotSize 100, lotStep 0.01,
+      # minLot 0.01, maxLot 40, status FULLY_OPEN.
+      #
+      # CONFIRMED=1 is what lets a signal be sized at all. While it is 0 every
+      # market call is refused before any size is computed, which is what
+      # happened on 2026-11-15: the deployed service had neither value and
+      # blocked every signal for that reason. It is set here so applying this
+      # blueprint cannot silently reintroduce that state.
       - key: MIRROR_CONTRACT_UNITS_PER_LOT
-        sync: false
+        value: "100"
       - key: MIRROR_CONTRACT_UNITS_CONFIRMED
-        sync: false
+        value: "1"
+      # Paper equity, required once the contract size is confirmed and no
+      # executor is running. With an executor the equity is read from the
+      # broker instead. This is the BLBRY balance, not a guess.
+      - key: MIRROR_EQUITY
+        value: "4862.73"
       # "none" means no verified quote source: market (NOW) calls are blocked
-      # because they cannot be priced. Switch to "tradelocker" only after a
-      # demo login works.
+      # because they cannot be priced. "tradelocker" reads the demo feed
+      # through the same gateway, which refuses any environment but demo.
+      # It must not be left at "none" in deployment: that was the second of the
+      # two settings that blocked every signal on 2026-11-15.
       - key: MIRROR_QUOTE_PROVIDER
-        value: "none"
+        value: "tradelocker"
       - key: MIRROR_QUOTE_MAX_AGE_S
         value: "2"
       # How old a NOW signal may be when it reaches the pipeline. A fresh quote
