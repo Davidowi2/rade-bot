@@ -301,8 +301,9 @@ declaring the position unprotected.
 
 The engine moves the stop and *then* re-checks the target, which is two separate
 `modify_position` calls. That is only safe if a patch carrying one level leaves
-the other alone. Verified on the destination account with
-`scripts/verify_protective_orders.py` (one 0.01-lot order, closed afterwards):
+the other alone. Verified on a demo account with
+`scripts/verify_protective_orders.py` (one 0.01-lot order, closed afterwards;
+the account left with 0 positions and 0 open orders):
 
 ```
 as placed       stop 3820.93   target 3860.93
@@ -314,6 +315,12 @@ patch target    stop 3830.93   target 3855.93   <- stop survived
 fields, so the broker treats it as a partial update. Had it been a
 replace-semantics call, the engine's own sequence would have stripped the
 protection it had just set.
+
+This was measured on the demo account in `.env` (id 2509174, instrument 1808),
+not the Render destination (id 2346225, instrument 4231) — the two hold
+different credentials. PATCH semantics are a broker behaviour rather than an
+account setting, so the result carries over, but it was not observed on the
+live destination itself.
 
 One quirk worth knowing: after a modification the broker reports the order's
 `status` as the string `"None"`. Nothing branches on it — `_attached_levels`
