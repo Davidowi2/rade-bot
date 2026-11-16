@@ -111,9 +111,29 @@ changed.
 
 ## Also worth knowing
 
-* The channel emits an edit event for messages whose text is unchanged, so the
-  ledger stores a `rev 1` row identical to `rev 0`. Harmless for signals, but
-  it inflates the stored-event counts. Not fixed.
+* The channel emits an edit event for messages whose text is unchanged. It was
+  stored as a `rev 1` row identical to `rev 0`, which inflated the stored-event
+  counts and would have sent an unmodified signal to manual review. **Fixed**
+  after this note was first written: the edit handler now compares the new text
+  hash against the newest stored one and ignores a no-op edit. An edit that
+  changed the text is still stored as a new revision.
+* `scripts/diagnose_broker_state.py` placed a market order, moved its stop and
+  closed it on every run — a diagnostic wrote to the destination account
+  regardless of the service's paper mode. It is now read-only unless
+  `--place-test-order` is passed, and the close is in a `finally` block.
+* The service reports the stop width the ceiling admits (`max_stop_distance`,
+  currently 8.33 pts) on `/api/status` and in the startup log, so the mismatch
+  below is visible rather than silent.
 * `MIRROR_EXECUTE` is still `0`. Flipping it is the live-flip runbook in
   `docs/26-live-execution-spec.md` §7, and it needs the destination pin
   confirmed first.
+
+## Environment note
+
+Render holds the broker credentials for BLBRY / 2346225 and they are correct.
+The local `.env` holds a different, older account (PLEXY / 2509174). Nothing
+reads the broker credentials from `.env` any more: `scripts/update_render_env.py`
+reads the remote set back and writes the union, so a stale local file cannot
+retarget the deployed destination. `scripts/configure_render_service.py` sets
+only the service fields and delegates the env to it.
+
