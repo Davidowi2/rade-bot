@@ -447,8 +447,49 @@ class ExecutionEngine:
             report["readable"] = False
             report["problems"].append(f"equity: {type(exc).__name__}: {exc}")
         report["limits"] = self.limits.describe()
+        report["room"] = self._risk_room(report.get("equity"))
         self._preflight = report
         return report
+
+    def _risk_room(self, equity: Any) -> dict:
+        """How much room the account has left, computed read-only.
+
+        The risk state is written only when a signal is evaluated, so on a quiet
+        deployment it is empty and the dashboard would show nothing about the
+        drawdown or the daily breaker at all. This reports what the guards *would*
+        say if a signal arrived now, without seeding or persisting anything.
+
+        With no stored state the current equity stands in for both the day's
+        opening equity and the peak, which is exactly what the first signal of
+        the day would record.
+        """
+        try:
+            value = float(equity or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        try:
+            stored = RiskState.from_dict(self.ledger.risk_state())
+        except Exception:
+            stored = None
+        day_start = (stored.day_start_equity if stored and stored.day_start_equity > 0
+                     else value)
+        peak = stored.peak_equity if stored and stored.peak_equity > 0 else value
+        limits = self.limits
+        out: dict[str, Any] = {
+            "equity": value or None,
+            "day_start_equity": day_start or None,
+            "peak_equity": peak or None,
+            "stored": stored is not None,
+        }
+        if peak > 0 and limits.max_drawdown_fraction > 0:
+            floor = peak * (1.0 - limits.max_drawdown_fraction)
+            out["drawdown_floor"] = round(floor, 2)
+            out["drawdown_room"] = round(value - floor, 2)
+        if day_start > 0 and limits.daily_loss_fraction > 0:
+            floor = day_start * (1.0 - limits.daily_loss_fraction)
+            out["daily_floor"] = round(floor, 2)
+            out["daily_room"] = round(value - floor, 2)
+        return out
 
     # -- helpers ----------------------------------------------------------
 

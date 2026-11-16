@@ -51,7 +51,7 @@ from rade.execution.engine import (
     trade_id_for,
 )
 from rade.execution.gateway import TradeLockerGateway, assert_demo_environment, assert_destination
-from rade.execution.guards import RiskLimits
+from rade.execution.guards import RiskLimits, utc_day
 from rade.execution.ladder import (
     LadderError,
     build_exit_plan,
@@ -327,6 +327,48 @@ def engine_for(tmp_path, broker=None, *, notifier=None, exit_policy=None, **kwar
     return ExecutionEngine(broker=broker, ledger=ledger,
                             notifier=notifier or RecordingNotifier(),
                             log=lambda line: None, **extra, **kwargs), ledger, broker
+
+
+# ---------------------------------------------------------------------------
+# the guards' preflight
+# ---------------------------------------------------------------------------
+
+
+def test_the_preflight_reports_the_room_left_without_seeding_state(tmp_path):
+    """The drawdown and daily breaker must be visible before the first trade.
+
+    The risk state is only written when a signal is evaluated, so on a quiet
+    deployment it is empty; without this the dashboard shows nothing about the
+    room the account has left. Reporting it must not write anything.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    assert ledger.risk_state() is None
+
+    room = engine.guard_preflight()["room"]
+
+    assert room["stored"] is False
+    assert room["equity"] == pytest.approx(broker.equity())
+    assert room["peak_equity"] == pytest.approx(broker.equity())
+    # The tight defaults: 3.35% drawdown, 1% daily.
+    assert room["drawdown_room"] == pytest.approx(broker.equity() * 0.0335, abs=0.01)
+    assert room["daily_room"] == pytest.approx(broker.equity() * 0.01, abs=0.01)
+    assert room["drawdown_floor"] == pytest.approx(broker.equity() * 0.9665, abs=0.01)
+    assert ledger.risk_state() is None, "the preflight must not seed the state"
+
+
+def test_the_reported_room_uses_the_stored_peak_once_there_is_one(tmp_path):
+    """A stored high-water mark must be used, not today's equity."""
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    ledger.save_risk_state(day=utc_day(), day_start_equity=10_000.0,
+                           peak_equity=10_000.0)
+
+    room = engine.guard_preflight()["room"]
+
+    assert room["stored"] is True
+    assert room["peak_equity"] == 10_000.0
+    assert room["drawdown_floor"] == pytest.approx(10_000.0 * 0.9665, abs=0.01)
 
 
 # ---------------------------------------------------------------------------

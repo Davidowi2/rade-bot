@@ -85,6 +85,44 @@ def main() -> int:
         print(f"\n=== {name.upper()} (price units) ===")
         print(f"  n {len(s)}  p50 {pct(50):.3f}  p90 {pct(90):.3f}  "
               f"p95 {pct(95):.3f}  p99 {pct(99):.3f}  max {s[-1]:.3f}")
+
+    # --- the real 15-second move, measured rather than inferred -------------
+    # The figure above is the 1-minute *range* scaled by sqrt(15/60). A range is
+    # high-low, so it overstates the net move, and the scaling assumes the price
+    # path is a diffusion. This samples the mid price once a second and measures
+    # the actual move over the 15-second poll interval, which is what the
+    # slippage guard is compared against.
+    print("\nsampling the mid price for 105 seconds to measure the real 15s move ...")
+    mids: list[tuple[float, float]] = []
+    for _ in range(105):
+        try:
+            bid = float(tl.get_latest_bid_price(iid))
+            ask = float(tl.get_latest_asking_price(iid))
+            mids.append(((ask + bid) / 2.0, time.time()))
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+    moves = []
+    for price, at in mids:
+        window = [p for p, t in mids if abs(t - (at - 15.0)) <= 1.0]
+        if window:
+            moves.append(abs(price - window[-1]))
+
+    if moves:
+        s = sorted(moves)
+
+        def pct(p):
+            return s[min(len(s) - 1, int(p / 100.0 * len(s)))]
+
+        print("\n=== MEASURED 15-SECOND MOVE (price units) ===")
+        print(f"  n {len(s)}  p50 {pct(50):.3f}  p90 {pct(90):.3f}  "
+              f"p95 {pct(95):.3f}  p99 {pct(99):.3f}  max {s[-1]:.3f}")
+        # What the deployed guard actually refuses.
+        for limit in (1.0, 2.0, 3.0):
+            refused = sum(1 for m in moves if m > limit)
+            print(f"  a guard of {limit:.1f} would refuse "
+                  f"{refused}/{len(moves)} samples ({refused / len(moves):.1%})")
     return 0
 
 
