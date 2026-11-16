@@ -1,6 +1,9 @@
 # 19 — Telegram → paper mirror
 
-Status: **built and tested locally; not deployed; no broker order capability.**
+Status: **built, tested, and deployed since 2026-11-16.** The pipeline is live on
+Render and copies into the TradeLocker destination account; see
+`docs/26-live-execution-spec.md` for the deployment and `docs/29-why-no-trades-yet.md`
+for why no order has been placed yet. This document's design record is unchanged.
 
 This is the record for the mirror pipeline. The retrospective replay study stays
 closed (`docs/16-replay-results-1m.md`); nothing here reopens it, and no exit

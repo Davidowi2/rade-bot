@@ -2,12 +2,15 @@
 
 **Date:** 2026-11-14 (review round 2)
 **Branch:** `feature/tradelocker-demo-execution`
-**State:** nothing committed, nothing deployed, no account connected, no order placed.
+**State at that date:** nothing committed, nothing deployed, no account connected,
+no order placed. **Superseded 2026-11-16** — the service is live and copying into
+the TradeLocker destination; see `docs/26` and `docs/29`. The findings below are
+the record of that review round and are kept as written.
 **Authority for behaviour:** `docs/23-behavior-and-risk-spec.md`. Where this report
 and that document disagree, that document is correct.
 
 > Test counts in this report are **as of its date**. The current suite is
-> **502 Python tests and 15 web tests**. The exit policy described in §A1 was
+> **545 Python tests and 22 web tests**. The exit policy described in §A1 was
 > later corrected — see `docs/23` §5 A1.
 
 ---

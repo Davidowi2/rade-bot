@@ -30,6 +30,10 @@ The project has two halves, and it matters which one you are looking at:
 >
 > **Why a signal was blocked on 2026-11-15, and what was fixed:**
 > [`docs/28-blocked-signal-postmortem.md`](docs/28-blocked-signal-postmortem.md).
+>
+> **Why no order has been placed yet** (the channel edits every call within
+> seconds, so each one is held for review): 
+> [`docs/29-why-no-trades-yet.md`](docs/29-why-no-trades-yet.md).
 
 ## Research results (provisional, and mostly negative)
 
