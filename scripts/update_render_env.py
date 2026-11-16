@@ -39,7 +39,7 @@ DESIRED: dict[str, str] = {
     "MIRROR_RUN_LISTENER": "1",
     "MIRROR_START_AT": "latest",
     "MIRROR_ALLOW_HISTORY_IMPORT": "0",
-    "MIRROR_MAX_SIGNAL_AGE_S": "120",
+    "MIRROR_MAX_SIGNAL_AGE_S": "900",
     "MIRROR_CATCHUP_EVERY_S": "15",
     "MIRROR_RECONNECT_S": "900",
     "MIRROR_NOTIFY_RETRY_S": "300",
@@ -51,12 +51,11 @@ DESIRED: dict[str, str] = {
     # destination account, read 2026-11-15. CONFIRMED=1 is what lets a signal
     # be sized at all; while it is 0 every market call is refused.
     #
-    # 0.02 lots, not 0.03: at 100 units/lot the lot is $2.00 per point, so the
-    # $25 ceiling admits a 12.5-point stop. The channel posts 10-point stops.
-    # At 0.03 lots ($3.00/point) the same ceiling admitted only 8.33 points and
-    # refused every signal the channel had ever posted.
+    # Updated 2026-11-16: Raised ceiling to $30 (from $25) to allow 15-point
+    # stops at 0.02 lots ($2.00/point). Channel posts 10-12 point stops, and
+    # $30 ceiling still keeps 2 losses ($40) under the daily breaker ($48.63).
     "MIRROR_FIXED_LOTS": "0.02",
-    "MIRROR_MAX_TRADE_RISK_USD": "25",
+    "MIRROR_MAX_TRADE_RISK_USD": "30",
     "MIRROR_CONTRACT_UNITS_PER_LOT": "100",
     "MIRROR_CONTRACT_UNITS_CONFIRMED": "1",
     "MIRROR_EQUITY": "4862.73",
@@ -73,7 +72,7 @@ DESIRED: dict[str, str] = {
     "MIRROR_DAILY_LOSS_FRACTION": "0.01",
     "MIRROR_MAX_DRAWDOWN_FRACTION": "0.0335",
     "MIRROR_MAX_SPREAD": "1.0",
-    "MIRROR_MAX_SLIPPAGE": "2.0",
+    "MIRROR_MAX_SLIPPAGE": "3.0",
 }
 
 

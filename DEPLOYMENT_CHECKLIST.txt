@@ -1,0 +1,260 @@
+╔═══════════════════════════════════════════════════════════════════╗
+║                  DEPLOYMENT CHECKLIST                             ║
+║            Print this and check off as you go                     ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────┐
+│ PRE-DEPLOYMENT                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+[ ] Read MANUAL_DEPLOYMENT_REQUIRED.txt
+[ ] Have GitHub credentials ready (username + token)
+[ ] Have Render login ready
+[ ] Have UptimeRobot login ready
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 1: GIT DEPLOYMENT (~2 minutes)                            │
+└─────────────────────────────────────────────────────────────────┘
+
+[ ] Open NEW terminal (Git Bash or cmd.exe)
+
+[ ] Navigate to project:
+    cd "c:\Users\owida\OneDrive\Documents\Rade bot"
+
+[ ] Stage changes:
+    git add -A
+
+[ ] Check what's staged:
+    git status
+
+[ ] Commit changes:
+    git commit -m "Fix over-engineering: signal age, risk, limits"
+
+[ ] Push to GitHub:
+    git push origin main
+
+[ ] Verify push succeeded (should see "main -> main")
+
+Expected files changed:
+  ✓ src/rade/observer/mirror_pipeline.py
+  ✓ scripts/update_render_env.py
+  ✓ render.yaml
+  ✓ + documentation files
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 2: RENDER ENVIRONMENT (~3 minutes)                        │
+└─────────────────────────────────────────────────────────────────┘
+
+Choose ONE method:
+
+METHOD A - Script (Recommended):
+[ ] Run: python scripts/update_render_env.py
+[ ] Review output showing changes
+[ ] Verify 3 variables updated:
+    - MIRROR_MAX_SIGNAL_AGE_S: 120 → 900
+    - MIRROR_MAX_TRADE_RISK_USD: 25 → 30
+    - MIRROR_MAX_SLIPPAGE: 2.0 → 3.0
+
+OR
+
+METHOD B - Manual (If script fails):
+[ ] Open: https://dashboard.render.com
+[ ] Login with credentials
+[ ] Select: rade-mirror service
+[ ] Click: Environment tab
+[ ] Update: MIRROR_MAX_SIGNAL_AGE_S → 900
+[ ] Update: MIRROR_MAX_TRADE_RISK_USD → 30
+[ ] Update: MIRROR_MAX_SLIPPAGE → 3.0
+[ ] Click: Save Changes
+[ ] Wait for redeploy (3-5 min)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 3: UPTIMEROBOT FIX (~2 minutes)                           │
+└─────────────────────────────────────────────────────────────────┘
+
+[ ] Open: https://uptimerobot.com
+[ ] Login to account
+[ ] Find: rade-bot monitor
+[ ] Click: Edit (pencil icon)
+
+[ ] Update URL:
+    FROM: https://rade-bot.onrender.com
+    TO:   https://rade-bot.onrender.com/healthz
+    ⚠️  Must include /healthz!
+
+[ ] Update Timeout:
+    FROM: 10 or 15 seconds
+    TO:   30 seconds
+
+[ ] Update Interval: 5 minutes
+
+[ ] Verify settings:
+    [ ] Monitor Type: HTTP(s)
+    [ ] HTTP Method: GET
+    [ ] Expected Status: 200
+
+[ ] Click: Save Changes
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 4: WAIT FOR DEPLOYMENT (~5 minutes)                       │
+└─────────────────────────────────────────────────────────────────┘
+
+[ ] Wait 5-10 minutes for:
+    - Render auto-deployment (3-5 min)
+    - Service restart (1-2 min)
+    - UptimeRobot next ping (up to 5 min)
+
+☕ Take a break!
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 5: VERIFICATION (~3 minutes)                              │
+└─────────────────────────────────────────────────────────────────┘
+
+A) Service Status:
+[ ] Open: https://rade-bot.onrender.com/api/status
+
+[ ] Verify these values:
+    [ ] "max_stop_distance": 15.0 (was 12.5)
+    [ ] "max_trade_risk_usd": 30 (was 25)
+    [ ] "max_slippage": 3.0 (was 2.0)
+    [ ] "intake_ready": true
+    [ ] "sizing_mode": "fixed_lots"
+
+B) Health Check:
+[ ] Open: https://rade-bot.onrender.com/healthz
+
+[ ] Verify response:
+    [ ] "status": "ok"
+    [ ] "listener": {"healthy": true}
+
+C) UptimeRobot:
+[ ] Check UptimeRobot dashboard
+
+[ ] Verify monitor shows:
+    [ ] Status: UP (green)
+    [ ] Response Code: 200 OK
+    [ ] No more 502 errors
+
+    Note: First ping after fix might be slow (30-60s cold start)
+          This is normal! Should be fast after that.
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 6: FINAL CHECKS                                           │
+└─────────────────────────────────────────────────────────────────┘
+
+[ ] Render service shows: "Live" (green dot)
+[ ] Render logs show: No errors
+[ ] UptimeRobot shows: UP with 200 status
+[ ] Service stays awake (doesn't spin down)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 7: MONITOR NEXT SIGNAL                                    │
+└─────────────────────────────────────────────────────────────────┘
+
+[ ] Wait for next signal from Telegram channel
+[ ] Check /api/status or logs for signal processing
+[ ] Verify signal is accepted (not "stale" or "blocked")
+[ ] If executed: Check trade appears in ledger
+
+Expected:
+  ✓ Signal accepted within 15 seconds
+  ✓ Status: "paper_intent" or executed
+  ✓ NO "stale" rejections
+  ✓ NO "ceiling" rejections
+  ✓ NO "slippage" rejections (unless truly excessive)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TROUBLESHOOTING                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+IF git push fails:
+  - Check GitHub credentials (use token, not password)
+  - Ensure you're on main branch
+  - Try: git pull origin main first
+
+IF Render env update fails:
+  - Use manual method (dashboard)
+  - Check RENDER_API_KEY in .env
+
+IF UptimeRobot still shows 502:
+  - Double-check URL includes /healthz
+  - Verify timeout is 30 seconds
+  - Wait 5-10 minutes (first ping is slow)
+  - Try manually visiting URL in browser
+
+IF service shows degraded:
+  - Check Render logs for errors
+  - Verify environment variables saved
+  - May need manual restart
+
+IF signals still blocked:
+  - Check rejection reason in logs
+  - Verify environment variables updated
+  - Run: python scripts/inspect_channel_signals.py --limit 50
+
+┌─────────────────────────────────────────────────────────────────┐
+│ SUCCESS CRITERIA                                                │
+└─────────────────────────────────────────────────────────────────┘
+
+ALL of these should be true:
+
+[ ] ✅ Git push successful
+[ ] ✅ Render environment updated (3 variables)
+[ ] ✅ UptimeRobot showing UP (200 OK)
+[ ] ✅ Service status shows new limits
+[ ] ✅ Health check returns "ok"
+[ ] ✅ Service stays awake (no spin-down)
+[ ] ✅ Next signal accepted (not blocked)
+
+IF ALL CHECKED: 🎉 DEPLOYMENT SUCCESSFUL!
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIME TRACKING                                                   │
+└─────────────────────────────────────────────────────────────────┘
+
+Start time: ___:___
+
+Step 1 (Git): ___:___ (should be ~2 min)
+Step 2 (Render): ___:___ (should be ~3 min)
+Step 3 (UptimeRobot): ___:___ (should be ~2 min)
+Step 4 (Wait): ___:___ (should be ~5 min)
+Step 5 (Verify): ___:___ (should be ~3 min)
+
+Total time: ~15 minutes
+
+┌─────────────────────────────────────────────────────────────────┐
+│ NOTES / ISSUES ENCOUNTERED                                      │
+└─────────────────────────────────────────────────────────────────┘
+
+[Use this space to note any issues or deviations]
+
+_________________________________________________________________
+
+_________________________________________________________________
+
+_________________________________________________________________
+
+_________________________________________________________________
+
+┌─────────────────────────────────────────────────────────────────┐
+│ DOCUMENTATION REFERENCE                                         │
+└─────────────────────────────────────────────────────────────────┘
+
+📄 MANUAL_DEPLOYMENT_REQUIRED.txt - Detailed commands
+📄 QUICK_DEPLOYMENT_GUIDE.md - Full guide
+📄 DEPLOYMENT_FIXES_2026-11-16.md - Technical details
+📄 FIXES_SUMMARY.txt - Quick overview
+
+┌─────────────────────────────────────────────────────────────────┐
+│ COMPLETED BY                                                    │
+└─────────────────────────────────────────────────────────────────┘
+
+Name: _____________________  Date: ___________  Time: ___:___
+
+Signature: _____________________
+
+┌─────────────────────────────────────────────────────────────────┐
+│ DEPLOYMENT STATUS: [ ] SUCCESS  [ ] PARTIAL  [ ] FAILED        │
+└─────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════

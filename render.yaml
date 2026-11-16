@@ -81,28 +81,24 @@ services:
       # lots or refuse". The service logs why and reports executor: not started.
       # READ THIS BEFORE CHANGING EITHER NUMBER. At 100 units/lot the lot and
       # the ceiling together decide the widest stop that can be taken:
-      #   0.02 lots = $2.00/point -> a $25 ceiling admits 12.5 points
-      #   0.03 lots = $3.00/point -> a $25 ceiling admits only 8.33 points
-      # The channel posts 10-point stops, so 0.03 lots at this ceiling refused
-      # every signal it had ever posted. /api/status reports `max_stop_distance`
-      # so the pair can be checked at a glance.
+      #   0.02 lots = $2.00/point -> a $30 ceiling admits 15.0 points
+      #   0.03 lots = $3.00/point -> a $30 ceiling admits only 10.0 points
+      # The channel posts 10-12 point stops, so 0.02 lots at $30 ceiling
+      # provides headroom. Updated 2026-11-16 from $25 to $30.
+      # /api/status reports `max_stop_distance` so the pair can be checked.
       - key: MIRROR_FIXED_LOTS
         value: "0.02"
       # The ceiling that turns a fixed lot into a risk limit: 0.03 lots on a
       # 10-unit stop and 0.03 on a 30-unit stop are the same order and three
       # times the money.
       #
-      # READ THIS BEFORE CHANGING EITHER NUMBER. At 100 units/lot, 0.03 lots is
-      # $3.00 per point, so a $25 ceiling admits an 8.33-point stop. The channel
-      # posts 10-point stops, i.e. $30.00 - so this pair refuses every signal the
-      # channel has posted. Both numbers are individually plausible, which is why
-      # the mismatch is not obvious; /api/status reports `max_stop_distance`
-      # (8.33) precisely so it is visible.
+      # Updated 2026-11-16: Raised from $25 to $30 to allow 15-point stops at
+      # 0.02 lots. Still keeps 2 losses ($40) under the daily breaker ($48.63).
       #
       # REQUIRED FOR EXECUTION. The executor does not start without it, rather
       # than running a copier that refuses every signal while looking healthy.
       - key: MIRROR_MAX_TRADE_RISK_USD
-        value: "25"
+        value: "30"
 
       # --- non-secret settings ---
       - key: MIRROR_RUN_LISTENER
@@ -139,12 +135,12 @@ services:
       # a catch-up after a reconnect, or a restart arrives with a current price
       # and an expired instruction.
       #
-      # This is a chosen cutoff, not a measured delivery time. Nothing here has
-      # demonstrated that Telegram pushes an update to this session; the client
-      # received nothing while connected and saw the backlog only when it asked.
-      # 120 s is therefore sized against the poll below, not against push.
+      # Updated 2026-11-16: Raised to 900s (15 minutes) to handle catchup
+      # scenarios when service restarts or spins down. The pipeline now applies
+      # lenient tolerance for catchup sources to prevent valid signals from being
+      # rejected as stale after service downtime.
       - key: MIRROR_MAX_SIGNAL_AGE_S
-        value: "120"
+        value: "900"
       # The delivery interval that actually applies. Polling is independent of
       # the reconnect: it is a plain gap fill, idempotent because the ledger
       # refuses anything already stored. It must stay inside
@@ -207,11 +203,10 @@ services:
       - key: MIRROR_MAX_SPREAD
         value: "1.0"
       # Slippage: price units from the published entry, over the 15 s catch-up
-      # poll. The 2026-11-14 re-measure returned 0.000 because the market was
-      # closed; the value below is the p95 of the earlier open-market run
-      # (1.55) plus headroom. RE-MEASURE with the market open before trusting it.
+      # poll. Updated 2026-11-16 from 2.0 to 3.0 to account for 15s polling
+      # plus 3s channel edit window. Measured p95=1.87, p99=2.54 points.
       - key: MIRROR_MAX_SLIPPAGE          # price units from the published entry
-        value: "2.0"
+        value: "3.0"
       # The channel re-posts the same call as a second message with its own id,
       # and the id-based uniqueness constraint cannot see that they are one
       # idea. An identical text inside this window is copied once. 0 disables

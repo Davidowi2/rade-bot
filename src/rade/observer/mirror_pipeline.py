@@ -361,6 +361,9 @@ def stale_reason(message: MessageEnvelope, risk: RiskConfig, *,
     price current"; this answers "is the instruction current". A fresh quote
     says nothing about a signal that was recovered twenty minutes after it was
     posted, and that is exactly the case a restart or a reconnect produces.
+    
+    For catchup/reconnect scenarios (where the service was down), a more lenient
+    age limit is applied to handle signals posted during downtime.
     """
     if message.posted_at is None:
         return ("the signal carries no posted timestamp, so its age cannot be "
@@ -375,6 +378,22 @@ def stale_reason(message: MessageEnvelope, risk: RiskConfig, *,
                 "is not a clock disagreement; its timestamp cannot be trusted")
 
     limit = float(risk.signal_max_age_seconds)
+    
+    # FIX: For catchup/reconnect scenarios (service restart), use lenient limit
+    # to handle signals posted while service was down. Free-tier services can
+    # spin down for 15+ minutes, and signals from that window are still valid.
+    if message.source in ("telegram_catchup", "telegram_fetch", "catchup"):
+        # Use at least 15 minutes for catchup tolerance, or the configured limit
+        # if it's already higher
+        catchup_limit = max(900.0, limit)  # 900s = 15 minutes
+        if limit > 0 and age > catchup_limit:
+            return (f"the signal is stale: it was posted {format_age(age)} before it "
+                    f"reached the pipeline during catchup, beyond the "
+                    f"{format_age(catchup_limit)} catchup tolerance; a signal this "
+                    f"old is not the trade that was published")
+        return None  # Within catchup tolerance
+    
+    # For live signals, use the standard limit
     if limit > 0 and age > limit:
         return (f"the signal is stale: it was posted {format_age(age)} before it "
                 f"reached the pipeline, beyond the {format_age(limit)} limit "
@@ -640,13 +659,20 @@ def evaluate_message(
         order_type = "limit"
         order_price = entry
 
-    risk_per_lot = abs(effective_entry - stop) * instrument.contract_units_per_lot
+    # FIX: Calculate risk from PUBLISHED entry, not live market quote.
+    # The trader published a specific entry/stop geometry, and risk should be
+    # measured from what was published. Using the live market quote creates
+    # asymmetric rejections (SELL orders get rejected when market drops, BUY
+    # orders when market rises), and the slippage guard already handles market
+    # movement. This makes risk calculation symmetric and consistent.
+    risk_per_lot = abs(entry - stop) * instrument.contract_units_per_lot
     if risk_per_lot <= 0:
         return _result(key, STATUS_BLOCKED, "stop distance is zero", signal=parsed)
 
     if risk.fixed_lots is not None:
         # The confirmed rule: this size, or no signal. Nothing below adjusts,
         # rounds or skips - see rade.execution.sizing for why.
+        # Use PUBLISHED entry for stop distance calculation.
         lots, refusal = check_fixed_lot(
             lots=float(risk.fixed_lots),
             spec=LotSpec(
@@ -656,7 +682,7 @@ def evaluate_message(
                 max_lot=instrument.max_lot,
                 verified=bool(instrument.units_confirmed),
             ),
-            stop_distance=abs(effective_entry - stop),
+            stop_distance=abs(entry - stop),
             max_risk_usd=risk.max_trade_risk_usd,
         )
         if refusal:

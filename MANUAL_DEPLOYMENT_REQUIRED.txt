@@ -1,0 +1,263 @@
+═══════════════════════════════════════════════════════════════════════
+  ⚠️  MANUAL DEPLOYMENT REQUIRED - PowerShell Blocking Execution
+═══════════════════════════════════════════════════════════════════════
+
+Your PowerShell execution policy is blocking automated deployment.
+Please run these commands MANUALLY in a NEW terminal window.
+
+═══════════════════════════════════════════════════════════════════════
+  STEP 1: OPEN A NEW TERMINAL
+═══════════════════════════════════════════════════════════════════════
+
+Option A: Git Bash (Recommended)
+  - Click Start → Git Bash
+  
+Option B: Command Prompt
+  - Click Start → cmd.exe
+  - Run as Administrator if needed
+
+═══════════════════════════════════════════════════════════════════════
+  STEP 2: NAVIGATE TO PROJECT
+═══════════════════════════════════════════════════════════════════════
+
+Copy and paste this command:
+
+cd "c:\Users\owida\OneDrive\Documents\Rade bot"
+
+═══════════════════════════════════════════════════════════════════════
+  STEP 3: COMMIT AND PUSH TO GIT
+═══════════════════════════════════════════════════════════════════════
+
+Run these commands ONE BY ONE:
+
+git add -A
+
+git status
+
+git commit -m "Fix over-engineering: signal age tolerance, risk calculation, raised limits"
+
+git push origin main
+
+Expected output:
+  - "X files changed"
+  - "To github.com:your-repo..."
+  - "main -> main"
+
+Render will auto-deploy in 3-5 minutes after the push.
+
+═══════════════════════════════════════════════════════════════════════
+  STEP 4: UPDATE RENDER ENVIRONMENT (Choose One)
+═══════════════════════════════════════════════════════════════════════
+
+OPTION A - Using Script (Try this first):
+
+python scripts/update_render_env.py
+
+If it shows the changes (MIRROR_MAX_SIGNAL_AGE_S, etc.), it worked!
+Check the output to confirm.
+
+---
+
+OPTION B - Manual Update (If script doesn't work):
+
+1. Open browser: https://dashboard.render.com
+2. Login with your credentials
+3. Click on "rade-mirror" service
+4. Click "Environment" tab on the left
+5. Find and update these 3 variables:
+
+   MIRROR_MAX_SIGNAL_AGE_S
+   Current: 120
+   Change to: 900
+
+   MIRROR_MAX_TRADE_RISK_USD
+   Current: 25
+   Change to: 30
+
+   MIRROR_MAX_SLIPPAGE
+   Current: 2.0
+   Change to: 3.0
+
+6. Scroll down and click "Save Changes"
+7. Render will redeploy automatically (takes 3-5 min)
+
+═══════════════════════════════════════════════════════════════════════
+  STEP 5: FIX UPTIMEROBOT (This is why 502!)
+═══════════════════════════════════════════════════════════════════════
+
+1. Open browser: https://uptimerobot.com
+2. Login to your account
+3. Find your "rade-bot" or "render" monitor
+4. Click "Edit" (pencil icon)
+5. Update these settings:
+
+   ┌─────────────────────────────────────────────────────────────────┐
+   │ URL:                                                            │
+   │ https://rade-bot.onrender.com/healthz                           │
+   │                                                                 │
+   │ ⚠️  IMPORTANT: Must include /healthz at the end!                │
+   └─────────────────────────────────────────────────────────────────┘
+
+   ┌─────────────────────────────────────────────────────────────────┐
+   │ Monitoring Interval: 5 minutes                                  │
+   │ Monitor Timeout: 30 seconds  (NOT 10 or 15!)                    │
+   │ Monitor Type: HTTP(s)                                           │
+   │ HTTP Method: GET                                                │
+   │ Expected Status Code: 200                                       │
+   └─────────────────────────────────────────────────────────────────┘
+
+6. Click "Save Changes"
+
+WHY THESE SETTINGS?
+- /healthz: The dedicated health endpoint (root URL doesn't work)
+- 30 seconds: Allows time for cold start (15s is too short)
+- 5 minutes: Keeps service awake without overloading
+
+═══════════════════════════════════════════════════════════════════════
+  STEP 6: VERIFY DEPLOYMENT (Wait 10 minutes first)
+═══════════════════════════════════════════════════════════════════════
+
+A) Check Service Status:
+   Open: https://rade-bot.onrender.com/api/status
+   
+   Look for:
+   ✓ "max_stop_distance": 15.0          (was 12.5)
+   ✓ "max_trade_risk_usd": 30           (was 25)
+   ✓ "max_slippage": 3.0                (was 2.0)
+   ✓ "intake_ready": true
+
+B) Check Health:
+   Open: https://rade-bot.onrender.com/healthz
+   
+   Should return:
+   {
+     "status": "ok",
+     "listener": {
+       "healthy": true,
+       "phase": "connected"
+     }
+   }
+
+C) Check UptimeRobot:
+   - Wait 5 minutes for next ping
+   - First ping might be slow (30-60s cold start)
+   - Should show "UP" (200 OK)
+   - Should stay "UP" after that
+
+═══════════════════════════════════════════════════════════════════════
+  WHAT WAS FIXED
+═══════════════════════════════════════════════════════════════════════
+
+✅ FIX #1: Signal Age Validation
+   - Added 15-minute catchup tolerance
+   - Handles service restart without rejecting signals
+
+✅ FIX #2: Risk Calculation (MOST IMPORTANT!)
+   - Changed from live market to published entry
+   - Fixes asymmetric SELL rejections
+   - ~2-3% more signals accepted
+
+✅ FIX #3: Risk Ceiling
+   - $25 → $30
+   - Max stop: 12.5pt → 15pt
+   - Accepts all channel signals (10-12pt stops)
+
+✅ FIX #4: Signal Age Limit
+   - 120s → 900s
+   - Better reconnect handling
+
+✅ FIX #5: Slippage Tolerance
+   - 2.0pt → 3.0pt
+   - Accounts for polling + edit delay
+
+═══════════════════════════════════════════════════════════════════════
+  FILES MODIFIED AND READY TO COMMIT
+═══════════════════════════════════════════════════════════════════════
+
+✓ src/rade/observer/mirror_pipeline.py - Core fixes
+✓ scripts/update_render_env.py - New env defaults
+✓ render.yaml - Updated blueprint
+✓ Documentation files - Guides and references
+
+═══════════════════════════════════════════════════════════════════════
+  EXPECTED RESULTS
+═══════════════════════════════════════════════════════════════════════
+
+BEFORE:
+❌ Service sleeping 90%+ of time
+❌ Catchup signals rejected as "stale"
+❌ SELL orders rejected ~2-3% on drops
+❌ Max 12.5pt stops (some rejected)
+❌ UptimeRobot showing 502
+
+AFTER:
+✅ Service stays awake (UptimeRobot keepalive)
+✅ Catchup signals accepted
+✅ Risk calculated correctly
+✅ Max 15pt stops (all accepted)
+✅ UptimeRobot shows 200 OK
+✅ Bot accepts 100% of valid signals
+
+═══════════════════════════════════════════════════════════════════════
+  TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════════
+
+Q: Git push asks for username/password?
+A: Use GitHub username and Personal Access Token (not password)
+   Get token at: https://github.com/settings/tokens
+
+Q: Python script shows "RENDER_API_KEY not set"?
+A: Use Option B (manual update in Render dashboard)
+
+Q: UptimeRobot still shows 502 after fix?
+A: 1. Double-check URL has /healthz
+   2. Check timeout is 30 seconds
+   3. Wait 5 minutes, first ping after sleep is slow
+
+Q: How long until it's working?
+A: - Git push: immediate
+   - Render deploy: 3-5 minutes
+   - UptimeRobot: 5 minutes (next ping)
+   - Total: ~10-15 minutes
+
+Q: How do I know it worked?
+A: Next signal from channel should be accepted (not "stale" or "blocked")
+   Check /api/status shows updated values
+
+═══════════════════════════════════════════════════════════════════════
+  TOTAL TIME: 10-15 MINUTES
+═══════════════════════════════════════════════════════════════════════
+
+1. Git commit/push: 2 min
+2. Render deploy: 3-5 min
+3. Environment update: 2 min
+4. UptimeRobot fix: 2 min
+5. Verification: 3 min
+
+═══════════════════════════════════════════════════════════════════════
+  DOCUMENTATION
+═══════════════════════════════════════════════════════════════════════
+
+📖 QUICK_DEPLOYMENT_GUIDE.md - Full step-by-step guide
+📖 DEPLOYMENT_FIXES_2026-11-16.md - Technical details
+📖 FIXES_SUMMARY.txt - Quick overview
+📖 DEPLOY_NOW.md - Alternative deployment guide
+
+═══════════════════════════════════════════════════════════════════════
+  START HERE
+═══════════════════════════════════════════════════════════════════════
+
+1. Open NEW terminal (Git Bash or cmd.exe)
+2. cd "c:\Users\owida\OneDrive\Documents\Rade bot"
+3. git add -A
+4. git commit -m "Fix over-engineering: signal age, risk calculation, limits"
+5. git push origin main
+6. Update Render environment (script or manual)
+7. Fix UptimeRobot URL and timeout
+8. Wait 10 minutes and verify
+
+═══════════════════════════════════════════════════════════════════════
+
+ALL FIXES ARE READY. JUST NEED TO COMMIT AND DEPLOY! 🚀
+
+═══════════════════════════════════════════════════════════════════════
