@@ -29,7 +29,7 @@ document and never in the repository.
 | Parameter | Value | Source |
 |---|---|---|
 | Copied signals | NOW / MARKET only | confirmed |
-| Lot size | exactly 0.03, or refuse | confirmed |
+| Lot size | exactly 0.02, or refuse | confirmed; 0.03 refused every signal |
 | Per-trade risk ceiling | **$25** | confirmed 2026-11-14 |
 | Daily-loss breaker | **1% of the day's opening equity** (≈ $49 at $4,862.73) | confirmed 2026-11-14 |
 | Max open positions | **1** | confirmed 2026-11-14 |
@@ -55,10 +55,20 @@ true risk reach ~$36. $25 is the honest number.
 
 ### The binding constraint
 
-Total drawdown room is **$162.73** (6% of $5,000 = $300 floor at $4,700).
-At $27 risk per trade, **six losing trades leave $0.73 and the seventh breaches
-the account**. The daily breaker (1% ≈ $49) and the max-1-position rule are the
-controls that stand between a bad run and a terminated account.
+Total drawdown room is **$162.90** at the current peak: the limit is **3.35% of
+the peak equity** ($4,862.73), giving a floor of $4,699.83. The peak is a
+running high-water mark, seeded from the first equity reading and persisted in
+`mirror_risk_state`.
+
+An earlier revision of this note said "$162.73 (6% of $5,000 = $300 floor at
+$4,700)". That is a different derivation — 6% of an assumed $5,000 starting
+balance rather than 3.35% of the actual peak — which lands on nearly the same
+number by coincidence. The deployed basis is the one above.
+
+At $20 risk per trade (0.02 lots × 100 units/lot = $2.00 per point, against the
+channel's ~10-point stops), **eight losing trades exhaust the room**. The daily
+breaker (1% ≈ $48.63) and the max-1-position rule are the controls that stand
+between a bad run and a terminated account.
 
 ## 3. Phases
 
@@ -67,9 +77,16 @@ controls that stand between a bad run and a terminated account.
   else. Never delete the existing environment guard.
 - Wire the quote provider to the destination account.
 - Verify the instrument spec against the account before any order.
-- Config: `MIRROR_FIXED_LOTS=0.03`, `MIRROR_MAX_TRADE_RISK_USD=25`,
-  `MIRROR_DAILY_LOSS_FRACTION=0.01`, `MIRROR_MAX_OPEN_POSITIONS=1`,
+- Config: `MIRROR_FIXED_LOTS=0.02`, `MIRROR_MAX_TRADE_RISK_USD=25`,
+  `MIRROR_CONTRACT_UNITS_PER_LOT=100`, `MIRROR_CONTRACT_UNITS_CONFIRMED=1`,
+  `MIRROR_DAILY_LOSS_FRACTION=0.01`, `MIRROR_MAX_DRAWDOWN_FRACTION=0.0335`,
+  `MIRROR_MAX_OPEN_POSITIONS=1`, `MIRROR_QUOTE_PROVIDER=tradelocker`,
   `MIRROR_DESTINATION_SERVER=BLBRY`, `MIRROR_DESTINATION_ACCOUNT_ID=<id>`.
+- **The lot and the ceiling are chosen together.** 0.03 lots × 100 units/lot is
+  $3.00 per point, so a $25 ceiling admitted an 8.33-point stop and refused
+  **every** signal the channel posts (its stops are ~10 points, ≈ $30 at that
+  lot). 0.02 lots is $2.00 per point and admits 12.5 points. Changing either
+  number alone re-breaks the other.
 - The destination pin is **required**: an executor with an unset pin does not
   start, the same fail-closed rule as the ceiling.
 
