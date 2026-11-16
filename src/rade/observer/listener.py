@@ -106,6 +106,16 @@ class MirrorState:
         self.runs += 1
         self._write()
 
+    def rewind(self, message_id: int) -> None:
+        """Move the cursor back, in memory only.
+
+        Used when a batch turns out to contain an unprocessed message: the
+        per-message advances made during the batch are discarded so the cursor
+        can be set to the true high-water mark. Re-processing what was already
+        stored is safe - the ledger dedupes on (channel, message_id, revision).
+        """
+        self.last_message_id = min(self.last_message_id, int(message_id))
+
     def _write(self) -> None:
         if not self.path:
             return
@@ -395,17 +405,40 @@ class Runtime:
 
         This is the part that makes a reconnect lossless. It is safe to
         over-fetch: the ledger suppresses anything already stored.
+
+        The cursor is moved once, afterwards, to the highest id with no
+        unprocessed message below it. Letting each message advance the cursor as
+        it is handled means a single failure in the middle of a batch moves the
+        cursor past every older message in that batch, and the next pass starts
+        above them - so the failed message is dropped for good. Processing in
+        ascending order alone is not enough, because a failure still leaves a
+        hole the cursor would otherwise jump over.
         """
         floor = self.listener.state.last_message_id
         seen: list[int] = []
-        kwargs: dict[str, Any] = {"reverse": True, "limit": None}
+        failed: list[int] = []
+        kwargs: dict[str, Any] = {"reverse": False, "limit": None}
         if floor:
             kwargs["min_id"] = floor
         async for message in self.client.iter_messages(self.entity, **kwargs):
+            mid = int(message.id)
             payload = self._process_safely(message, source="catchup")
-            seen.append(int(message.id))
-            if payload.get("status") not in {"duplicate"}:
+            seen.append(mid)
+            if payload.get("status") == "error":
+                failed.append(mid)
+            if payload.get("status") != "duplicate":
                 self.events += 1
+
+        highest = max(seen) if seen else floor
+        if failed:
+            # Hold the cursor below the oldest message that did not process, so
+            # the next pass starts at it and retries.
+            highest = min(highest, min(failed) - 1)
+        # Discard whatever the per-message handling did to the in-memory cursor;
+        # the durable position is the one computed here.
+        self.listener.state.rewind(floor)
+        if highest > floor:
+            self.listener.state.advance(highest)
         self.save_cursor(self.listener.state.last_message_id)
         return seen
 

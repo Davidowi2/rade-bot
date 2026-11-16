@@ -297,6 +297,55 @@ def test_gap_fill_processes_every_message_after_the_cursor(tmp_path):
     assert runtime.events == 3
 
 
+def test_a_message_that_fails_mid_batch_is_retried_not_dropped(tmp_path):
+    """A failure must leave the cursor below it, or the message is lost.
+
+    Each message advances the cursor as it is handled, so a failure in the
+    middle of a batch moved the cursor past every older message in that batch.
+    The next pass starts above them, so the failed message was never retried -
+    the one outcome the gap fill exists to prevent.
+    """
+    class ReverseClient(FakeClient):
+        """Honors ``reverse`` the way Telethon does."""
+
+        async def iter_messages(self, entity, **kwargs):
+            floor = kwargs.get("min_id") or 0
+            rows = [m for m in self.messages if m.id > floor]
+            rows.sort(key=lambda m: m.id, reverse=bool(kwargs.get("reverse")))
+            for message in rows:
+                yield message
+
+    class FlakyListener(MirrorListener):
+        fail = True
+
+        def process_message(self, message, *, source, revision=None):
+            if self.fail and message.id == 2:
+                raise RuntimeError("boom")
+            return super().process_message(message, source=source, revision=revision)
+
+    listener = FlakyListener(
+        channel="@source",
+        ledger=SQLiteIntentLedger(tmp_path / "l.sqlite"),
+        instrument=INSTRUMENT, risk=RISK, notifier=None,
+        quote_provider=quote_now(),
+        state=MirrorState(tmp_path / "state.json"),
+        log=lambda *_: None,
+    )
+    runtime = Runtime(client=ReverseClient([msg(1), msg(2), msg(3)]),
+                      listener=listener, channel="@source",
+                      heartbeat_path=tmp_path / "beat.json", log=lambda *_: None)
+
+    assert asyncio.run(runtime.gap_fill()) == [1, 2, 3]
+    assert runtime.listener.state.last_message_id == 1, \
+        "the cursor moved past a message that never processed"
+    assert runtime.listener.ledger.counts().get("paper_intent") == 2
+
+    listener.fail = False
+    assert asyncio.run(runtime.gap_fill()) == [2, 3]
+    assert runtime.listener.ledger.counts().get("paper_intent") == 3, \
+        "the message that failed was never retried"
+
+
 def test_gap_fill_twice_stores_nothing_new(tmp_path):
     runtime = _runtime(tmp_path, [msg(1), msg(2)])
     asyncio.run(runtime.gap_fill())
