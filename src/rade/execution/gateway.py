@@ -333,7 +333,12 @@ class TradeLockerGateway:
         except Exception as exc:
             raise self._fail(exc, "reading positions") from exc
         out: list[BrokerPosition] = []
-        for _, row in _iter_rows(frame):
+        rows = _iter_rows(frame)
+        if rows is None:
+            raise BrokerError(
+                "the broker's position feed was not a readable table, so it is "
+                "unknown whether any position is open")
+        for _, row in rows:
             try:
                 out.append(BrokerPosition(
                     id=int(row.get("id", 0)),
@@ -356,7 +361,12 @@ class TradeLockerGateway:
         except Exception as exc:
             raise self._fail(exc, "reading orders") from exc
         out: list[BrokerOrder] = []
-        for _, row in _iter_rows(frame):
+        rows = _iter_rows(frame)
+        if rows is None:
+            raise BrokerError(
+                "the broker's order feed was not a readable table, so it is "
+                "unknown whether this trade already has an order")
+        for _, row in rows:
             try:
                 out.append(BrokerOrder(
                     id=int(row.get("id", 0)),
@@ -496,16 +506,23 @@ def _first_tick_size(value: Any) -> Any:
     return None
 
 
-def _iter_rows(frame: Any):
-    """Iterate a pandas frame as dicts; tolerate an empty or missing frame."""
+def _iter_rows(frame: Any) -> list[tuple[Any, Any]] | None:
+    """Iterate a pandas frame as dicts.
+
+    ``None`` means the response was not a readable table at all, which is not
+    the same as an empty one. Returning ``[]`` for both let a broken or absent
+    feed read as "the broker holds nothing": a live position would then be
+    written off as closed, and a missing order feed as "no order here" - the
+    two states that have already caused real damage in this project.
+    """
     if frame is None:
-        return []
+        return None
     try:
         if getattr(frame, "empty", False):
             return []
-        return frame.iterrows()
+        return list(frame.iterrows())
     except AttributeError:
-        return []
+        return None
 
 
 def tradelocker_gateway_from_env(*, symbol: str = "XAUUSD",

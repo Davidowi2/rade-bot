@@ -95,18 +95,22 @@ class _Unreadable:
     """The broker could not be read.
 
     Distinct from ``None``, which means the broker answered and there is no
-    position. Conflating the two closed a live position: the demo API answered
-    HTTP 429 on ``/positions``, the read returned ``None``, and the manager
-    recorded the trade as ``closed`` and told the operator the position had
-    closed at the broker - while the position was still open and protected.
-    A failed read is not evidence of anything.
+    such record. Conflating the two has closed a live position (an unreadable
+    position list read as "no position"), and an unreadable order list read as
+    "no order" would let a retry place a second order for a trade the broker
+    already has - doubling the position. A failed read is not evidence of
+    anything.
     """
 
+    def __init__(self, label: str) -> None:
+        self._label = label
+
     def __repr__(self) -> str:
-        return "POSITIONS_UNREADABLE"
+        return self._label
 
 
-POSITIONS_UNREADABLE = _Unreadable()
+POSITIONS_UNREADABLE = _Unreadable("POSITIONS_UNREADABLE")
+ORDERS_UNREADABLE = _Unreadable("ORDERS_UNREADABLE")
 
 #: The correlation tag length the broker accepts. The documented limit is 31
 #: characters; the SDK rejects anything longer.
@@ -873,6 +877,15 @@ class ExecutionEngine:
 
     def _submit_order(self, trade: ManagedTrade) -> dict:
         existing = self._existing_order(trade.trade_id)
+        if existing is ORDERS_UNREADABLE:
+            # Nothing is sent, and the trade is left exactly as it was so the
+            # management pass retries it on the next tick. Reading a failed
+            # order lookup as "no order" would place a second order for a trade
+            # the broker already has.
+            return {"error": True, "retry": True, "trade_id": trade.trade_id,
+                    "reason": "the broker's orders could not be read, so it is "
+                              "unknown whether this trade already has an order; "
+                              "nothing was sent"}
         if existing is not None:
             self.log(f"trade {trade.trade_id}: the broker already has order "
                      f"{existing.id}; not resubmitting")
@@ -930,12 +943,17 @@ class ExecutionEngine:
                 "state": trade.state}
 
     def _existing_order(self, trade_id: str):
-        """The broker's order for this trade, if it already has one."""
+        """The broker's order for this trade, if it already has one.
+
+        ``None`` is an answer: the broker was read and holds no order for this
+        trade. ``ORDERS_UNREADABLE`` is not an answer, and no caller may treat
+        it as one.
+        """
         try:
             orders = self.broker.orders(history=True)
         except BrokerError as exc:
             self.log(f"could not read the broker's orders: {exc}")
-            return None
+            return ORDERS_UNREADABLE
         for order in orders:
             if order.strategy_id == trade_id:
                 return order
@@ -972,7 +990,8 @@ class ExecutionEngine:
             # evidence: a filled order is a fill. It is not evidence of a
             # *close*, which is why nothing is finished here.
             order = self._existing_order(trade.trade_id)
-            if order is not None and order.is_filled and order.avg_price:
+            if (order is not None and not isinstance(order, _Unreadable)
+                    and order.is_filled and order.avg_price):
                 trade.fill_price = float(order.avg_price)
                 trade.broker_position_id = order.position_id
             else:
@@ -1603,6 +1622,12 @@ class ExecutionEngine:
                     "unreadable": True}
 
         if position is None:
+            if order is ORDERS_UNREADABLE:
+                # An unreadable order feed cannot answer "was this order ever
+                # placed", so the trade must not be concluded to be
+                # unsubmitted - that conclusion is what lets it be sent again.
+                return {"state": trade.state, "trade_id": trade.trade_id,
+                        "unreadable": True}
             if order is not None and order.is_filled:
                 trade.broker_order_id = order.id
                 trade.broker_position_id = order.position_id

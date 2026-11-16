@@ -607,6 +607,37 @@ def test_a_contract_size_that_disagrees_with_the_broker_is_unconfirmed():
     assert "disagree" in spec.unconfirmed_reason
 
 
+def test_an_absent_position_feed_is_unreadable_not_empty():
+    """``None`` is not an empty account.
+
+    Reading it as empty would let a broken feed look like "no position open",
+    which is how a live position gets written off as closed.
+    """
+    with pytest.raises(BrokerError):
+        gateway_for().positions()
+
+
+def test_an_absent_order_feed_is_unreadable_not_empty():
+    """Same for orders: "cannot tell" must not read as "no order here"."""
+    with pytest.raises(BrokerError):
+        gateway_for().orders(history=True)
+
+
+def test_a_readable_empty_feed_is_empty():
+    class _EmptyFeed(_FakeClient):
+        def get_all_positions(self):
+            class _Frame:
+                empty = True
+            return _Frame()
+
+        def get_all_orders(self, history=False):
+            return self.get_all_positions()
+
+    gateway = gateway_for(_EmptyFeed())
+    assert gateway.positions() == []
+    assert gateway.orders(history=True) == []
+
+
 def test_a_missing_contract_size_blocks_the_specification():
     client = _FakeClient(details={"lotStep": 0.01, "minLot": 0.01, "maxLot": 50})
     spec = gateway_for(client).spec()
@@ -733,6 +764,70 @@ def test_an_order_is_never_resubmitted_after_a_restart(tmp_path):
     restarted.execute(result, envelope())
 
     assert len(broker.place_calls) == 1, "the order was placed twice"
+
+
+def _managed_trade(result) -> ManagedTrade:
+    """A validated trade built from a pipeline result, as execute() would."""
+    signal = result.signal
+    plan = build_exit_plan(side=signal["side"], entry=signal["published_entry"],
+                           stop=signal["stop_loss"], targets=signal["take_profits"],
+                           size=result.order_intent["size_lots"],
+                           lot_step=0.01, min_lot=0.01)
+    return ManagedTrade(
+        trade_id=trade_id_for(result.event_key), event_key=result.event_key,
+        channel="@source", message_id=100, revision=0, symbol="XAUUSD",
+        side=signal["side"], size=result.order_intent["size_lots"],
+        entry=signal["published_entry"], stop=signal["stop_loss"],
+        targets=signal["take_profits"], plan=plan,
+        current_stop=signal["stop_loss"], state=STATE_VALIDATED,
+    )
+
+
+def test_an_unreadable_order_feed_does_not_cause_a_second_order(tmp_path):
+    """The check that prevents resubmission is the order lookup itself.
+
+    If a broker hiccup makes that lookup unreadable and the failure reads as
+    "the broker has no order", the retry places a second order for a trade the
+    broker already has - doubling the position. Nothing may be sent.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    trade = _managed_trade(evaluated())
+
+    engine.submit(trade)
+    assert len(broker.place_calls) == 1
+
+    broker.fail_orders = True
+    outcome = engine.submit(trade)
+
+    assert len(broker.place_calls) == 1, "an unreadable order feed caused a second order"
+    assert outcome.get("retry") is True
+    assert "could not be read" in outcome["reason"]
+
+
+def test_reconciliation_leaves_a_trade_alone_when_the_orders_are_unreadable(
+        tmp_path):
+    """Reconciliation must not conclude "never submitted" from a failed read.
+
+    That conclusion is what makes a later pass send the order again, so it may
+    only be reached when the order feed was actually read.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    before = ledger.get_trade(trade_id)["state"]
+
+    # The position is gone, and the order feed cannot be read. Reconciliation
+    # cannot tell whether the order was ever placed.
+    broker.position_book = []
+    broker.fail_orders = True
+    outcome = engine.reconcile_trade(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+
+    assert outcome.get("unreadable") is True
+    assert ledger.get_trade(trade_id)["state"] == before, \
+        "reconciliation concluded 'never submitted' from a read it could not make"
 
 
 def test_a_trade_opened_but_never_submitted_is_submitted_after_a_restart(tmp_path):
