@@ -119,6 +119,43 @@ test("the live mode reads as live, not as demo", () => {
     assert.ok(elements.badges.innerHTML.includes("XAUUSD"));
 });
 
+test("the guards panel shows the risk room the account has left", () => {
+  // Without this the drawdown limit is a bare percentage and the dashboard
+  // cannot answer "how much can I still lose".
+  const withRoom = {...STATUS,
+    execution: {enabled: true, error: null, paused: {paused: false},
+                guards: {limits: {max_open_positions: 1, daily_loss_fraction: 0.01,
+                                   max_drawdown_fraction: 0.0335, max_spread: 1,
+                                   max_slippage: 2, disabled: []},
+                         preflight: {room: {equity: 4862.73, peak_equity: 4862.73,
+                                            day_start_equity: 4862.73, stored: false,
+                                            drawdown_floor: 4699.83,
+                                            drawdown_room: 162.9,
+                                            daily_floor: 4814.1,
+                                            daily_room: 48.63}},
+                         last_verdict: null},
+                broker: {}}};
+  const { api, elements } = load();
+  api.renderGuards(withRoom);
+  assert.ok(elements.guards.innerHTML.includes("Risk room"),
+    "the risk room card is missing");
+  assert.ok(elements.guards.innerHTML.includes("162.90"),
+    "the drawdown room must be shown in dollars");
+  assert.ok(elements.guards.innerHTML.includes("4699.83"),
+    "the drawdown floor must be shown so the room means something");
+  assert.ok(elements.guards.innerHTML.includes("48.63"),
+    "the daily breaker room must be shown too");
+
+  // No room reported -> no card, not an empty one.
+  const noRoom = {...withRoom,
+    execution: {...withRoom.execution,
+                guards: {limits: withRoom.execution.guards.limits,
+                          preflight: {}, last_verdict: null}}};
+  api.renderGuards(noRoom);
+  assert.ok(!elements.guards.innerHTML.includes("Risk room"),
+    "a risk room card appeared with no room data");
+});
+
 test("the helpers escape and classify", () => {
   const { api } = load();
   assert.ok(api.esc("<script>").includes("&lt;"), "esc must escape HTML");

@@ -639,10 +639,28 @@ function renderGuards(status) {
     { key: "max_slippage", label: "Max slippage", value: limits.max_slippage },
   ];
   const last = guards.last_verdict;
+  // The room the account has left. Without this the dashboard cannot answer
+  // "how much can I still lose", and the drawdown limit looks like a number
+  // with no meaning.
+  const room = (guards.preflight || {}).room;
+  let roomCard = "";
+  if (room && Number.isFinite(Number(room.drawdown_room))) {
+    const money = v => `$${Number(v).toFixed(2)}`;
+    const notes = [`new orders stop at ${money(room.drawdown_floor)}`];
+    if (Number.isFinite(Number(room.daily_room))) {
+      notes.push(`the day's breaker leaves ${money(room.daily_room)}`);
+    }
+    if (!room.stored) {
+      notes.push("no risk state stored yet, so this is measured from today's equity");
+    }
+    roomCard = card("Risk room", `<span class="mono">${money(room.drawdown_room)}</span>`,
+      esc(notes.join(" · ")), Number(room.drawdown_room) < 0 ? "is-bad" : "");
+  }
   el.innerHTML = '<div class="grid">' +
     rows.map(r => card(r.label, `<span class="mono">${esc(r.value)}</span>`,
       disabled.has(r.key) ? "disabled by configuration" : "enforced",
       disabled.has(r.key) ? "is-bad" : "")).join("") +
+    roomCard +
     card("Last pre-trade verdict", last ? (last.allowed ? "passed" : "blocked") : "—",
       esc(last ? last.reason : "no order attempted yet"),
       last ? (last.allowed ? "is-ok" : "is-bad") : "") +

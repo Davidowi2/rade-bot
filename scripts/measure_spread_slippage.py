@@ -92,16 +92,19 @@ def main() -> int:
     # path is a diffusion. This samples the mid price once a second and measures
     # the actual move over the 15-second poll interval, which is what the
     # slippage guard is compared against.
-    print("\nsampling the mid price for 105 seconds to measure the real 15s move ...")
+    # Each quote read is its own round trip, so this samples every 2 seconds for
+    # 100 seconds: enough ~15 s pairs to be meaningful, slow enough not to take
+    # ten minutes.
+    print("\nsampling the mid price for 100 seconds to measure the real 15s move ...")
     mids: list[tuple[float, float]] = []
-    for _ in range(105):
+    for _ in range(50):
         try:
             bid = float(tl.get_latest_bid_price(iid))
             ask = float(tl.get_latest_asking_price(iid))
             mids.append(((ask + bid) / 2.0, time.time()))
         except Exception:
             pass
-        time.sleep(1.0)
+        time.sleep(2.0)
 
     moves = []
     for price, at in mids:
