@@ -297,6 +297,29 @@ feed cannot be read, the levels come back `known=False`, and nothing acts on
 them — a verification fails, and reconciliation stops for review rather than
 declaring the position unprotected.
 
+### A patch is a partial update (verified 2026-11-16)
+
+The engine moves the stop and *then* re-checks the target, which is two separate
+`modify_position` calls. That is only safe if a patch carrying one level leaves
+the other alone. Verified on the destination account with
+`scripts/verify_protective_orders.py` (one 0.01-lot order, closed afterwards):
+
+```
+as placed       stop 3820.93   target 3860.93
+patch stop only stop 3830.93   target 3860.93   <- target survived
+patch target    stop 3830.93   target 3855.93   <- stop survived
+```
+
+`modify_position` issues `PATCH /trade/positions/{id}` with only the supplied
+fields, so the broker treats it as a partial update. Had it been a
+replace-semantics call, the engine's own sequence would have stripped the
+protection it had just set.
+
+One quirk worth knowing: after a modification the broker reports the order's
+`status` as the string `"None"`. Nothing branches on it — `_attached_levels`
+resolves the levels by id and never inspects status — but a log line showing
+`status='None'` is the broker's output, not a missing value.
+
 ---
 
 ## 3. Market entry (spec step 3)
