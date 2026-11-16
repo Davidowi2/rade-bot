@@ -90,6 +90,17 @@ STATE_REVIEW = "review"
 #: States that still need managing or reconciling.
 ACTIVE_STATES = (STATE_VALIDATED, STATE_SUBMITTED, STATE_ACCEPTED, STATE_OPEN, STATE_PARTIAL)
 
+#: States that occupy the open-position allowance.
+#:
+#: A trade sent to review with its position still open is still a position at
+#: the broker, so it has to count. Excluding it let a limit of one be exceeded
+#: while a trade was waiting on a human: two live positions, two orders placed.
+#: Review is included even though some review trades hold no position at all
+#: (a fill beyond the final target is sent there before any position exists).
+#: The conservative reading is the right one - a trade in review is one a human
+#: has to look at before anything else should start.
+POSITION_STATES = ACTIVE_STATES + (STATE_REVIEW,)
+
 
 class _Unreadable:
     """The broker could not be read.
@@ -797,7 +808,7 @@ class ExecutionEngine:
             return self._guard_blocked(trade, size_problem)
 
         try:
-            others = [row for row in self.ledger.list_trades(states=ACTIVE_STATES)
+            others = [row for row in self.ledger.list_trades(states=POSITION_STATES)
                       if row.get("trade_id") != trade.trade_id]
         except Exception as exc:
             return self._guard_blocked(
@@ -1143,13 +1154,13 @@ class ExecutionEngine:
                     # process has not confirmed.
                     outcome = self.reconcile_trade(trade)
                 else:
-                    if trade.state == STATE_ACCEPTED:
-                        filled = self.confirm_fill(trade)
-                        if not filled.get("filled"):
-                            summary["pending_fill"] += 1
-                            continue
-                        trade = ManagedTrade.from_row(self.ledger.get_trade(trade.trade_id)) or trade
-                    outcome = self.manage_trade(trade)
+                    outcome = self._confirm_or_wait(trade)
+                    if outcome is None:
+                        trade = ManagedTrade.from_row(
+                            self.ledger.get_trade(trade.trade_id)) or trade
+                        outcome = self.manage_trade(trade)
+                    elif outcome.get("waiting"):
+                        summary["pending_fill"] += 1
             except Exception as exc:
                 summary["errors"] += 1
                 self.log(f"management error for {trade.trade_id}: "
@@ -1166,6 +1177,33 @@ class ExecutionEngine:
             elif outcome.get("stopped"):
                 summary["stopped"] += 1
         return summary
+
+    def _confirm_or_wait(self, trade: ManagedTrade) -> dict | None:
+        """Confirm an accepted order's fill, or report that it is still waiting.
+
+        Returns ``None`` once the order has filled and management should
+        continue, and an outcome otherwise: ``waiting``, expired, stopped or
+        closed.
+
+        This is shared by ``manage`` and ``manage_trade`` because the deployed
+        loop used to inline a version of it that counted the pending fill and
+        then ``continue``d - skipping the fill-window check entirely. An order
+        the broker never filled therefore stayed ``accepted`` forever, and
+        because ``ACTIVE_STATES`` includes ``accepted`` it counted as an open
+        position and blocked every later signal.
+        """
+        filled = self.confirm_fill(trade)
+        if filled.get("stopped") or filled.get("closed"):
+            return filled
+        if filled.get("filled"):
+            return None
+        if self._fill_window_expired(trade):
+            return self._stop_management(
+                trade,
+                "the order was accepted but no position appeared within "
+                f"{self.fill_timeout_s:g}s; the trade needs review")
+        return {"waiting": True, "trade_id": trade.trade_id,
+                "reason": "awaiting the fill confirmation"}
 
     def manage_trade(self, trade: ManagedTrade) -> dict:
         """Advance one open trade by at most one ladder step."""
@@ -1191,17 +1229,9 @@ class ExecutionEngine:
         # it closed would lose the trade; it is confirmed instead, and only
         # abandoned once the fill window has passed.
         if trade.state == STATE_ACCEPTED:
-            filled = self.confirm_fill(trade)
-            if filled.get("stopped") or filled.get("closed"):
-                return filled
-            if not filled.get("filled"):
-                if self._fill_window_expired(trade):
-                    return self._stop_management(
-                        trade,
-                        "the order was accepted but no position appeared within "
-                        f"{self.fill_timeout_s:g}s; the trade needs review")
-                return {"waiting": True, "trade_id": trade.trade_id,
-                        "reason": "awaiting the fill confirmation"}
+            outcome = self._confirm_or_wait(trade)
+            if outcome is not None:
+                return outcome
             trade = ManagedTrade.from_row(self.ledger.get_trade(trade.trade_id)) or trade
 
         position = self._position_for(trade.trade_id)
@@ -1298,7 +1328,7 @@ class ExecutionEngine:
                 f"Waiting for the final target {trade.plan.final_target:g}.")
             return {"stop_moved": True, "trade_id": trade.trade_id,
                     "leg": leg.label, "stop": trade.current_stop,
-                    "closed_qty": 0.0}
+                    "closed_qty": 0.0, **outcome}
 
         # The target is reached. Before closing anything, the live position
         # must match what the plan expects.
@@ -1479,11 +1509,37 @@ class ExecutionEngine:
                 self._save(trade)
                 return {"error": True, "trade_id": trade.trade_id}
             if ok:
-                self._transition(trade, "target", "target_restored",
-                                 f"the final take profit {trade.plan.final_target:g} "
-                                 "was re-attached")
-                self._save(trade)
-                return {"target_restored": True, "trade_id": trade.trade_id}
+                # ``True`` means the request was accepted, not that the level is
+                # attached. The stop path reads the broker back; this one now
+                # does too, because the whole point of the target is that it
+                # protects the position when this process is not running.
+                fresh = self._position_for(trade.trade_id)
+                if fresh is None or fresh is POSITIONS_UNREADABLE:
+                    # Unreadable is not absent. Record it and let the next pass
+                    # look again rather than stopping management on a read that
+                    # may simply have failed.
+                    self._transition(trade, "target", "target_unconfirmed",
+                                     "the final take profit was sent but could "
+                                     "not be read back")
+                    self._save(trade)
+                    return {"target_unconfirmed": True,
+                            "trade_id": trade.trade_id}
+                levels = self._attached_levels(fresh)
+                if (levels.known and levels.take_profit is not None
+                        and abs(levels.take_profit - trade.plan.final_target) <= 1e-6):
+                    self._transition(trade, "target", "target_restored",
+                                     f"the final take profit "
+                                     f"{trade.plan.final_target:g} was "
+                                     f"re-attached and read back")
+                    self._save(trade)
+                    return {"target_restored": True, "trade_id": trade.trade_id}
+                return self._stop_management(
+                    trade,
+                    "the final take profit could not be confirmed after being "
+                    f"re-attached (the broker reports "
+                    f"{levels.take_profit!r}, expected "
+                    f"{trade.plan.final_target:g}); automatic management stops "
+                    "for review")
             return self._stop_management(
                 trade,
                 "the final take profit could not be re-attached; automatic "

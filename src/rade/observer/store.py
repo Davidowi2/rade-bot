@@ -286,11 +286,18 @@ class SupabaseLedger:
         return True
 
     def failed_notifications(self, *, limit: int = 20) -> list[dict]:
-        """Notifications whose last attempt failed, oldest first."""
+        """Notifications that were not confirmed delivered, oldest first.
+
+        Both ``failed`` and ``pending`` are included. A ``pending`` row is one
+        whose send was interrupted - the slot is reserved before the attempt and
+        completed afterwards, so a crash in between leaves it pending forever.
+        Re-sending may duplicate a message that actually arrived; a silently lost
+        ``[FILLED]`` or ``[STOP MOVED]`` alert is the worse outcome.
+        """
         _, body = self.transport.request(
             "GET", NOTIFICATION_TABLE,
             params={
-                "status": "eq.failed",
+                "status": "in.(failed,pending)",
                 "select": "event_key,kind,detail,attempts",
                 "order": "sent_at.asc",
                 "limit": str(int(limit)),

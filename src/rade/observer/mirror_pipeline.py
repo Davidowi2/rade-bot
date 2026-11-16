@@ -1049,7 +1049,12 @@ class SQLiteIntentLedger:
         return True
 
     def failed_notifications(self, *, limit: int = 20) -> list[dict]:
-        """Notifications whose last attempt failed, oldest first."""
+        """Notifications that were not confirmed delivered, oldest first.
+
+        Both ``failed`` and ``pending`` are included: a ``pending`` row is one
+        whose send was interrupted, and the docstring's promise that it "is
+        retried" used to be false.
+        """
         with self._connect() as con:
             rows = con.execute(
                 "SELECT n.event_key, n.kind, n.detail, n.attempts, "
@@ -1057,7 +1062,8 @@ class SQLiteIntentLedger:
                 "e.signal_json, e.intent_json, e.channel, e.message_id "
                 "FROM notification_log n "
                 "LEFT JOIN mirror_events e ON e.event_key = n.event_key "
-                "WHERE n.status='failed' ORDER BY n.sent_at ASC LIMIT ?",
+                "WHERE n.status IN ('failed','pending') "
+                "ORDER BY n.sent_at ASC LIMIT ?",
                 (int(limit),),
             ).fetchall()
         keys = ("event_key", "kind", "detail", "attempts", "event_status",

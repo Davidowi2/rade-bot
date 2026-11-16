@@ -404,6 +404,18 @@ class Runtime:
             return floor
 
         latest = await self.latest_message_id()
+        if latest <= 0 and not self.allow_history_import:
+            # An empty answer is indistinguishable from a failed one. Treating
+            # it as "the channel is empty" makes the gap fill fetch with no
+            # min_id - the whole archive, which is exactly what the history
+            # switch exists to gate. Old calls would be recorded and notified
+            # even though the staleness guard would refuse to trade them.
+            raise RuntimeError(
+                "the channel reported no messages, so the first-activation "
+                "start point cannot be established; importing the channel "
+                "history by accident is worse than not starting. Retry, or set "
+                "MIRROR_ALLOW_HISTORY_IMPORT=1 to import it deliberately."
+            )
         self.listener.state.start_source = f"latest:{latest}"
         self.log(
             f"first activation: starting from the newest message (id {latest}); "

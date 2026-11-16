@@ -524,6 +524,32 @@ def test_cursor_restore_does_not_move_backwards(tmp_path):
 # the first activation must not import the channel's history
 # --------------------------------------------------------------------------
 
+def test_a_false_empty_first_read_does_not_import_the_history(tmp_path):
+    """An empty answer must not be read as "the channel is empty".
+
+    With a zero baseline the gap fill fetches with no ``min_id`` - the whole
+    archive - which is exactly what the history switch exists to gate. Old calls
+    would be recorded and notified even though the staleness guard refuses to
+    trade them.
+    """
+    class EmptyChannel(FakeClient):
+        async def get_messages(self, entity, **kwargs):
+            return []
+
+    runtime = _runtime(tmp_path, [], client=EmptyChannel([]), start_at="latest")
+    asyncio.run(runtime.connect())
+    with pytest.raises(RuntimeError):
+        asyncio.run(runtime.establish_baseline())
+
+    # Deliberately asked-for history still works.
+    sub = tmp_path / "allowed"
+    sub.mkdir()
+    allowed = _runtime(sub, [], client=EmptyChannel([]), start_at="history",
+                       allow_history_import=True)
+    asyncio.run(allowed.connect())
+    assert asyncio.run(allowed.establish_baseline()) == 0
+
+
 def test_a_fresh_install_starts_from_the_newest_message(tmp_path):
     """Old calls must not become today's paper intents."""
     runtime = _runtime(tmp_path, [msg(1), msg(2), msg(3)])

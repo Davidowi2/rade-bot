@@ -36,6 +36,7 @@ from rade.execution.broker import (
     OrderAck,
 )
 from rade.execution.engine import (
+    ACTIVE_STATES,
     STATE_ACCEPTED,
     STATE_BLOCKED,
     STATE_CLOSED,
@@ -231,10 +232,17 @@ class FakeBroker:
         if position is None:
             return False
         # The broker edits the protective order in place: same id, new level.
+        # If the order is gone, it creates a new one and repoints the position.
         if stop_loss is not None:
-            self._set_level(position.stop_loss_id, "stop", float(stop_loss))
+            if position.stop_loss_id is None:
+                self._reattach(position, "stop", stop_loss)
+            else:
+                self._set_level(position.stop_loss_id, "stop", float(stop_loss))
         if take_profit is not None:
-            self._set_level(position.take_profit_id, "limit", float(take_profit))
+            if position.take_profit_id is None:
+                self._reattach(position, "limit", take_profit)
+            else:
+                self._set_level(position.take_profit_id, "limit", float(take_profit))
         return True
 
     def close_quantity(self, *, position_id, qty) -> bool:
@@ -311,6 +319,29 @@ class FakeBroker:
                 position_id=position_id,
             ))
         return sl_id, tp_id
+
+    def _reattach(self, position, kind, value):
+        """Put a dropped protective order back, the way the broker does.
+
+        The broker creates a fresh order and points the position at it, so the
+        id changes - which is exactly why the engine reads the position back
+        rather than trusting the modification call's return value.
+        """
+        level_id = self._next_level_id
+        self._next_level_id += 1
+        if kind == "stop":
+            self.open_book.append(BrokerOrder(
+                id=level_id, instrument_id=1808, side="sell", qty=position.qty,
+                status="New", type="stop", stop_price=float(value),
+                position_id=position.id))
+            self._replace(position, stop_loss_id=level_id)
+        else:
+            self.open_book.append(BrokerOrder(
+                id=level_id, instrument_id=1808, side="sell", qty=position.qty,
+                status="New", type="limit", price=float(value),
+                position_id=position.id))
+            self._replace(position, take_profit_id=level_id)
+        return True
 
     def _replace(self, position, **changes):
         from dataclasses import replace
@@ -1161,6 +1192,126 @@ def test_a_close_whose_confirming_read_failed_is_not_closed_again(tmp_path):
     assert len(broker.close_calls) == 1, "the same ladder step was closed twice"
     row = ledger.get_trade(trade_id)
     assert row["legs_done"] >= 1, "the close that did happen was never recorded"
+
+
+def _drop_attached_target(broker):
+    """Make the position carry no take profit, as a reduction can."""
+    from dataclasses import replace
+
+    position = broker.position_book[0]
+    broker.open_book = [o for o in broker.open_book
+                        if o.id != position.take_profit_id]
+    broker.position_book[0] = replace(position, take_profit_id=None)
+
+
+def test_a_restored_final_target_is_read_back(tmp_path):
+    """The target path verifies the broker, as the stop path does."""
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+    _drop_attached_target(broker)
+    broker.bid, broker.ask = 3909.5, 3909.7   # past the first target
+
+    outcome = engine.manage_trade(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+
+    assert outcome.get("stop_moved") is True
+    assert outcome.get("target_restored") is True, \
+        "the dropped target was not reported as restored"
+    # And it is really attached, at the final target.
+    position = broker.positions()[0]
+    levels = {order.id: order for order in broker.orders(history=False)}
+    target_order = levels.get(position.take_profit_id)
+    assert target_order is not None, "the position points at no target order"
+    assert target_order.price == pytest.approx(3900.0)
+
+
+def test_a_final_target_the_broker_does_not_carry_stops_management(tmp_path):
+    """``modify_position`` returning True is not proof the level is attached.
+
+    The position would be unprotected on the upside, so a human has to look.
+    """
+    class SilentTargetRefuser(FakeBroker):
+        def modify_position(self, *, position_id, stop_loss=None, take_profit=None):
+            if take_profit is not None:
+                # Accept the request and attach nothing.
+                self.modify_calls.append({"position_id": position_id,
+                                          "stop_loss": stop_loss,
+                                          "take_profit": take_profit})
+                return True
+            return super().modify_position(position_id=position_id,
+                                           stop_loss=stop_loss)
+
+    broker = SilentTargetRefuser()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+    _drop_attached_target(broker)
+    broker.bid, broker.ask = 3909.5, 3909.7   # past the first target
+
+    outcome = engine.manage_trade(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+
+    assert outcome.get("stopped") is True
+    assert ManagedTrade.from_row(ledger.get_trade(trade_id)).state == STATE_REVIEW
+
+
+def test_a_trade_in_review_with_a_live_position_still_occupies_the_allowance(tmp_path):
+    """A review trade holding a position must count against the position limit.
+
+    Excluding it let a limit of one be exceeded while a trade was waiting on a
+    human: two live positions at the broker, two orders placed.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    first = evaluated(mid=100)
+    engine.execute(first, envelope(mid=100))
+    first_id = trade_id_for(first.event_key)
+    engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(first_id)))
+
+    # Sent to review, position still open at the broker.
+    row = ledger.get_trade(first_id)
+    row["state"] = STATE_REVIEW
+    row["management_stopped"] = True
+    ledger.update_trade(row)
+
+    second_text = "XAUUSD BUY NOW 3915\nSl : 3905\nTp : 3920"
+    second = evaluated(second_text, mid=101)
+    outcome = engine.execute(second, envelope(second_text, mid=101))
+
+    assert outcome.get("executed") is False
+    assert outcome.get("guard") is True
+    assert len(broker.place_calls) == 1, \
+        "a second position was opened while one was waiting on a human"
+
+
+def test_an_accepted_order_that_never_fills_is_expired_by_the_deployed_loop(tmp_path):
+    """A stuck fill must not block the copier forever.
+
+    ``manage`` used to count the pending fill and ``continue``, so the
+    fill-window check - which lived only in ``manage_trade`` - was unreachable
+    for exactly the state it exists for. The trade stayed ``accepted`` and, being
+    in ``ACTIVE_STATES``, counted as an open position, blocking every later
+    signal under a limit of one.
+    """
+    broker = FakeBroker()
+    broker.withhold_fill = True          # accepted, but no position ever appears
+    engine, ledger, _ = engine_for(tmp_path, broker, fill_timeout_s=0.0)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    assert ManagedTrade.from_row(ledger.get_trade(trade_id)).state == STATE_ACCEPTED
+
+    summary = engine.manage()
+
+    assert summary["considered"] == 1
+    assert summary["stopped"] == 1, "the stuck fill was never expired"
+    assert ManagedTrade.from_row(ledger.get_trade(trade_id)).state == STATE_REVIEW
+    # And it no longer occupies the one-position allowance.
+    assert ledger.list_trades(states=ACTIVE_STATES) == []
 
 
 def test_the_earlier_ladder_still_partially_closes_through_the_engine(tmp_path):

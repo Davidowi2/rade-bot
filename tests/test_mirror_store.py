@@ -109,8 +109,13 @@ class FakePostgrest:
                 kind = params["kind"].split("eq.", 1)[1]
                 rows = [r for r in rows if r["kind"] == kind]
             if "status" in params:
-                want = params["status"].split("eq.", 1)[1]
-                rows = [r for r in rows if r.get("status") == want]
+                raw = params["status"]
+                if raw.startswith("in."):
+                    allowed = raw.replace("in.(", "").rstrip(")").split(",")
+                    rows = [r for r in rows if r.get("status") in allowed]
+                else:
+                    want = raw.split("eq.", 1)[1]
+                    rows = [r for r in rows if r.get("status") == want]
             return 200, [{"event_key": r["event_key"], "kind": r["kind"],
                           "status": r.get("status"), "attempts": r.get("attempts", 0),
                           "detail": r.get("detail")} for r in rows]
@@ -258,6 +263,29 @@ def test_the_sqlite_ledger_recent_returns_the_body_too(tmp_path):
     ledger.claim(envelope(body), accepted(body))
     rows = ledger.recent()
     assert rows and rows[0]["raw_text"] == body
+
+
+def test_a_pending_notification_slot_left_by_a_crash_is_retried(tmp_path):
+    """A crash between reserving the slot and recording the outcome.
+
+    ``begin_notification`` reserves the slot as pending before the send; a crash
+    before ``complete_notification`` leaves it pending. The retry pass used to
+    look only at ``failed``, so the alert was silently lost.
+    """
+    from rade.observer.notify import retry_failed_notifications
+
+    ledger = SQLiteIntentLedger(tmp_path / "pending.sqlite")
+    body = "XAUUSD BUY NOW 3915\nSl : 3905\nTp : 3920"
+    result = accepted(body)
+    ledger.claim(envelope(body), result)
+    ledger.begin_notification(result.event_key, "accepted")   # never completed
+    assert ledger.notification_status(result.event_key, "accepted") == "pending"
+
+    working = RecordingNotifier()
+    summary = retry_failed_notifications(ledger, working, attempts=2)
+
+    assert summary == {"considered": 1, "sent": 1, "failed": 0, "skipped": 0}
+    assert ledger.notification_status(result.event_key, "accepted") == "sent"
 
 
 def test_notification_slot_is_unique_in_the_store():
