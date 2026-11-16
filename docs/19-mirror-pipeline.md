@@ -47,9 +47,16 @@ always has `filled: false` and `order_state` of `pending_limit` or
   a redelivery, or two overlapping listeners cannot create a second intent.
 * **A changed body under the same revision is a conflict, not an update.** The
   stored row is kept and the new body is routed to review.
-* **An edit gets `revision + 1`** from the ledger and is never applied
-  automatically, because it may be a stop move or a partial close and the exit
-  policy is unresolved.
+* **An edit on top of a message already stored gets `revision + 1`** and is
+  never applied automatically, because it may be a stop move or a partial close
+  and the exit policy for an amendment is unresolved.
+* **A message first seen already edited is traded as it stands.** This channel
+  is run by a bot that amends its own posts within 0–3 seconds, and the copier
+  polls every fifteen, so the amended text is the only text there is. It is the
+  trader's final published instruction; the original was live for ~2 s. The
+  provenance is recorded on the signal (`first_seen_edited`,
+  `first_seen_edited_at`) so the trail does not silently look like an unedited
+  call. Changed 2026-11-16 on the lead's decision.
 * **The target ladder is normalised once, here.** The legacy replay engine never
   did this and produced a single −36.78 R leg on one setup; the normalisation is
   recorded as `ladder_normalised` on the signal.
@@ -105,7 +112,7 @@ TPs 3910/3905/3900 — not a fixture written to match the parser.
 | duplicate delivery | duplicate | duplicate |
 | restart replay (new ledger, same file) | duplicate | duplicate |
 | same revision, changed body | conflict | conflict |
-| edited signal | manual_review | manual_review |
+| edited signal, first sighting | paper_intent | paper_intent |
 | malformed call | ignored | ignored |
 | recap post | ignored | ignored |
 | news post | ignored | ignored |

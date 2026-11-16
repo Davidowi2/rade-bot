@@ -117,38 +117,48 @@ def _edited(*, posted_ago=timedelta(0), edit_after=timedelta(minutes=1)):
         edited_at=NOW - posted_ago + edit_after)
 
 
-def test_an_edit_seen_for_the_first_time_is_not_copied():
+def test_an_edit_seen_for_the_first_time_is_traded_as_it_stands():
+    """The channel's bot amends its own posts within seconds.
+
+    The copier polls every fifteen, so the text it can read is always the
+    amended text. That is the trader's final published instruction - the
+    original was live for ~2s - so it is traded, and the provenance is recorded.
+    """
     result = evaluate_message(
         _edited(), instrument=INSTRUMENT, risk=RISK,
         quote=MarketQuote(3915, 3915, NOW),
     )
-    assert result.status == "manual_review"
-    assert result.order_intent is None
-    assert "first seen in its edited form" in result.reason
-    assert "original call is unknown" in result.reason
+    assert result.status == "paper_intent"
+    assert result.order_intent is not None
+    assert result.signal["first_seen_edited"] is True
+    assert result.signal["first_seen_edited_at"]
 
 
-def test_a_first_sighting_edit_is_refused_as_an_edit_not_as_stale():
-    """The edit is the stronger fact: a fresher copy would still be an edit."""
+def test_a_first_sighting_edit_is_still_judged_on_its_age():
+    """Relaxing the edit rule must not relax the age limit.
+
+    The signal is three hours old, so it is stale - for the age reason, not the
+    edit reason.
+    """
     result = evaluate_message(
         _edited(posted_ago=timedelta(hours=3), edit_after=timedelta(minutes=2)),
         instrument=INSTRUMENT, risk=RISK,
         quote=MarketQuote(3915, 3915, NOW),
     )
-    assert result.status == "manual_review"
-    assert "edited" in result.reason
+    assert result.status == "stale"
+    assert "stale" in result.reason
     assert result.signal is not None
 
 
-def test_a_first_sighting_edit_is_recorded_without_an_intent(tmp_path):
+def test_a_first_sighting_edit_produces_an_intent(tmp_path):
     ledger = SQLiteIntentLedger(tmp_path / "observer.sqlite")
     result = process_once(
         _edited(), ledger=ledger, instrument=INSTRUMENT, risk=RISK,
         quote=MarketQuote(3915, 3915, NOW),
     )
-    assert result.status == "manual_review"
-    assert result.order_intent is None
-    assert ledger.list_trades() == []
+    assert result.status == "paper_intent"
+    assert result.order_intent is not None
+    assert ledger.counts().get("paper_intent") == 1
 
 
 def test_the_adapter_carries_the_edit_timestamp():
@@ -164,10 +174,16 @@ def test_the_adapter_carries_the_edit_timestamp():
 
     envelope = envelope_from_telegram(_Msg(), channel="@source")
     assert envelope.edited_at == NOW + timedelta(seconds=30)
-    assert evaluate_message(
-        envelope, instrument=INSTRUMENT, risk=RISK,
-        quote=MarketQuote(3915, 3915, NOW),
-    ).status == "manual_review"
+
+    # And a message first seen in that state is traded as it stands. Built
+    # directly because the adapter stamps received_at with the real clock, which
+    # would make the fixed-date fixture genuinely stale.
+    fresh = MessageEnvelope("@source", 7, 0, NOW, NOW, VALID,
+                            edited_at=NOW + timedelta(seconds=30))
+    result = evaluate_message(fresh, instrument=INSTRUMENT, risk=RISK,
+                              quote=MarketQuote(3915, 3915, NOW))
+    assert result.status == "paper_intent"
+    assert result.signal["first_seen_edited"] is True
 
 
 def test_ledger_deduplicates_exact_message_revision(tmp_path):

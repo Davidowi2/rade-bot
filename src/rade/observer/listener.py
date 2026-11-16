@@ -270,7 +270,13 @@ class MirrorListener:
             return {"status": "unchanged", "message_id": mid,
                     "reason": "an edit event arrived with identical text"}
         stored = self.ledger.revision_for(self.channel, mid)
-        return self.process_message(message, revision=stored + 1,
+        # An edit of a message this pipeline never stored is a first sighting,
+        # not an amendment: the amended text is all there is, and the channel
+        # edits within seconds of posting. Only a revision on top of a message
+        # we already hold is an amendment to an intent we may be managing.
+        never_stored = self.ledger.stored_text_hash(self.channel, mid) is None
+        revision = 0 if never_stored else stored + 1
+        return self.process_message(message, revision=revision,
                                     source="telegram_edit")
 
 

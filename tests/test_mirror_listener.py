@@ -198,11 +198,18 @@ def test_a_second_edit_gets_revision_two(tmp_path):
     assert listener.ledger.revision_for("@source", 100) == 2
 
 
-def test_edit_of_a_message_never_seen_is_revision_one(tmp_path):
+def test_edit_of_a_message_never_seen_is_a_first_sighting(tmp_path):
+    """An edit event for a message never stored is not an amendment.
+
+    The amended text is all there is - the channel edits within seconds of
+    posting - so it is traded at revision 0 rather than sent to a human.
+    """
     listener = make_listener(tmp_path, quote=quote_now())
-    out = asyncio.run(listener.on_edit(SimpleNamespace(message=msg(mid=555))))
-    assert out["status"] == "manual_review"
-    assert listener.ledger.revision_for("@source", 555) == 1
+    out = asyncio.run(listener.on_edit(SimpleNamespace(message=msg(
+        mid=555, edited=NOW + timedelta(seconds=2)))))
+    assert out["status"] == "paper_intent"
+    assert out["signal"]["first_seen_edited"] is True
+    assert listener.ledger.revision_for("@source", 555) == 0
 
 
 def test_an_edit_that_changed_nothing_is_not_stored_as_a_new_revision(tmp_path):

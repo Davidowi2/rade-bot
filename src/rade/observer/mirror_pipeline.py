@@ -506,34 +506,31 @@ def evaluate_message(
         return _result(key, STATUS_MANUAL_REVIEW,
                        "one or more targets are on the wrong side of entry", signal=parsed)
 
-    # An edit is never applied automatically: it may be a stop move, a partial
-    # close instruction, or a correction, and the exit policy is unresolved.
+    # An edit is expected on this channel. It is run by a bot that amends its own
+    # posts within a couple of seconds, and this copier polls every fifteen: the
+    # text it can read is always the amended text. The amended text is the
+    # trader's final published instruction - the original was live for ~2s, too
+    # short for anyone to act on - so a message first seen already edited is
+    # traded as it stands.
     #
-    # ``edited_at`` is checked as well as ``revision`` because the two are not
-    # the same event. A live edit event arrives with revision + 1, but a message
-    # edited *before* the pipeline first saw it - after a restart, or while a
-    # catch-up was still behind - arrives with revision 0 and an edit timestamp.
-    # Trusting revision alone would copy the edited body as if it were the
-    # original call, which is the one thing an edit must never cause. This is
-    # checked before the age check: an edit is refused on principle, and saying
-    # only "stale" would suggest that a fresher copy of it would be acceptable.
-    if message.revision > 0 or message.edited_at is not None:
+    # What is still refused is a *later* revision: a message this pipeline has
+    # already stored, and may already hold a position for. Amending an intent
+    # that is live is a different question, and it goes to a human.
+    #
+    # The provenance is recorded on the signal either way, so the evidence trail
+    # says the original wording was never seen rather than silently looking like
+    # an unedited call.
+    if message.edited_at is not None:
+        parsed["first_seen_edited"] = True
+        parsed["first_seen_edited_at"] = as_utc(message.edited_at).isoformat()
+
+    if message.revision > 0:
         changed = parsed["entry_price"] != entry or parsed["stop_loss"] != stop
-        if message.revision > 0:
-            reason = ("edited signal; never amend an existing intent automatically"
-                      + (" (entry or stop changed)" if changed else ""))
-            note = (f"Edited signal {message.message_id} rev {message.revision}: "
-                    "review before any action.")
-        else:
-            # First sighting is already an edit: the original wording was never
-            # stored, so there is nothing to compare the current text against.
-            reason = (
-                "this message was edited after it was posted and was first seen "
-                f"in its edited form (posted {as_utc(message.posted_at).isoformat()}, "
-                f"edited {as_utc(message.edited_at).isoformat()}); the original "
-                "call is unknown, so it is not copied")
-            note = (f"Edited signal {message.message_id} seen for the first time at "
-                    f"rev 0 with an edit timestamp: review before any action.")
+        reason = ("edited signal; an amendment to an intent already recorded is "
+                  "never applied automatically"
+                  + (" (entry or stop changed)" if changed else ""))
+        note = (f"Edited signal {message.message_id} rev {message.revision}: "
+                "review before any action.")
         return _result(key, STATUS_MANUAL_REVIEW, reason, signal=parsed, note=note)
 
     # Age is checked before anything is sized or priced. A signal that is too
@@ -693,6 +690,12 @@ def evaluate_message(
         "message_id": message.message_id,
         "revision": message.revision,
     }
+    # Provenance, when the amended text is all this pipeline ever saw. It is
+    # recorded on the signal rather than in the refusal reason because the
+    # message is traded: the trail has to say the original was never seen.
+    if parsed.get("first_seen_edited"):
+        signal["first_seen_edited"] = True
+        signal["first_seen_edited_at"] = parsed.get("first_seen_edited_at")
     intent = {
         "mode": "paper_only",
         "broker_write": False,
