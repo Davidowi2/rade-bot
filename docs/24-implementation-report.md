@@ -279,8 +279,9 @@ and still refuses every host but `demo.tradelocker.com`.
   references to the platform in the repository. Needed: MT4/MT5/cTrader/other,
   whether an API exists, gold contract size and lot step, account currency, and
   the firm's daily-loss and maximum-lot rules.
-* **No quote provider.** `MIRROR_QUOTE_PROVIDER=none`, so every market signal is
-  blocked before it reaches sizing.
+* ~~**No quote provider.** `MIRROR_QUOTE_PROVIDER=none`, so every market signal
+  is blocked before it reaches sizing.~~ **Resolved 2026-11-15** — the provider
+  is set; see `docs/28`.
 * **Live push is still unproven.** All measured deliveries came from the 15-second
   poll.
 

@@ -244,10 +244,11 @@ What runs: the real channel, a working quote provider, `MIRROR_EXECUTE=0`.
 Every market signal produces a row with the quote it saw, the size it computed,
 the stop and targets, and either an intent or a named refusal. No order is sent.
 
-**Blocking prerequisite (verified gap):** with `MIRROR_QUOTE_PROVIDER=none`
-every market signal is blocked at intake for want of a quote, so a shadow run
-today would produce refusals rather than intents. A demo TradeLocker login, or a
-recorded-quote replay, is required first.
+**Quote provider — resolved 2026-11-15.** `MIRROR_QUOTE_PROVIDER=tradelocker`
+reads the demo feed through the gateway. Until it was set, every market signal
+was blocked at intake for want of a quote, so a shadow run produced refusals
+rather than intents; that was the second of the two settings that blocked every
+signal on 2026-11-15 (see `docs/28`).
 
 #### What a shadow run can and cannot establish
 

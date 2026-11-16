@@ -355,7 +355,7 @@ is a risk decision that follows from S2.
 | **M11** | Destination adapter | none exists | **still open** — see §9 | — |
 | **M12** | Destination guard | `assert_demo_environment` refuses any non-demo host | **unchanged and must stay** — the destination adapter needs its own guard | `gateway.py` |
 | **M13** | Duplicate suppression | 900 s text window | **unchanged** — still to be reconciled with the firm's 10-minute same-idea rule | `render.yaml` |
-| **M14** | Spread/slippage | 5 price units | **unchanged** — labelled unverified, see S3 | `render.yaml` |
+| **M14** | Spread/slippage | 5 price units | **closed 2026-11-15** — set to spread 1.0 / slippage 2.0 from the measured distribution, and made the code defaults so an unset variable cannot restore the wide value | `render.yaml`, `guards.py` |
 | **M15** | S1 cond. 2 — non-finite numbers | a NaN contract size passed the ceiling check | **closed** — finiteness checked before arithmetic, refusal names the field | `sizing.py` |
 | **M16** | S1b — engine-side recheck | the engine trusted `size_lots` | **closed** — lot, exact-size and ceiling checks before submission | `engine.py` (`_verify_order_size`) |
 | **M17** | Config loaders | `inf` passed `value > 0` and was accepted | **closed** — finite-and-positive required for the lot and the ceiling | `service.py` |
