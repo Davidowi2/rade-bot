@@ -53,6 +53,36 @@ and the poll-delay slippage. Measured on the destination feed on 2026-11-14:
 So a $25 ceiling keeps stop + costs inside roughly $30, and $30 would let the
 true risk reach ~$36. $25 is the honest number.
 
+### Re-measured on 2026-11-16 with the market open
+
+The earlier cost figures came from a closed market. Re-measured against the
+live destination feed:
+
+| Quantity | p50 | p90 | p95 | p99 |
+|---|---|---|---|---|
+| Spread (ask−bid) | 0.070 | 0.470 | 0.490 | 0.750 |
+| **Measured 15 s move** | **0.635** | **1.385** | **1.870** | **2.540** |
+
+The 15-second figure is measured by sampling the mid price every two seconds,
+not inferred from the 1-minute range (which is a high−low range and overstates
+the net move). 47 samples.
+
+What the deployed guards refuse:
+
+| Guard | Refused |
+|---|---|
+| `MIRROR_MAX_SPREAD=1.0` | spread p99 is 0.75, so it essentially never binds |
+| `MIRROR_MAX_SLIPPAGE=2.0` | **4.3%** of 15-second moves (2 of 47) |
+
+So the slippage guard costs about one signal in twenty-four. A guard of 3.0
+would have refused none in this sample; 1.0 would have refused 30%. **2.0 was
+left as deployed** — it is a judgement call between taking a stale price and
+skipping a call, not a measured optimum.
+
+The sample also caught a **crossed book** (spread −0.67). That is why the quote
+is validated as data before any guard compares against it: a negative spread
+passes every "wider than" inequality.
+
 ### The binding constraint
 
 Total drawdown room is **$162.90** at the current peak: the limit is **3.35% of
