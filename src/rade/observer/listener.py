@@ -36,6 +36,7 @@ from rade.observer.mirror_pipeline import (
     envelope_from_telegram,
     parse_message_signal,
     process_once,
+    text_hash,
 )
 from rade.observer.notify import (
     DEFAULT_ATTEMPTS,
@@ -232,9 +233,24 @@ class MirrorListener:
         return self.process_message(event.message, source="telegram_live")
 
     async def on_edit(self, event: Any) -> dict:
+        """Handle an edit event, unless the text did not actually change.
+
+        Telegram emits an edit for a message whose text is identical - a link
+        preview settling, a caption refresh. Storing that as revision + 1 has
+        two costs: the message is counted twice, and an edit is never applied
+        automatically, so a perfectly good signal would be sent to manual
+        review for no reason. An edit that changed the text is still stored as
+        a new revision, which is the case the rule exists for.
+        """
         message = event.message
-        stored = self.ledger.revision_for(self.channel, int(message.id))
-        return self.process_message(message, revision=stored + 1, source="telegram_edit")
+        mid = int(message.id)
+        text = getattr(message, "message", None) or getattr(message, "text", None) or ""
+        if self.ledger.stored_text_hash(self.channel, mid) == text_hash(text):
+            return {"status": "unchanged", "message_id": mid,
+                    "reason": "an edit event arrived with identical text"}
+        stored = self.ledger.revision_for(self.channel, mid)
+        return self.process_message(message, revision=stored + 1,
+                                    source="telegram_edit")
 
 
 @dataclass

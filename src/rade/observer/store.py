@@ -155,6 +155,21 @@ class SupabaseLedger:
             return int(body[0].get("revision") or 0)
         return 0
 
+    def stored_text_hash(self, channel: str, message_id: int) -> str | None:
+        _, body = self.transport.request(
+            "GET", TABLE,
+            params={
+                "channel": f"eq.{channel}",
+                "message_id": f"eq.{message_id}",
+                "select": "text_sha256",
+                "order": "revision.desc",
+                "limit": "1",
+            },
+        )
+        if isinstance(body, list) and body:
+            return body[0].get("text_sha256")
+        return None
+
     def last_message_id(self) -> int:
         """Highest stored message id, so a restart with an empty disk still resumes."""
         _, body = self.transport.request(

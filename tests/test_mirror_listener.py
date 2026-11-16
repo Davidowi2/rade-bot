@@ -205,6 +205,22 @@ def test_edit_of_a_message_never_seen_is_revision_one(tmp_path):
     assert listener.ledger.revision_for("@source", 555) == 1
 
 
+def test_an_edit_that_changed_nothing_is_not_stored_as_a_new_revision(tmp_path):
+    """Telegram emits edit events for messages whose text is identical.
+
+    Storing one as revision + 1 counted the message twice and sent a good
+    signal to manual review, because an edit is never applied automatically.
+    """
+    listener = make_listener(tmp_path, quote=quote_now())
+    listener.process_message(msg())
+    before = listener.ledger.counts()
+    out = asyncio.run(listener.on_edit(SimpleNamespace(message=msg(
+        text=SELL, edited=NOW + timedelta(seconds=2)))))
+    assert out["status"] == "unchanged"
+    assert listener.ledger.revision_for("@source", 100) == 0
+    assert listener.ledger.counts() == before
+
+
 # --------------------------------------------------------------------------
 # reconnect / gap fill
 # --------------------------------------------------------------------------

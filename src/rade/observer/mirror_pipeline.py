@@ -746,6 +746,15 @@ class Ledger(Protocol):
         """Highest revision already stored for a message (0 when unknown)."""
         ...
 
+    def stored_text_hash(self, channel: str, message_id: int) -> str | None:
+        """Hash of the text already stored for a message, if it was ever stored.
+
+        An edit event can arrive for a message whose text has not changed. The
+        edit handler compares against this so a no-op edit is not stored as a
+        new revision and does not mark the message as edited.
+        """
+        ...
+
     def counts(self) -> dict[str, int]:
         ...
 
@@ -954,6 +963,15 @@ class SQLiteIntentLedger:
                 (channel, message_id),
             ).fetchone()
         return int(row[0]) if row and row[0] is not None else 0
+
+    def stored_text_hash(self, channel: str, message_id: int) -> str | None:
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT text_sha256 FROM mirror_events WHERE channel=? AND message_id=?"
+                " ORDER BY revision DESC LIMIT 1",
+                (channel, message_id),
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
     def last_message_id(self) -> int:
         """Highest message id ever stored. The restart cursor, from the store."""

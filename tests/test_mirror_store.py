@@ -84,6 +84,14 @@ class FakePostgrest:
                 revs = [r["revision"] for r in self.events.values()
                         if r["channel"] == channel and r["message_id"] == mid]
                 return 200, [{"revision": max(revs)}] if revs else []
+            if params.get("select") == "text_sha256":
+                channel = params["channel"].split("eq.", 1)[1]
+                mid = int(params["message_id"].split("eq.", 1)[1])
+                rows = sorted(
+                    (r for r in self.events.values()
+                     if r["channel"] == channel and r["message_id"] == mid),
+                    key=lambda r: r["revision"], reverse=True)
+                return 200, [{"text_sha256": rows[0]["text_sha256"]}] if rows else []
             if params.get("select") == "status":
                 return 200, [{"status": r["status"]} for r in self.events.values()]
             rows = sorted(self.events.values(), key=lambda r: r["received_at"], reverse=True)
@@ -207,6 +215,20 @@ def test_supabase_revision_and_counts():
     assert ledger.revision_for("@source", 100) == 1
     # revision 1 is an edit, so it is stored for review rather than sized
     assert ledger.counts() == {"paper_intent": 1, "manual_review": 1}
+
+
+def test_supabase_stored_text_hash_reports_the_latest_revision():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    assert ledger.stored_text_hash("@source", 100) is None
+    ledger.claim(envelope(), accepted())
+    first = fake.events[[k for k, v in fake.events.items()
+                         if v["message_id"] == 100][0]]["text_sha256"]
+    assert ledger.stored_text_hash("@source", 100) == first
+    ledger.claim(envelope(revision=1), accepted(revision=1))
+    newest = [v for v in fake.events.values() if v["message_id"] == 100]
+    newest = max(newest, key=lambda r: r["revision"])
+    assert ledger.stored_text_hash("@source", 100) == newest["text_sha256"]
 
 
 def test_supabase_recent_filters_by_status():

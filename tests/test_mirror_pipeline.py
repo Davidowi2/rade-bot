@@ -9,6 +9,7 @@ from rade.observer.mirror_pipeline import (
     SQLiteIntentLedger,
     evaluate_message,
     process_once,
+    text_hash,
 )
 
 
@@ -390,6 +391,19 @@ def test_revision_for_reports_the_highest_stored_revision(tmp_path):
     process_once(message(VALID, revision=1), ledger=ledger, instrument=INSTRUMENT,
                  risk=RISK, quote=MarketQuote(3915, 3915, NOW))
     assert ledger.revision_for("@source", 100) == 1
+
+
+def test_stored_text_hash_reports_the_latest_revision(tmp_path):
+    """The edit handler compares against this, so it must be the newest text."""
+    ledger = SQLiteIntentLedger(tmp_path / "observer.sqlite")
+    assert ledger.stored_text_hash("@source", 100) is None
+    process_once(message(), ledger=ledger, instrument=INSTRUMENT, risk=RISK,
+                 quote=MarketQuote(3915, 3915, NOW))
+    assert ledger.stored_text_hash("@source", 100) == text_hash(VALID)
+    edited = VALID.replace("Tp : 3900", "Tp : 3895")
+    process_once(message(edited, revision=1), ledger=ledger, instrument=INSTRUMENT,
+                 risk=RISK, quote=MarketQuote(3915, 3915, NOW))
+    assert ledger.stored_text_hash("@source", 100) == text_hash(edited)
 
 
 def test_counts_group_by_disposition(tmp_path):
