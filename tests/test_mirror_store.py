@@ -242,6 +242,24 @@ def test_supabase_recent_filters_by_status():
     assert len(everything) == 2
 
 
+def test_recent_returns_the_signal_body_a_reviewer_needs():
+    """The review queue is read by a human; a reason with no body is useless."""
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    body = "XAUUSD BUY NOW 3915\nSl : 3905\nTp : 3920"
+    ledger.claim(envelope(body), accepted(body))
+    rows = ledger.recent()
+    assert rows and rows[0]["raw_text"] == body
+
+
+def test_the_sqlite_ledger_recent_returns_the_body_too(tmp_path):
+    ledger = SQLiteIntentLedger(tmp_path / "recent.sqlite")
+    body = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910"
+    ledger.claim(envelope(body), accepted(body))
+    rows = ledger.recent()
+    assert rows and rows[0]["raw_text"] == body
+
+
 def test_notification_slot_is_unique_in_the_store():
     fake = FakePostgrest()
     ledger = SupabaseLedger(fake)

@@ -156,6 +156,23 @@ test("the guards panel shows the risk room the account has left", () => {
     "a risk room card appeared with no room data");
 });
 
+test("the event tables show the signal body, not just the reason", () => {
+  // The review queue is read by a human. A reason with no body cannot be
+  // judged, so the text has to reach the page.
+  const { api, elements } = load();
+  api.renderEvents([{ received_at: STATUS.time, message_id: 9, revision: 0,
+    status: "manual_review", reason: "edited before first sighting",
+    raw_text: "XAUUSD BUY NOW 3915\nSl : 3905\nTp : 3920" }], "review");
+  assert.ok(elements.review.innerHTML.includes("XAUUSD BUY NOW 3915"),
+    "the signal body did not reach the table");
+  assert.ok(elements.review.innerHTML.includes("Signal text"));
+
+  api.renderEvents([{ received_at: STATUS.time, message_id: 9, revision: 0,
+    status: "ignored", reason: "not a signal" }], "review");
+  assert.ok(elements.review.innerHTML.includes("no body stored"),
+    "an event with no body should say so, not render an empty cell");
+});
+
 test("the helpers escape and classify", () => {
   const { api } = load();
   assert.ok(api.esc("<script>").includes("&lt;"), "esc must escape HTML");

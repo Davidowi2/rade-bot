@@ -192,8 +192,10 @@ class SupabaseLedger:
 
     def recent(self, *, limit: int = 50, statuses: list[str] | None = None) -> list[dict]:
         params: dict[str, Any] = {
+            # raw_text is included because the review queue is read by a human:
+            # an event with a reason but no body cannot be judged.
             "select": "event_key,channel,message_id,revision,posted_at,received_at,"
-                      "status,reason,signal_json,intent_json,source",
+                      "status,reason,raw_text,signal_json,intent_json,source",
             "order": "received_at.desc",
             "limit": str(limit),
         }

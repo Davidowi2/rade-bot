@@ -1305,7 +1305,8 @@ class SQLiteIntentLedger:
     def recent(self, *, limit: int = 50, statuses: list[str] | None = None) -> list[dict]:
         """Newest events first, shaped like the Supabase adapter's rows."""
         sql = ("SELECT event_key, channel, message_id, revision, posted_at, received_at, "
-               "status, reason, signal_json, intent_json, source FROM mirror_events")
+               "status, reason, raw_text, signal_json, intent_json, source "
+               "FROM mirror_events")
         params: list[Any] = []
         if statuses:
             sql += f" WHERE status IN ({','.join('?' * len(statuses))})"
@@ -1315,7 +1316,7 @@ class SQLiteIntentLedger:
         with self._connect() as con:
             rows = con.execute(sql, params).fetchall()
         keys = ("event_key", "channel", "message_id", "revision", "posted_at", "received_at",
-                "status", "reason", "signal_json", "intent_json", "source")
+                "status", "reason", "raw_text", "signal_json", "intent_json", "source")
         out = []
         for row in rows:
             item = dict(zip(keys, row))

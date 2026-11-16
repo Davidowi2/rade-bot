@@ -851,6 +851,11 @@ function renderEvents(rows, target) {
     { label: "Message", num: true, render: r => `${esc(r.message_id)} rev ${esc(r.revision)}` },
     { label: "Status", render: r => badge(r.status) },
     { label: "Reason", render: r => `<span class="sub">${esc(r.reason)}</span>` },
+    // The body is the point of the review queue: a reason with no text cannot
+    // be judged by a human.
+    { label: "Signal text", render: r => r.raw_text
+      ? `<span class="sub">${esc(String(r.raw_text).slice(0, 160))}</span>`
+      : '<span class="tiny">no body stored</span>' },
   ]);
 }
 
