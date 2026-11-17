@@ -750,7 +750,11 @@ def evaluate_message(
         signal["first_seen_edited"] = True
         signal["first_seen_edited_at"] = parsed.get("first_seen_edited_at")
     intent = {
-        "mode": "paper_only",
+        # This record describes the pipeline's own stage: it never writes to a
+        # broker. Whether an order follows is decided by the execution engine
+        # and recorded on the trade row. The value used to be "paper_only",
+        # which reads as "this bot does not trade" even on a live account.
+        "mode": "signal_only",
         "broker_write": False,
         # A limit call is not a fill, and a market call is not a fill either:
         # nothing is executed in this phase.

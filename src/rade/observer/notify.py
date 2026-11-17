@@ -115,7 +115,33 @@ class RecordingNotifier:
         return self.ok, "recorded"
 
 
-def build_notification(result: PipelineResult) -> str | None:
+def _execution_lines(execution: dict | None) -> list[str]:
+    """What actually happened to this signal.
+
+    This used to be the constant sentence "paper only; no broker order was
+    sent", printed whether or not an order had been placed. On a live account
+    that is the one line the operator has to be able to trust, so it is now
+    derived from the execution result: an engine that placed an order says so,
+    one that refused says why, and a process with no engine says it is paper.
+    """
+    if execution is None:
+        return ["paper mode: no execution engine in this process, "
+                "no broker order was sent"]
+    if execution.get("executed"):
+        detail = ", ".join(
+            f"{label} {value}" for label, value in (
+                ("trade", execution.get("trade_id")),
+                ("order", execution.get("order_id")),
+            ) if value
+        )
+        return [f"ORDER PLACED on the destination account"
+                + (f" ({detail})" if detail else " (acknowledged)")]
+    reason = execution.get("reason") or execution.get("error") or "no reason given"
+    return [f"no broker order was sent: {reason}"]
+
+
+def build_notification(result: PipelineResult,
+                       execution: dict | None = None) -> str | None:
     """Render one message for a disposition, or ``None`` when it is silent."""
     kind = NOTIFY_STATUSES.get(result.status)
     if kind is None:
@@ -143,7 +169,7 @@ def build_notification(result: PipelineResult) -> str | None:
             f"{intent.get('size_lots')} lot, state {intent.get('order_state')}, "
             f"risk budget ${intent.get('risk_budget')}, filled={intent.get('filled')}"
         )
-    lines.append("paper only; no broker order was sent")
+    lines.extend(_execution_lines(execution))
     return "\n".join(lines)
 
 
@@ -251,7 +277,8 @@ def notify_result(result: PipelineResult, notifier: Notifier, *,
                   ledger=None, source: str = "",
                   attempts: int = DEFAULT_ATTEMPTS,
                   backoff_s: float = RETRY_BASE_DELAY_S,
-                  sleep: Callable[[float], None] = time.sleep) -> dict:
+                  sleep: Callable[[float], None] = time.sleep,
+                  execution: dict | None = None) -> dict:
     """Send at most one notification per event, if the disposition warrants it.
 
     The slot is reserved as *pending* before the send and completed with the
@@ -259,7 +286,7 @@ def notify_result(result: PipelineResult, notifier: Notifier, *,
     stays eligible for a retry; it is never recorded as a success.
     """
     kind = NOTIFY_STATUSES.get(result.status)
-    text = build_notification(result)
+    text = build_notification(result, execution)
     if kind is None or text is None:
         return {"notified": False, "kind": None, "reason": "disposition is silent"}
 

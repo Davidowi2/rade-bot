@@ -200,11 +200,6 @@ class MirrorListener:
             risk=self.risk, quote=quote, quote_error=quote_error,
         )
 
-        notification = {"notified": False, "kind": None, "reason": "notifier not configured"}
-        if self.notifier is not None:
-            notification = notify_result(result, self.notifier, ledger=self.ledger,
-                                         source=source, attempts=self.notify_attempts)
-
         # Execution happens only for a newly stored event. A redelivery is a
         # duplicate and has already been acted on; re-running it would be the
         # one path that could double a position.
@@ -218,6 +213,15 @@ class MirrorListener:
                 execution = {"executed": False,
                              "error": f"{type(exc).__name__}: {exc}"}
                 self.log(f"execution error for id={mid}: {execution['error']}")
+
+        # The notification goes out *after* execution, because it reports what
+        # happened. It used to be sent before, which is why every message ended
+        # with "no broker order was sent" whether or not one had been placed.
+        notification = {"notified": False, "kind": None, "reason": "notifier not configured"}
+        if self.notifier is not None:
+            notification = notify_result(result, self.notifier, ledger=self.ledger,
+                                         source=source, attempts=self.notify_attempts,
+                                         execution=execution)
 
         payload = {
             **result.to_dict(),
