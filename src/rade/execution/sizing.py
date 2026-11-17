@@ -1,19 +1,25 @@
-"""The fixed-lot sizing rule.
+"""Sizing rules: a ceiling on size, and the risk budget that fills it.
 
-One rule, stated once: the configured lot is either valid for this signal or the
-signal is refused. There is no third outcome.
+The configured lot is a **maximum**, not a target. A signal is copied at the
+largest size up to that maximum whose stop risk stays inside the per-trade USD
+ceiling - see :func:`fit_lot_to_risk`.
 
-Every third outcome is a size nobody chose. Rounding to the nearest valid lot
-changes the risk without saying so; clamping to the broker's maximum makes the
-order smaller than the one that was decided; skipping quietly makes the operator
-believe a signal was considered when it was discarded. All three look like
-success in a log line, which is exactly why the rule forbids them.
+This replaced "exactly this lot or refuse", which was too strict in a way that
+cost real trades. The channel posts a 10-point stop; by the time the message is
+read the market has often moved, so the stop is 15 or 20 points from where the
+order would actually fill. At a fixed 0.02 lots that is $30-$40 of risk against
+a $30 ceiling, so the signal was refused even though 0.01 lots risks half of
+that and fits comfortably. The ceiling is the risk limit; the lot is only the
+largest size the operator wants.
 
-The rule also cannot be applied without a ceiling. A fixed lot is not a risk
-limit: ``0.03`` lots on a 10-unit stop and ``0.03`` lots on a 30-unit stop are
-the same order and three times the money. The ceiling is what turns the lot into
-a limit, so a missing ceiling is a configuration error and blocks the signal
-rather than falling back to another sizing mode.
+What is still forbidden, for the original reason:
+
+* rounding **up** to the nearest step, which would put the order back over the
+  ceiling - the one thing the ceiling exists to prevent;
+* growing past the configured maximum, so a very tight stop cannot turn a small
+  budget into a large position;
+* any silent substitution. Every size is either computed by this rule or the
+  signal is refused with the numbers that failed.
 """
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ import math
 from dataclasses import dataclass
 
 __all__ = ["LotSpec", "check_broker_lot", "check_fixed_lot",
-           "describe_fixed_lot", "stop_risk_usd"]
+           "describe_fixed_lot", "fit_lot_to_risk", "stop_risk_usd"]
 
 
 @dataclass(frozen=True)
@@ -170,25 +176,98 @@ def check_fixed_lot(*, lots: float, spec: LotSpec, stop_distance: float,
             f"the stop risk ${risk_usd:.2f} at {usable:g} lot exceeds the "
             f"${max_risk_usd:.2f} per-trade ceiling "
             f"(stop distance {stop_distance:g}, "
-            f"{spec.contract_units_per_lot:g} units per lot); the signal is "
-            "refused rather than resized")
+            f"{spec.contract_units_per_lot:g} units per lot); this size was "
+            "fitted to a different price and the market has moved since")
 
     return usable, ""
 
 
+def fit_lot_to_risk(*, cap_lots: float, spec: LotSpec, stop_distance: float,
+                    max_risk_usd: float | None) -> tuple[float | None, str]:
+    """The largest lot up to ``cap_lots`` whose stop risk stays inside the ceiling.
+
+    The fixed lot becomes a ceiling on size rather than an exact size. That is a
+    deliberate change of policy, and it exists because the old one refused
+    trades the budget could easily afford:
+
+        published entry 3870, stop 3880, market already 3860.62
+
+    At 0.02 lots that is $38.66 of stop risk against a $30 ceiling, so the order
+    was refused - even though 0.01 lots risks $19.33 and fits. Refusing was
+    never the point; sizing was.
+
+    Rounding is always DOWN, to the broker's step. Rounding up would put the
+    order back over the ceiling, which is the one thing this function exists to
+    prevent. ``cap_lots`` is applied after the arithmetic, so the size can never
+    exceed the configured maximum however tight the stop is - the tighter the
+    stop the larger the affordable size, and a 1-point stop would otherwise ask
+    for 0.3 lots on a $30 budget.
+
+    Returns ``(lots, "")`` or ``(None, reason)``. The reason names the numbers,
+    because "size too large" cannot be diagnosed from the ledger afterwards.
+    """
+    usable, reason = check_broker_lot(lots=cap_lots, spec=spec)
+    if usable is None:
+        return None, reason
+
+    if max_risk_usd is None:
+        return None, ("no per-trade USD risk ceiling is configured "
+                      "(MIRROR_MAX_TRADE_RISK_USD); without it there is no "
+                      "budget to size against, so the signal is refused")
+    if not math.isfinite(max_risk_usd) or max_risk_usd <= 0:
+        return None, (f"the per-trade USD risk ceiling {max_risk_usd!r} must be a "
+                      "positive number; no size can be accepted against it")
+
+    if not math.isfinite(stop_distance) or stop_distance <= 0:
+        return None, (f"the stop distance {stop_distance!r} is not usable, so no "
+                      "size can be computed for it")
+
+    risk_per_lot = stop_distance * spec.contract_units_per_lot
+    if not math.isfinite(risk_per_lot) or risk_per_lot <= 0:
+        return None, (f"the risk of one lot over a {stop_distance:g} stop is "
+                      f"{risk_per_lot!r}, so no size can be computed")
+
+    affordable = max_risk_usd / risk_per_lot
+    steps = math.floor(affordable / spec.lot_step + 1e-9)
+    lots = round(steps * spec.lot_step, 8)
+
+    if lots > usable:
+        # The ceiling is not the binding constraint here; the configured
+        # maximum is. Risk at the cap is necessarily below the ceiling.
+        lots = usable
+
+    if lots < spec.min_lot:
+        smallest_risk = stop_risk_usd(lots=spec.min_lot, spec=spec,
+                                      stop_distance=stop_distance)
+        return None, (
+            f"the smallest tradeable lot {spec.min_lot:g} would risk "
+            f"${smallest_risk:.2f} over a {stop_distance:.2f} stop, above the "
+            f"${max_risk_usd:.2f} per-trade ceiling; the stop is too wide to "
+            "copy inside the budget")
+
+    return lots, ""
+
+
 def describe_fixed_lot(*, lots: float | None, max_risk_usd: float | None,
-                       contract_units: float | None = None) -> dict:
-    """What the fixed-lot rule is configured to do, for the status page.
+                       contract_units: float | None = None,
+                       min_lot: float | None = None) -> dict:
+    """What the sizing rule is configured to do, for the status page.
 
     ``ready`` is false when the rule cannot accept any signal, and
     ``problem`` says why. A rule that is switched off must not read as a rule
     that is passing.
 
-    ``max_stop_distance`` is the stop width the ceiling can actually accommodate
-    at this lot and contract size. It is reported because the two settings that
-    produce it are configured independently: a lot and a ceiling that are each
-    plausible can together refuse every signal the channel posts, and neither
-    number alone says so.
+    Two stop widths are reported, because after the rule changed they are no
+    longer the same number:
+
+    * ``max_stop_distance`` - the widest stop that fits at the *configured*
+      lot. This is the size the operator chose, so it says what that choice
+      buys.
+    * ``widest_stop_distance`` - the widest stop the copier can take at all,
+      which is governed by the broker's **minimum** lot, not the configured
+      one. Since a wide stop is fitted down to 0.01, this is the number that
+      decides whether a signal is copied or refused, and reporting only the
+      first would understate the range by a factor of ``lots / min_lot``.
     """
     def with_extras(base: dict) -> dict:
         if (contract_units and lots and max_risk_usd
@@ -196,8 +275,16 @@ def describe_fixed_lot(*, lots: float | None, max_risk_usd: float | None,
                 and math.isfinite(lots) and lots > 0
                 and math.isfinite(max_risk_usd) and max_risk_usd > 0):
             base["max_stop_distance"] = max_risk_usd / (lots * contract_units)
+            if min_lot and math.isfinite(min_lot) and min_lot > 0:
+                # The floor is what admits a wide stop: the order is fitted
+                # down to it before it is refused.
+                base["widest_stop_distance"] = (
+                    max_risk_usd / (min_lot * contract_units))
+            else:
+                base["widest_stop_distance"] = None
         else:
             base["max_stop_distance"] = None
+            base["widest_stop_distance"] = None
         return base
 
     if lots is None:

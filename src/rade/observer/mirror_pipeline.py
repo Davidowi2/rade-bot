@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from rade.execution.sizing import LotSpec, check_fixed_lot
+from rade.execution.sizing import LotSpec, fit_lot_to_risk
 
 # ---------------------------------------------------------------------------
 # dispositions
@@ -833,6 +833,23 @@ def evaluate_message(
                     f"the market is already at or beyond the final target "
                     f"{final_target:g} (entry {effective_entry:g}); there is no "
                     "move left to copy", signal=parsed)
+        # The first target is a different question from the last one, and the
+        # gap between them is where a copied call goes wrong. The channel posts
+        # "SELL NOW 3870, TP 3863/3860/3855"; if the market is already through
+        # 3863 by the time the message is read, the move the signal existed for
+        # has happened. Entering now means risking the full stop to reach only
+        # what is left - the trader is already in profit, the copier is not.
+        # That is not a budget problem and resizing cannot fix it, so it is
+        # refused rather than shrunk.
+        if targets:
+            first_target = min(targets) if is_buy else max(targets)
+            if ((is_buy and effective_entry >= first_target)
+                    or (not is_buy and effective_entry <= first_target)):
+                return _result(
+                    key, STATUS_BLOCKED,
+                    f"the market has already reached the first target "
+                    f"{first_target:g} (entry {effective_entry:g}); the move this "
+                    "signal was for has already happened", signal=parsed)
         order_type = "market"
         order_price = None
         quote_block = {
@@ -846,22 +863,26 @@ def evaluate_message(
         order_type = "limit"
         order_price = entry
 
-    # FIX: Calculate risk from PUBLISHED entry, not live market quote.
-    # The trader published a specific entry/stop geometry, and risk should be
-    # measured from what was published. Using the live market quote creates
-    # asymmetric rejections (SELL orders get rejected when market drops, BUY
-    # orders when market rises), and the slippage guard already handles market
-    # movement. This makes risk calculation symmetric and consistent.
-    risk_per_lot = abs(entry - stop) * instrument.contract_units_per_lot
+    # Risk is measured from the price the order will actually get, not from the
+    # published entry. Those are not the same number: the channel writes "SELL
+    # 3870" and by the time the message is read the market is at 3860.62, so the
+    # stop is 19.3 points away rather than 10. Sizing from the published entry
+    # computed $20 of risk for an order that would actually have risked $38.66 -
+    # and the engine, which measures from the real price, then refused it. Two
+    # components, two numbers, one trade. This is the single number they share.
+    sizing_entry = effective_entry
+    stop_distance = abs(sizing_entry - stop)
+    risk_per_lot = stop_distance * instrument.contract_units_per_lot
     if risk_per_lot <= 0:
         return _result(key, STATUS_BLOCKED, "stop distance is zero", signal=parsed)
 
     if risk.fixed_lots is not None:
-        # The confirmed rule: this size, or no signal. Nothing below adjusts,
-        # rounds or skips - see rade.execution.sizing for why.
-        # Use PUBLISHED entry for stop distance calculation.
-        lots, refusal = check_fixed_lot(
-            lots=float(risk.fixed_lots),
+        # The configured lot is a ceiling on size, not the size itself. The
+        # largest lot that fits the ceiling is used, and the signal is refused
+        # only when even the broker's minimum lot would break it. Rounding is
+        # down, so the ceiling is never crossed.
+        lots, refusal = fit_lot_to_risk(
+            cap_lots=float(risk.fixed_lots),
             spec=LotSpec(
                 contract_units_per_lot=instrument.contract_units_per_lot,
                 lot_step=instrument.lot_step,
@@ -869,7 +890,7 @@ def evaluate_message(
                 max_lot=instrument.max_lot,
                 verified=bool(instrument.units_confirmed),
             ),
-            stop_distance=abs(entry - stop),
+            stop_distance=stop_distance,
             max_risk_usd=risk.max_trade_risk_usd,
         )
         if refusal:

@@ -299,3 +299,49 @@ def test_the_pipeline_can_be_the_first_module_imported():
     )
     assert result.returncode == 0, result.stderr
 
+
+
+def test_describe_reports_the_widest_stop_the_copier_can_actually_take():
+    """A wide stop is fitted down to the broker's minimum lot, not refused.
+
+    0.02 lots is the cap, so only 15 points fit at that size. But the order is
+    fitted down to 0.01 lots, which carries a 30-point stop inside the same $30.
+    Reporting only the first number would understate the range by half, and it
+    is the range that decides whether a signal is copied or refused.
+    """
+    described = describe_fixed_lot(lots=0.02, max_risk_usd=30.0,
+                                   contract_units=100.0, min_lot=0.01)
+
+    assert described["max_stop_distance"] == pytest.approx(15.0)
+    assert described["widest_stop_distance"] == pytest.approx(30.0)
+
+
+def test_the_widest_stop_is_absent_when_the_minimum_lot_is_unknown():
+    """Better an empty field than a number derived from a guessed lot floor."""
+    described = describe_fixed_lot(lots=0.02, max_risk_usd=30.0,
+                                   contract_units=100.0)
+
+    assert described["widest_stop_distance"] is None
+
+
+def test_describe_reports_the_widest_stop_the_copier_can_actually_take():
+    """A wide stop is fitted down to the broker's minimum lot, not refused.
+
+    0.02 lots is the cap, so only 15 points fit at that size. But the order is
+    fitted down to 0.01 lots, which carries a 30-point stop inside the same $30.
+    Reporting only the first number would understate the range by half, and it
+    is the range that decides whether a signal is copied or refused.
+    """
+    described = describe_fixed_lot(lots=0.02, max_risk_usd=30.0,
+                                   contract_units=100.0, min_lot=0.01)
+
+    assert described["max_stop_distance"] == pytest.approx(15.0)
+    assert described["widest_stop_distance"] == pytest.approx(30.0)
+
+
+def test_the_widest_stop_is_absent_when_the_minimum_lot_is_unknown():
+    """Better an empty field than a number derived from a guessed lot floor."""
+    described = describe_fixed_lot(lots=0.02, max_risk_usd=30.0,
+                                   contract_units=100.0)
+
+    assert described["widest_stop_distance"] is None

@@ -706,10 +706,13 @@ class ExecutionEngine:
 
         stop_distance = abs(float(reference) - float(trade.stop))
 
-        if abs(usable - self.fixed_lots) > 1e-9:
-            return (f"the order size {usable:g} is not the configured fixed "
-                    f"lot {self.fixed_lots:g}; a signal is copied at exactly "
-                    "the configured size or not at all")
+        if usable > self.fixed_lots + 1e-9:
+            # The configured lot is a ceiling on size, not the size. A size
+            # below it is the pipeline fitting the order to the risk budget; a
+            # size above it is a bug, and no tight stop may raise the ceiling.
+            return (f"the order size {usable:g} is larger than the configured "
+                    f"maximum {self.fixed_lots:g}; a tight stop does not raise "
+                    "the size ceiling")
         sized, reason = check_fixed_lot(
             lots=usable, spec=broker_spec, stop_distance=stop_distance,
             max_risk_usd=self.max_trade_risk_usd)

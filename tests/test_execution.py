@@ -983,11 +983,13 @@ def test_the_deployed_configuration_copies_the_channels_own_call(tmp_path):
     assert broker.place_calls[0]["take_profit"] == pytest.approx(3865.0)
 
 
-def test_the_earlier_lot_size_refuses_the_same_call(tmp_path):
-    """0.03 lots against the same $25 ceiling cannot take a 10-point stop.
+def test_the_earlier_lot_size_is_fitted_down_to_the_ceiling(tmp_path):
+    """0.03 lots against a $25 ceiling is now sized down, not refused.
 
-    This is the failure that made the copier look dead: the size was changed
-    without the ceiling, and every signal the channel posts was refused.
+    This used to block, and the block was documented as the reason "the copier
+    looked dead". Refusing was the wrong repair: $25 buys 0.02 lots over this
+    10.2-point stop, which is the size the deployed configuration uses anyway.
+    The lot is a ceiling on size, and the ceiling is the risk limit.
     """
     tight = RiskConfig(equity=4862.73, risk_fraction=0.005,
                        quote_max_age_seconds=2.0, fixed_lots=0.03,
@@ -997,8 +999,10 @@ def test_the_earlier_lot_size_refuses_the_same_call(tmp_path):
         envelope(text, mid=18845), instrument=INSTRUMENT, risk=tight,
         quote=MarketQuote(3876.8, 3877.0, NOW))
 
-    assert result.status == "blocked"
-    assert "ceiling" in result.reason or "risk" in result.reason
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == pytest.approx(0.02)
+    assert result.order_intent["estimated_stop_risk_before_slippage_and_fees"] \
+        == pytest.approx(20.4, abs=0.1)
 
 
 def test_a_trade_opened_but_never_submitted_is_submitted_after_a_restart(tmp_path):
@@ -1908,8 +1912,13 @@ def test_the_engine_sends_the_configured_lot_when_it_is_inside_the_ceiling(tmp_p
     assert broker.place_calls[0]["qty"] == pytest.approx(0.03)
 
 
-def test_the_engine_refuses_a_size_that_is_not_the_configured_lot(tmp_path):
-    """The pipeline sized 0.05; the engine is configured for 0.03 and refuses."""
+def test_the_engine_refuses_a_size_above_the_configured_maximum(tmp_path):
+    """The pipeline sized 0.05; the engine's ceiling is 0.03 and refuses.
+
+    A size *below* the configured lot is now normal - that is the pipeline
+    fitting the order to the risk budget. A size *above* it is still a bug, and
+    the engine is the last line that catches it.
+    """
     engine, ledger, broker = engine_for(tmp_path, fixed_lots=0.03,
                                         max_trade_risk_usd=60.0)
     result = evaluated_fixed(lots=0.05, ceiling=60.0)
@@ -1918,7 +1927,7 @@ def test_the_engine_refuses_a_size_that_is_not_the_configured_lot(tmp_path):
     assert outcome["executed"] is False
     assert outcome["state"] == STATE_BLOCKED
     assert broker.place_calls == [], "no order may be sent at the wrong size"
-    assert "not the configured fixed lot" in outcome["reason"]
+    assert "larger than the configured maximum" in outcome["reason"]
     trade = ManagedTrade.from_row(ledger.get_trade(trade_id_for(result.event_key)))
     assert trade.state == STATE_BLOCKED
 
@@ -2031,3 +2040,99 @@ def test_the_engine_refuses_a_non_finite_or_non_positive_ceiling(tmp_path, bad):
 def test_the_engine_refuses_a_size_that_is_not_a_number(tmp_path):
     with pytest.raises(ValueError, match="is not a number"):
         _build(tmp_path, fixed_lots="three")
+
+
+# ---------------------------------------------------------------------------
+# a fitted size is normal; only a size above the maximum is a bug
+# ---------------------------------------------------------------------------
+
+
+def test_the_engine_accepts_a_size_fitted_below_the_maximum(tmp_path):
+    """0.01 lots over a 16-point stop is $16 of a $30 budget.
+
+    The pipeline fitted the order down because 0.02 lots would have risked $32.
+    The engine must send the fitted size, not reject it for not being exactly
+    the configured lot.
+    """
+    text = "XAUUSD SELL NOW 3870\nSl : 3886\nTp : 3860\nTp : 3855"
+    result = evaluated_fixed(text, lots=0.02, ceiling=30.0,
+                             quote=(3870.0, 3870.2))
+    assert result.order_intent["size_lots"] == 0.01
+
+    broker = FakeBroker(bid=3870.0, ask=3870.2)
+    engine, _ledger, _ = engine_for(tmp_path, broker, fixed_lots=0.02,
+                                    max_trade_risk_usd=30.0)
+    outcome = engine.execute(result, envelope(text))
+
+    assert outcome["executed"] is True
+    assert broker.place_calls[0]["qty"] == pytest.approx(0.01)
+
+
+def test_the_engine_refuses_when_the_market_moved_after_the_size_was_fitted(tmp_path):
+    """The size fitted a 12-point stop; by submission the stop is 16 away.
+
+    0.02 lots then risks $32 against a $30 ceiling. The size was computed for a
+    price that no longer exists, so it is refused rather than silently shrunk -
+    the ledger must not claim a size that was never sent.
+    """
+    text = "XAUUSD SELL NOW 3870\nSl : 3882\nTp : 3860\nTp : 3855"
+    result = evaluated_fixed(text, lots=0.02, ceiling=30.0,
+                             quote=(3870.0, 3870.2))
+    assert result.order_intent["size_lots"] == 0.02
+
+    broker = FakeBroker(bid=3866.0, ask=3866.2)
+    engine, _ledger, _ = engine_for(tmp_path, broker, fixed_lots=0.02,
+                                    max_trade_risk_usd=30.0)
+    outcome = engine.execute(result, envelope(text))
+
+    assert outcome["executed"] is False
+    assert broker.place_calls == []
+    assert "moved since" in outcome["reason"]
+
+
+# ---------------------------------------------------------------------------
+# a fitted size is normal; only a size above the maximum is a bug
+# ---------------------------------------------------------------------------
+
+
+def test_the_engine_accepts_a_size_fitted_below_the_maximum(tmp_path):
+    """0.01 lots over a 16-point stop is $16 of a $30 budget.
+
+    The pipeline fitted the order down because 0.02 lots would have risked $32.
+    The engine must send the fitted size, not reject it for not being exactly
+    the configured lot.
+    """
+    text = "XAUUSD SELL NOW 3870\nSl : 3886\nTp : 3860\nTp : 3855"
+    result = evaluated_fixed(text, lots=0.02, ceiling=30.0,
+                             quote=(3870.0, 3870.2))
+    assert result.order_intent["size_lots"] == 0.01
+
+    broker = FakeBroker(bid=3870.0, ask=3870.2)
+    engine, _ledger, _ = engine_for(tmp_path, broker, fixed_lots=0.02,
+                                    max_trade_risk_usd=30.0)
+    outcome = engine.execute(result, envelope(text))
+
+    assert outcome["executed"] is True
+    assert broker.place_calls[0]["qty"] == pytest.approx(0.01)
+
+
+def test_the_engine_refuses_when_the_market_moved_after_the_size_was_fitted(tmp_path):
+    """The size fitted a 12-point stop; by submission the stop is 16 away.
+
+    0.02 lots then risks $32 against a $30 ceiling. The size was computed for a
+    price that no longer exists, so it is refused rather than silently shrunk -
+    the ledger must not claim a size that was never sent.
+    """
+    text = "XAUUSD SELL NOW 3870\nSl : 3882\nTp : 3860\nTp : 3855"
+    result = evaluated_fixed(text, lots=0.02, ceiling=30.0,
+                             quote=(3870.0, 3870.2))
+    assert result.order_intent["size_lots"] == 0.02
+
+    broker = FakeBroker(bid=3866.0, ask=3866.2)
+    engine, _ledger, _ = engine_for(tmp_path, broker, fixed_lots=0.02,
+                                    max_trade_risk_usd=30.0)
+    outcome = engine.execute(result, envelope(text))
+
+    assert outcome["executed"] is False
+    assert broker.place_calls == []
+    assert "moved since" in outcome["reason"]

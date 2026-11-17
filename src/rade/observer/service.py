@@ -940,13 +940,17 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
         # quiet.
         sizing = describe_fixed_lot(lots=_fixed_lots(),
                                     max_risk_usd=_max_trade_risk_usd(),
-                                    contract_units=_contract_units())
+                                    contract_units=_contract_units(),
+                                    min_lot=instrument.min_lot)
         if sizing["mode"] == "fixed_lots":
             if sizing["ready"]:
-                stop = sizing.get("max_stop_distance")
-                log(f"sizing: fixed {sizing['fixed_lots']:g} lot, per-trade "
+                widest = sizing.get("widest_stop_distance")
+                at_cap = sizing.get("max_stop_distance")
+                log(f"sizing: up to {sizing['fixed_lots']:g} lot, per-trade "
                     f"ceiling ${sizing['max_trade_risk_usd']:.2f}"
-                    + (f", allows a stop of {stop:.2f} pts" if stop else ""))
+                    + (f"; a stop up to {widest:.2f} pts is fitted down to fit, "
+                       f"beyond that it is refused" if widest else "")
+                    + (f" ({at_cap:.2f} pts at the full size)" if at_cap else ""))
             else:
                 log(f"SIZING NOT READY: {sizing['problem']}")
         else:

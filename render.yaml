@@ -67,29 +67,37 @@ services:
         sync: false
 
       # --- sizing ---------------------------------------------------------
-      # BLUEPRINT DEFAULT: the confirmed size, 0.02 lots. When this is set the
-      # size is exactly this number or the signal is refused. There is no
-      # partial mode: the pipeline never rounds, clamps, substitutes another
-      # size, or silently skips. A refusal names the condition that failed and
-      # is recorded in the ledger.
+      # The confirmed MAXIMUM size, 0.02 lots. It is a ceiling on size, not an
+      # exact size: the pipeline copies the largest lot up to this number whose
+      # stop risk fits MIRROR_MAX_TRADE_RISK_USD, rounded down to the broker's
+      # lot step. A signal is refused only when even the broker's minimum lot
+      # (0.01) would break the ceiling.
+      #
+      # This replaced "exactly this size or refuse", which cost real trades. The
+      # channel posts a 10-point stop; by the time the message is read the
+      # market has usually moved, so the stop the order would actually carry is
+      # wider. At a fixed size that pushed the risk over the ceiling and the
+      # signal died even though 0.01 lots fitted easily.
       #
       # REQUIRED FOR EXECUTION. With MIRROR_EXECUTE=1 the executor refuses to
-      # start if this is unset: there is no fallback to risk-fraction sizing,
-      # because "size each order from equity" is the opposite of "exactly this
-      # many lots or refuse". The service logs why and reports executor: not
-      # started.
-      # READ THIS BEFORE CHANGING EITHER NUMBER. At 100 units/lot the lot and
-      # the ceiling together decide the widest stop that can be taken:
-      #   0.02 lots = $2.00/point -> a $30 ceiling admits 15.0 points
-      #   0.03 lots = $3.00/point -> a $30 ceiling admits only 10.0 points
-      # The channel posts 10-12 point stops, so 0.02 lots at $30 ceiling
-      # provides headroom. Updated 2026-11-16 from $25 to $30.
-      # /api/status reports `max_stop_distance` so the pair can be checked.
+      # start if this is unset: there is no fallback to risk-fraction sizing.
+      #
+      # READ THIS BEFORE CHANGING EITHER NUMBER. At 100 units/lot the ceiling
+      # and the broker's MINIMUM lot decide the widest stop that can be taken.
+      # This number decides only how large a tight stop may get:
+      #   widest stop = $30 / (0.01 lot x 100 units) = 30.0 points
+      #   10-point stop -> min(0.02, 0.03)  = 0.02 lots, $20 risk
+      #   20-point stop -> min(0.02, 0.015) = 0.01 lots, $20 risk
+      #   30-point stop -> min(0.02, 0.01)  = 0.01 lots, $30 risk
+      # Raising this to 0.03 lets a 10-point stop take the full $30; it does
+      # NOT admit a wider stop, because 0.01 lots is the floor.
+      # /api/status reports `widest_stop_distance` so the pair can be checked.
       - key: MIRROR_FIXED_LOTS
         value: "0.02"
-      # The ceiling that turns a fixed lot into a risk limit: the same lot on a
-      # 10-point stop and on a 30-point stop is the same order and three times
-      # the money. This is what makes the stop distance matter.
+      # The ceiling that turns the lot into a risk limit: the same lot on a
+      # 10-point stop and on a 30-point stop are the same order and three times
+      # the money. This is what makes the stop distance matter, and it is the
+      # number the size is actually fitted to.
       #
       # Updated 2026-11-16: Raised from $25 to $30 to allow 15-point stops at
       # 0.02 lots. Still keeps 2 losses ($40) under the daily breaker ($48.63).

@@ -477,12 +477,19 @@ def test_a_missing_ceiling_blocks_the_signal_and_says_so():
     assert "no per-trade USD risk ceiling" in result.reason
 
 
-def test_stop_risk_above_the_ceiling_blocks_the_signal():
-    # 0.03 x 100 units x 10 price units = $30 against a $25 ceiling.
+def test_a_ceiling_that_cannot_afford_the_full_size_copies_a_smaller_one():
+    """0.03 x 100 units x 10 price units = $30 against a $25 ceiling.
+
+    The signal is not refused. $25 buys 0.025 lots, which rounds down to 0.02
+    and risks $20. Refusing was the old rule, and it cost real trades: the
+    channel posts 10-point stops, and any drift from the published entry pushed
+    the full size over the ceiling even though a smaller one fitted easily.
+    """
     result = fixed_evaluated(risk=fixed_risk(ceiling=25.0))
-    assert result.status == "blocked"
-    assert result.order_intent is None
-    assert "$30.00" in result.reason
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.02
+    assert (result.order_intent["estimated_stop_risk_before_slippage_and_fees"]
+            == 20.0)
 
 
 def test_a_fixed_lot_below_the_broker_minimum_is_blocked_not_skipped():
@@ -517,14 +524,22 @@ def test_the_fixed_lot_mode_does_not_validate_an_unused_risk_fraction():
     assert result.order_intent["size_lots"] == 0.03
 
 
-def test_an_entry_past_tp1_is_still_tradeable():
-    """TP1 is no longer an exit, so a market beyond it is not a refusal."""
+def test_an_entry_past_the_first_target_is_refused():
+    """TP1 is not an exit, but passing it before entry still ruins the trade.
+
+    The bot holds through TP1 - it only moves the stop there - so this used to
+    read as "still tradeable". That answers the *exit* question and not the
+    *entry* one. At 3909 the stop is 16 points away and the final target only 9,
+    so the copy risks nearly twice what it can still make, while the trader is
+    already through the first target and the copier is starting behind it.
+    """
     result = evaluate_message(
         message(), instrument=INSTRUMENT, risk=fixed_risk(),
         quote=MarketQuote(3909, 3909, NOW),
     )
-    assert result.status == "paper_intent"
-    assert result.order_intent["size_lots"] == 0.03
+    assert result.status == "blocked"
+    assert "first target" in result.reason
+    assert result.order_intent is None
 
 
 def test_an_entry_already_past_the_final_target_is_sent_to_review():
@@ -535,3 +550,181 @@ def test_an_entry_already_past_the_final_target_is_sent_to_review():
     assert result.status == "manual_review"
     assert "final target" in result.reason
     assert result.order_intent is None
+
+
+# --------------------------------------------------------------------------
+# fitting the size to the budget, and refusing only what is already gone
+# --------------------------------------------------------------------------
+
+SELL_LADDER = "XAUUSD SELL NOW 3870\nSl : 3880\nTp : 3863\nTp : 3860\nTp : 3855"
+BUY_LADDER = "XAUUSD BUY NOW 3870\nSl : 3860\nTp : 3875\nTp : 3880"
+
+
+def test_a_wide_stop_is_fitted_down_instead_of_refused():
+    """The 09:20 trade, one point before TP1.
+
+    Market 3864 against a stop at 3880 is a 16-point stop. At 0.02 lots that is
+    $32 against a $30 ceiling, so the old rule refused it. $30 buys 0.01875
+    lots, which rounds down to 0.01 and risks $16. The signal is copied.
+    """
+    result = evaluate_message(
+        message(SELL_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3864.0, 3864.2, NOW),
+    )
+
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.01
+    assert result.order_intent["estimated_stop_risk_before_slippage_and_fees"] == 16.0
+
+
+def test_a_tight_stop_does_not_grow_the_order_past_the_configured_maximum():
+    """1.5-point stop: $30 would buy 0.2 lots. The cap holds it at 0.02."""
+    result = evaluate_message(
+        message("XAUUSD SELL NOW 3870\nSl : 3872\nTp : 3865\nTp : 3860"),
+        instrument=INSTRUMENT, risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3870.5, 3870.7, NOW),
+    )
+
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.02
+
+
+def test_a_stop_too_wide_for_the_minimum_lot_is_still_refused():
+    """49.5 points: 0.01 lots risks $49.50, so no legal size exists."""
+    result = evaluate_message(
+        message("XAUUSD SELL NOW 3870\nSl : 3920\nTp : 3865\nTp : 3860"),
+        instrument=INSTRUMENT, risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3870.5, 3870.7, NOW),
+    )
+
+    assert result.status == "blocked"
+    assert "smallest tradeable lot" in result.reason
+    assert result.order_intent is None
+
+
+def test_a_sell_already_through_its_first_target_is_refused():
+    """3860.62 is below TP1 3863: the move already happened, do not chase it."""
+    result = evaluate_message(
+        message(SELL_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3860.62, 3860.85, NOW),
+    )
+
+    assert result.status == "blocked"
+    assert "first target" in result.reason
+    assert "3863" in result.reason
+    assert result.order_intent is None
+
+
+def test_a_buy_already_through_its_first_target_is_refused():
+    result = evaluate_message(
+        message(BUY_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3875.3, 3875.5, NOW),
+    )
+
+    assert result.status == "blocked"
+    assert "first target" in result.reason
+    assert "3875" in result.reason
+
+
+def test_a_buy_short_of_its_first_target_still_trades():
+    """The gate must refuse chasing, not the whole direction."""
+    result = evaluate_message(
+        message(BUY_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3873.8, 3874.0, NOW),
+    )
+
+    assert result.status == "paper_intent"
+    assert result.order_intent is not None
+
+
+# --------------------------------------------------------------------------
+# fitting the size to the budget, and refusing only what is already gone
+# --------------------------------------------------------------------------
+
+SELL_LADDER = "XAUUSD SELL NOW 3870\nSl : 3880\nTp : 3863\nTp : 3860\nTp : 3855"
+BUY_LADDER = "XAUUSD BUY NOW 3870\nSl : 3860\nTp : 3875\nTp : 3880"
+
+
+def test_a_wide_stop_is_fitted_down_instead_of_refused():
+    """The 09:20 trade, one point before TP1.
+
+    Market 3864 against a stop at 3880 is a 16-point stop. At 0.02 lots that is
+    $32 against a $30 ceiling, so the old rule refused it. $30 buys 0.01875
+    lots, which rounds down to 0.01 and risks $16. The signal is copied.
+    """
+    result = evaluate_message(
+        message(SELL_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3864.0, 3864.2, NOW),
+    )
+
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.01
+    assert result.order_intent["estimated_stop_risk_before_slippage_and_fees"] == 16.0
+
+
+def test_a_tight_stop_does_not_grow_the_order_past_the_configured_maximum():
+    """1.5-point stop: $30 would buy 0.2 lots. The cap holds it at 0.02."""
+    result = evaluate_message(
+        message("XAUUSD SELL NOW 3870\nSl : 3872\nTp : 3865\nTp : 3860"),
+        instrument=INSTRUMENT, risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3870.5, 3870.7, NOW),
+    )
+
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == 0.02
+
+
+def test_a_stop_too_wide_for_the_minimum_lot_is_still_refused():
+    """49.5 points: 0.01 lots risks $49.50, so no legal size exists."""
+    result = evaluate_message(
+        message("XAUUSD SELL NOW 3870\nSl : 3920\nTp : 3865\nTp : 3860"),
+        instrument=INSTRUMENT, risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3870.5, 3870.7, NOW),
+    )
+
+    assert result.status == "blocked"
+    assert "smallest tradeable lot" in result.reason
+    assert result.order_intent is None
+
+
+def test_a_sell_already_through_its_first_target_is_refused():
+    """3860.62 is below TP1 3863: the move already happened, do not chase it."""
+    result = evaluate_message(
+        message(SELL_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3860.62, 3860.85, NOW),
+    )
+
+    assert result.status == "blocked"
+    assert "first target" in result.reason
+    assert "3863" in result.reason
+    assert result.order_intent is None
+
+
+def test_a_buy_already_through_its_first_target_is_refused():
+    result = evaluate_message(
+        message(BUY_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3875.3, 3875.5, NOW),
+    )
+
+    assert result.status == "blocked"
+    assert "first target" in result.reason
+    assert "3875" in result.reason
+
+
+def test_a_buy_short_of_its_first_target_still_trades():
+    """The gate must refuse chasing, not the whole direction."""
+    result = evaluate_message(
+        message(BUY_LADDER), instrument=INSTRUMENT,
+        risk=fixed_risk(lots=0.02, ceiling=30.0),
+        quote=MarketQuote(3873.8, 3874.0, NOW),
+    )
+
+    assert result.status == "paper_intent"
+    assert result.order_intent is not None
