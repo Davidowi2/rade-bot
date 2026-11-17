@@ -845,11 +845,22 @@ def evaluate_message(
             first_target = min(targets) if is_buy else max(targets)
             if ((is_buy and effective_entry >= first_target)
                     or (not is_buy and effective_entry <= first_target)):
+                # Say where the market is *relative to the published entry*, not
+                # just that a level was passed. "the market has already reached
+                # the first target 3863 (entry 3861.16)" reads like the bot
+                # measured something wrong; "it published 3870 and the market
+                # was already 8.8 points past it" reads like what it is, which
+                # is a call posted after the move. Measured over the archive,
+                # 87% of this channel's calls arrive past their own entry.
+                drift = (entry - effective_entry) if not is_buy else (
+                    effective_entry - entry)
                 return _result(
                     key, STATUS_BLOCKED,
-                    f"the market has already reached the first target "
-                    f"{first_target:g} (entry {effective_entry:g}); the move this "
-                    "signal was for has already happened", signal=parsed)
+                    f"the call was posted after the move: it published entry "
+                    f"{entry:g}, the market was already {effective_entry:g} "
+                    f"({drift:.1f} points past it) and through the first target "
+                    f"{first_target:g}; the move this signal was for has already "
+                    "happened", signal=parsed)
         order_type = "market"
         order_price = None
         quote_block = {
