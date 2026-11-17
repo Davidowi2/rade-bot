@@ -36,6 +36,7 @@ from rade.execution.broker import (
     BrokerRefused,
     BrokerSpec,
     OrderAck,
+    read_book,
 )
 
 __all__ = [
@@ -321,8 +322,12 @@ class TradeLockerGateway:
     def quote(self) -> BrokerQuote:
         spec = self.spec()
         try:
-            bid = float(self.client.get_latest_bid_price(spec.instrument_id))
-            ask = float(self.client.get_latest_asking_price(spec.instrument_id))
+            # The two sides are separate requests; read_book re-reads once if
+            # the gap between them produced a crossed book that never existed.
+            bid, ask = read_book(
+                lambda: self.client.get_latest_bid_price(spec.instrument_id),
+                lambda: self.client.get_latest_asking_price(spec.instrument_id),
+            )
         except Exception as exc:
             raise self._fail(exc, "reading the quote") from exc
         return BrokerQuote(bid=bid, ask=ask, quoted_at=datetime.now(timezone.utc))

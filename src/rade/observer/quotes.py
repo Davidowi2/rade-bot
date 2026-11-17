@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Callable
 
+from rade.execution.broker import read_book
 from rade.observer.mirror_pipeline import MarketQuote
 
 
@@ -36,8 +37,12 @@ def tradelocker_quote_provider(symbol: str = "XAUUSD") -> Callable[[], MarketQuo
     instrument_id = client.get_instrument_id_from_symbol_name(symbol)
 
     def quote() -> MarketQuote:
-        bid = float(client.get_latest_bid_price(instrument_id))
-        ask = float(client.get_latest_asking_price(instrument_id))
+        # Bid and ask are two requests; read_book re-reads once if the gap
+        # between them produced a crossed book that never existed.
+        bid, ask = read_book(
+            lambda: client.get_latest_bid_price(instrument_id),
+            lambda: client.get_latest_asking_price(instrument_id),
+        )
         return MarketQuote(bid, ask, datetime.now(timezone.utc))
 
     return quote

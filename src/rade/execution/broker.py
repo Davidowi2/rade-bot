@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 
 class BrokerError(RuntimeError):
@@ -100,6 +100,28 @@ class BrokerQuote:
     def __post_init__(self) -> None:
         if self.quoted_at.tzinfo is None:
             object.__setattr__(self, "quoted_at", self.quoted_at.replace(tzinfo=timezone.utc))
+
+
+def read_book(read_bid: Callable[[], float], read_ask: Callable[[], float],
+              *, attempts: int = 2) -> tuple[float, float]:
+    """Read a bid and an ask, tolerating the race between the two calls.
+
+    The broker exposes the two sides separately, so they are two requests a few
+    milliseconds apart. On a moving market that gap can produce a crossed book
+    (bid above ask) that never existed at any single instant - and a crossed
+    book is refused downstream as invalid data, which blocks a perfectly good
+    signal. One immediate re-read resolves the artefact. If it is still crossed
+    the value is returned as-is and the caller's validation refuses it, which is
+    the right answer for a feed that is genuinely inverted.
+    """
+    bid = float(read_bid())
+    ask = float(read_ask())
+    for _ in range(max(1, attempts) - 1):
+        if ask >= bid:
+            break
+        bid = float(read_bid())
+        ask = float(read_ask())
+    return bid, ask
 
 
 def quote_problem(quote: BrokerQuote | None) -> str | None:
