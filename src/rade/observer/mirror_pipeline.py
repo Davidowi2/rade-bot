@@ -462,6 +462,91 @@ def _result(key: str, status: str, reason: str,
                           note or f"No order: {reason}")
 
 
+#: The fields an edit can change that would alter a position already open. Text
+#: is deliberately absent: the channel adds a tick mark seconds after posting,
+#: and that changes the wording without changing the trade.
+TRADE_DEFINING_FIELDS = ("direction", "entry_price", "stop_loss", "take_profits")
+
+
+def earlier_revision_opened_a_position(previous: dict[str, Any] | None) -> bool | None:
+    """Did the earlier revision put money at risk? ``None`` means unknown.
+
+    Only an intent can have opened a position. Every other disposition -
+    blocked, stale, ignored, duplicate, review - means the pipeline declined to
+    act, so there is nothing an edit could damage and no reason to refuse it.
+
+    ``None`` is a third answer on purpose. "I could not read the earlier
+    revision" is not "there is nothing to protect", and collapsing the two is
+    how a fail-open guard gets written by accident.
+    """
+    if not previous:
+        return None
+    status = previous.get("status")
+    if not status:
+        return None
+    return status == STATUS_PAPER_INTENT
+
+
+def _same_price(a: Any, b: Any) -> bool:
+    try:
+        return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-9)
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _same_prices(a: Any, b: Any) -> bool:
+    try:
+        left, right = list(a or []), list(b or [])
+    except TypeError:
+        return False
+    if len(left) != len(right):
+        return False
+    return all(_same_price(x, y) for x, y in zip(left, right))
+
+
+def _trade_view(raw: dict[str, Any]) -> dict[str, Any]:
+    """The trade-defining fields, from either shape this codebase produces.
+
+    Two dicts describe the same call: the parser emits ``direction`` and
+    ``entry_price``, the recorded signal emits ``side`` and
+    ``published_entry``. Comparing them without normalising makes every
+    cosmetic edit look like a total rewrite, which is the bug this whole rule
+    exists to avoid.
+    """
+    entry = raw.get("entry_price")
+    if entry is None:
+        entry = raw.get("published_entry")
+    return {
+        "direction": raw.get("direction") or raw.get("side"),
+        "entry_price": entry,
+        "stop_loss": raw.get("stop_loss"),
+        "take_profits": raw.get("take_profits"),
+    }
+
+
+def changed_trade_fields(previous: dict[str, Any],
+                         current: dict[str, Any]) -> list[str]:
+    """Which trade-defining fields differ between two revisions.
+
+    Compared on values, not text. An earlier signal that is missing a field
+    reports that field as changed, which sends the edit to a human rather than
+    quietly calling it cosmetic - the failure here must be a needless review,
+    never a missed amendment.
+    """
+    if not previous:
+        return list(TRADE_DEFINING_FIELDS)
+    before, after = _trade_view(previous), _trade_view(current)
+    changed: list[str] = []
+    if before["direction"] != after["direction"]:
+        changed.append("direction")
+    for field in ("entry_price", "stop_loss"):
+        if not _same_price(before[field], after[field]):
+            changed.append(field)
+    if not _same_prices(before["take_profits"], after["take_profits"]):
+        changed.append("take_profits")
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # evaluation
 # ---------------------------------------------------------------------------
@@ -475,12 +560,18 @@ def evaluate_message(
     quote: MarketQuote | None = None,
     quote_error: str | None = None,
     now: datetime | None = None,
+    previous: dict[str, Any] | None = None,
 ) -> PipelineResult:
     """Parse and validate one message, returning a paper intent or a no-trade.
 
     ``now`` judges the signal's age against a later moment than its receipt;
     leave it unset to use the receipt time, which is what a live listener
     wants.
+
+    ``previous`` is the status and parsed signal of the highest revision already
+    stored for this message, or ``None``. It is only consulted when
+    ``message.revision > 0``, and leaving it unset is safe: an unknown earlier
+    revision goes to a human rather than being assumed harmless.
     """
     key = event_key(message)
     text = message.text or ""
@@ -534,9 +625,13 @@ def evaluate_message(
     # short for anyone to act on - so a message first seen already edited is
     # traded as it stands.
     #
-    # What is still refused is a *later* revision: a message this pipeline has
-    # already stored, and may already hold a position for. Amending an intent
-    # that is live is a different question, and it goes to a human.
+    # A *later* revision is a different question, and the rule is about money,
+    # not about editing. An edit can only do damage if the earlier revision
+    # opened a position; if it did not, the edit is the best version of a call
+    # nobody acted on. If it did, the edit is compared against what is open:
+    # identical trade -> the tick mark the channel adds, filed as cosmetic;
+    # different trade -> a human, because moving a live stop is not a decision
+    # this pipeline makes on its own.
     #
     # The provenance is recorded on the signal either way, so the evidence trail
     # says the original wording was never seen rather than silently looking like
@@ -546,13 +641,53 @@ def evaluate_message(
         parsed["first_seen_edited_at"] = as_utc(message.edited_at).isoformat()
 
     if message.revision > 0:
-        changed = parsed["entry_price"] != entry or parsed["stop_loss"] != stop
-        reason = ("edited signal; an amendment to an intent already recorded is "
-                  "never applied automatically"
-                  + (" (entry or stop changed)" if changed else ""))
-        note = (f"Edited signal {message.message_id} rev {message.revision}: "
-                "review before any action.")
-        return _result(key, STATUS_MANUAL_REVIEW, reason, signal=parsed, note=note)
+        # A later revision of a message this pipeline has already stored. What
+        # decides the outcome is not that it was edited, but whether the earlier
+        # revision opened a position - the only thing an edit can damage.
+        held = earlier_revision_opened_a_position(previous)
+
+        if held is None:
+            # The earlier revision could not be read. Whether money is at risk
+            # is unknown, so a human looks. This is the behaviour that shipped
+            # before, kept for the one case where guessing is the wrong move.
+            note = (f"Edited signal {message.message_id} rev {message.revision}: "
+                    "review before any action.")
+            return _result(key, STATUS_MANUAL_REVIEW,
+                           "edited signal; the earlier revision could not be read, "
+                           "so whether it opened a position is unknown",
+                           signal=parsed, note=note)
+
+        if not held:
+            # Nothing was opened for the earlier revision: it was blocked,
+            # stale, ignored, or never a signal at all. There is no position to
+            # protect, so this edit is simply the best version of a call the
+            # pipeline has not acted on. It is judged like any other signal,
+            # age included - the age is measured from receipt, so a long gap
+            # still refuses it.
+            parsed["supersedes_revision"] = message.revision
+        else:
+            previous_signal = (previous or {}).get("signal") or {}
+            changed = changed_trade_fields(previous_signal, parsed)
+            if not changed:
+                # The wording moved, the trade did not: this is the tick mark
+                # the channel adds seconds after posting. Nothing a position can
+                # be affected by has changed, so it is not a decision for a
+                # human and must not be filed as one. Duplicate rather than
+                # merely ignored, so it cannot reach the executor by any path.
+                note = (f"Edited signal {message.message_id} rev {message.revision}: "
+                        "wording only; entry, stop and targets are unchanged, so "
+                        "no second order is placed.")
+                return PipelineResult(
+                    key, STATUS_DUPLICATE,
+                    "cosmetic edit; entry, stop and targets unchanged",
+                    parsed, None, note, duplicate=True)
+            reason = ("edited signal; an amendment to an intent already recorded "
+                      "is never applied automatically "
+                      f"({', '.join(changed)} changed)")
+            note = (f"Edited signal {message.message_id} rev {message.revision}: "
+                    "review before any action.")
+            return _result(key, STATUS_MANUAL_REVIEW, reason, signal=parsed,
+                           note=note)
 
     # Age is checked before anything is sized or priced. A signal that is too
     # old is not made acceptable by a fresh quote, a wide stop, or a quiet
@@ -749,6 +884,12 @@ def evaluate_message(
     if parsed.get("first_seen_edited"):
         signal["first_seen_edited"] = True
         signal["first_seen_edited_at"] = parsed.get("first_seen_edited_at")
+    # An edit that was judged as a signal in its own right, because the earlier
+    # revision never opened anything. The trail has to say so, otherwise a
+    # revision 1 row that produced an intent looks like the pipeline amended a
+    # live position.
+    if parsed.get("supersedes_revision"):
+        signal["supersedes_revision"] = parsed["supersedes_revision"]
     intent = {
         # This record describes the pipeline's own stage: it never writes to a
         # broker. Whether an order follows is decided by the execution engine
@@ -804,6 +945,15 @@ class Ledger(Protocol):
 
     def revision_for(self, channel: str, message_id: int) -> int:
         """Highest revision already stored for a message (0 when unknown)."""
+        ...
+
+    def previous_revision(self, channel: str, message_id: int) -> dict[str, Any] | None:
+        """Status and parsed signal of the highest revision already stored.
+
+        ``None`` means there is no earlier revision. A read that fails must
+        raise rather than return ``None``: the caller needs to tell "nothing to
+        protect" apart from "could not look".
+        """
         ...
 
     def stored_text_hash(self, channel: str, message_id: int) -> str | None:
@@ -1023,6 +1173,21 @@ class SQLiteIntentLedger:
                 (channel, message_id),
             ).fetchone()
         return int(row[0]) if row and row[0] is not None else 0
+
+    def previous_revision(self, channel: str, message_id: int) -> dict[str, Any] | None:
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT status, signal_json FROM mirror_events"
+                " WHERE channel=? AND message_id=? ORDER BY revision DESC LIMIT 1",
+                (channel, message_id),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            signal = json.loads(row[1]) if row[1] else {}
+        except (TypeError, ValueError):
+            signal = {}
+        return {"status": row[0], "signal": signal if isinstance(signal, dict) else {}}
 
     def stored_text_hash(self, channel: str, message_id: int) -> str | None:
         with self._connect() as con:
@@ -1404,8 +1569,20 @@ def process_once(
     now: datetime | None = None,
 ) -> PipelineResult:
     """Evaluate a message and record it exactly once."""
+    # Only a later revision needs the earlier one. Reading it on every message
+    # would put a database round-trip on the hot path for the common case,
+    # which is a message seen for the first time.
+    previous: dict[str, Any] | None = None
+    if message.revision > 0:
+        try:
+            previous = ledger.previous_revision(message.channel, message.message_id)
+        except Exception:
+            # Unknown is not absent. Leaving it None sends the edit to a human
+            # rather than assuming the earlier revision opened nothing.
+            previous = None
     result = evaluate_message(message, instrument=instrument, risk=risk,
-                              quote=quote, quote_error=quote_error, now=now)
+                              quote=quote, quote_error=quote_error, now=now,
+                              previous=previous)
     outcome = ledger.claim(message, result)
 
     if outcome == CLAIM_INSERTED:
