@@ -4,6 +4,12 @@
 **工作流**：工作流 3（事故响应）+ 工作流 1（综合代码审查）
 **参与成员**：Cody（代码审查师）/ Rex（SRE 工程师）/ Tessa（测试专家）
 
+> **状态：已修复并推送（commit `c30f5d5`）。**
+> 根因由线上告警确认：`[BLOCKED] quote timestamp is in the future beyond tolerance`，`source: catchup`——正是 F1。
+> 已修：F1（慢读不再当作时钟异常）、F2（provider 异常进入 reason 与日志）、F4（删除 catchup 特例）、F13（`stale` 迁移 + 兜底）、`DEFAULT_SIGNAL_MAX_AGE_S` 120→900。
+> **仍需人工执行一次：** 在 Supabase 上运行 `supabase/migrations/0006_allow_stale_status.sql`。
+> 未动：F3（bid/ask 非原子）、F5（review 占额度）、F6（事件循环阻塞 I/O）、F7（`MIRROR_EXECUTE` 双源）——见 §9。
+
 ---
 
 ## 📌 TL;DR（执行摘要）
