@@ -65,11 +65,9 @@ services:
         sync: false
       - key: TELEGRAM_NOTIFY_CHAT_ID
         sync: false
-      - key: MIRROR_EQUITY             # paper equity; never guessed
-        sync: false
 
       # --- sizing ---------------------------------------------------------
-      # BLUEPRINT DEFAULT: the confirmed size, 0.03 lots. When this is set the
+      # BLUEPRINT DEFAULT: the confirmed size, 0.02 lots. When this is set the
       # size is exactly this number or the signal is refused. There is no
       # partial mode: the pipeline never rounds, clamps, substitutes another
       # size, or silently skips. A refusal names the condition that failed and
@@ -77,8 +75,9 @@ services:
       #
       # REQUIRED FOR EXECUTION. With MIRROR_EXECUTE=1 the executor refuses to
       # start if this is unset: there is no fallback to risk-fraction sizing,
-      # because "size each order from equity" is the opposite of "exactly 0.03
-      # lots or refuse". The service logs why and reports executor: not started.
+      # because "size each order from equity" is the opposite of "exactly this
+      # many lots or refuse". The service logs why and reports executor: not
+      # started.
       # READ THIS BEFORE CHANGING EITHER NUMBER. At 100 units/lot the lot and
       # the ceiling together decide the widest stop that can be taken:
       #   0.02 lots = $2.00/point -> a $30 ceiling admits 15.0 points
@@ -88,9 +87,9 @@ services:
       # /api/status reports `max_stop_distance` so the pair can be checked.
       - key: MIRROR_FIXED_LOTS
         value: "0.02"
-      # The ceiling that turns a fixed lot into a risk limit: 0.03 lots on a
-      # 10-unit stop and 0.03 on a 30-unit stop are the same order and three
-      # times the money.
+      # The ceiling that turns a fixed lot into a risk limit: the same lot on a
+      # 10-point stop and on a 30-point stop is the same order and three times
+      # the money. This is what makes the stop distance matter.
       #
       # Updated 2026-11-16: Raised from $25 to $30 to allow 15-point stops at
       # 0.02 lots. Still keeps 2 losses ($40) under the daily breaker ($48.63).
@@ -116,9 +115,13 @@ services:
         value: "100"
       - key: MIRROR_CONTRACT_UNITS_CONFIRMED
         value: "1"
-      # Paper equity, required once the contract size is confirmed and no
-      # executor is running. With an executor the equity is read from the
-      # broker instead. This is the BLBRY balance, not a guess.
+      # Paper equity. Required only on the archive-only path: with an executor
+      # the equity is read from the broker (engine.py _risk_room), so this value
+      # does not size anything and cannot go stale in a way that affects risk.
+      # It stays a literal here so that a fresh deploy cannot fail its startup
+      # check for want of a value - that is the 2026-11-15 failure mode.
+      # Declared exactly once: a duplicate key in this list made the effective
+      # value depend on which entry Render read last.
       - key: MIRROR_EQUITY
         value: "4862.73"
       # "none" means no verified quote source: market (NOW) calls are blocked
@@ -128,6 +131,15 @@ services:
       # two settings that blocked every signal on 2026-11-15.
       - key: MIRROR_QUOTE_PROVIDER
         value: "tradelocker"
+      # How stale the PRICE may be, not how long reading it may take. Those were
+      # conflated until 2026-11-17: the age was computed against the time the
+      # message was received, which is stamped before the quote is fetched, so
+      # the number actually measured the read and any slow read looked like a
+      # quote from the future. A slow read is now diagnosed separately (it is a
+      # connection fault, ceiling 15s); this setting only rejects a quote whose
+      # own timestamp is already older than the message. 2s is ample because a
+      # live read is stamped at fetch time and therefore arrives slightly newer
+      # than the message.
       - key: MIRROR_QUOTE_MAX_AGE_S
         value: "2"
       # How old a NOW signal may be when it reaches the pipeline. A fresh quote
@@ -177,8 +189,12 @@ services:
       # MIRROR_CONTRACT_UNITS_CONFIRMED=1 with a contract size that matches
       # the broker's own lotSize; otherwise the service refuses to start
       # rather than run an executor that could only block every signal.
+      # Set this in the dashboard, not here. A blueprint `value:` is synced on
+      # deploy, so declaring 0 would quietly switch trading off at the next
+      # push - the same class of surprise as a script that switches it on.
+      # Nothing automated may change whether orders are placed.
       - key: MIRROR_EXECUTE
-        value: "0"
+        sync: false
       - key: MIRROR_MANAGE_EVERY_S
         value: "5"
       - key: MIRROR_FILL_TIMEOUT_S

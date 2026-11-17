@@ -62,9 +62,14 @@ DESIRED: dict[str, str] = {
     # quotes: a NOW call cannot be priced without a provider
     "MIRROR_QUOTE_PROVIDER": "tradelocker",
     "MIRROR_QUOTE_MAX_AGE_S": "2",
-    # execution: ON. Orders go to the pinned demo-host destination (BLBRY
-    # 2346225) only; the gateway refuses any other environment or account.
-    "MIRROR_EXECUTE": "1",
+    # execution: the destination is pinned to the demo host (BLBRY 2346225) and
+    # the gateway refuses any other environment or account.
+    #
+    # MIRROR_EXECUTE is deliberately NOT in this table. Whether real orders are
+    # placed is a decision, not a setting: a script whose whole job is "make the
+    # configuration match" must not be able to switch trading on as a side
+    # effect of being run, and must not be able to switch it off either. The
+    # current value is reported at the top of the run and left untouched.
     "MIRROR_MANAGE_EVERY_S": "5",
     "MIRROR_FILL_TIMEOUT_S": "300",
     # pre-trade risk controls
@@ -74,6 +79,11 @@ DESIRED: dict[str, str] = {
     "MIRROR_MAX_SPREAD": "1.0",
     "MIRROR_MAX_SLIPPAGE": "3.0",
 }
+
+
+#: The one setting this script reads but never writes. Whether real orders are
+#: placed must be a deliberate act, so it is reported and preserved.
+TRADING_SWITCH = "MIRROR_EXECUTE"
 
 
 def is_secret(name: str) -> bool:
@@ -121,6 +131,18 @@ def main() -> int:
 
     print(f"service {SERVICE}: {len(before)} vars present, "
           f"{len(DESIRED)} mirror settings declared\n")
+
+    switch = (before.get(TRADING_SWITCH) or "").strip()
+    if switch == "1":
+        print(f"{TRADING_SWITCH}=1  REAL ORDERS ARE BEING PLACED")
+        print("  This run will not change it. To stop trading, set it to 0 in "
+              "the Render dashboard.")
+    elif switch == "0":
+        print(f"{TRADING_SWITCH}=0  paper mode; no orders are placed")
+    else:
+        print(f"{TRADING_SWITCH} is unset  paper mode; no orders are placed")
+    print("  (this script never writes that value)\n")
+
     print(f"{'KEY':<40} {'STATE':<10} VALUE")
     print("-" * 96)
     changed = 0
