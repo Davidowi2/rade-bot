@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlparse
 
 from rade.execution.sizing import describe_fixed_lot
 from rade.observer.mirror_pipeline import (
+    DEFAULT_SIGNAL_MAX_AGE_S,
     MAX_RISK_FRACTION,
     STATUS_CONFLICT,
     STATUS_MANUAL_REVIEW,
@@ -380,7 +381,10 @@ class MirrorService:
             except (TypeError, ValueError):
                 return float(default)
 
-        signal_age = number("MIRROR_MAX_SIGNAL_AGE_S", "120")
+        # One number, taken from the pipeline's own constant, so a missing
+        # environment variable cannot silently tighten the window.
+        signal_age = number("MIRROR_MAX_SIGNAL_AGE_S",
+                            str(DEFAULT_SIGNAL_MAX_AGE_S))
         reconnect = number("MIRROR_RECONNECT_S", "900")
         catchup = number("MIRROR_CATCHUP_EVERY_S", "15")
         # The delivery interval is whichever path actually delivers. Push is
@@ -957,7 +961,8 @@ def start_listener_if_configured(ledger: Any, log: Any = print,
                             float(os.getenv("MIRROR_QUOTE_MAX_AGE_S", "2")),
                             equity_provider=equity_provider,
                             signal_max_age_seconds=float(
-                                os.getenv("MIRROR_MAX_SIGNAL_AGE_S", "120")),
+                                os.getenv("MIRROR_MAX_SIGNAL_AGE_S",
+                                          str(DEFAULT_SIGNAL_MAX_AGE_S))),
                             fixed_lots=_fixed_lots(),
                             max_trade_risk_usd=_max_trade_risk_usd()),
             notifier=notifier_from_env(),

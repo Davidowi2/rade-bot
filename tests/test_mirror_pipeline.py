@@ -232,14 +232,19 @@ def test_quote_fetched_after_receipt_is_fresh_not_stale():
     assert result.order_intent["quote"]["age_ms"] == -300.0
 
 
-def test_quote_from_the_future_beyond_tolerance_is_blocked():
+def test_a_hung_quote_read_is_blocked_and_says_so():
+    # A quote stamped 30 s after receipt is not "from the future" - it is a read
+    # that hung. It is still refused, because a connection that takes 30 s to
+    # answer cannot be trusted, but the reason has to name the latency instead
+    # of inventing a clock fault.
     far = NOW + timedelta(seconds=30)
     result = evaluate_message(
         message(), instrument=INSTRUMENT, risk=RISK,
         quote=MarketQuote(3915, 3915, far),
     )
     assert result.status == "blocked"
-    assert "future" in result.reason
+    assert "took" in result.reason
+    assert "future" not in result.reason
 
 
 def test_inverted_quote_is_blocked():

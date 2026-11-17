@@ -120,13 +120,36 @@ class SupabaseLedger:
             "intent_json": result.order_intent,
             "source": message.source,
         }
-        _, body = self.transport.request(
-            "POST", TABLE,
-            params={"on_conflict": "event_key", "select": "event_key"},
-            json_body=row,
-            prefer="resolution=ignore-duplicates,return=representation",
-        )
-        if isinstance(body, list) and body:
+        def insert(candidate: dict) -> list:
+            _, body = self.transport.request(
+                "POST", TABLE,
+                params={"on_conflict": "event_key", "select": "event_key"},
+                json_body=candidate,
+                prefer="resolution=ignore-duplicates,return=representation",
+            )
+            return body if isinstance(body, list) else []
+
+        try:
+            body = insert(row)
+        except StorageError as exc:
+            # A status the database does not accept must not cost the message.
+            # `stale` was missing from the CHECK constraint created in 0001
+            # (added in 0006), so the insert returned 400, the message was never
+            # claimed, and gap_fill held the cursor below it and retried on every
+            # poll - the signal never appeared at all. Recording it as blocked,
+            # with the original status kept in the reason, is the honest
+            # degradation: it is visible, and the cursor keeps moving.
+            text = str(exc).lower()
+            if "status_valid" not in text and "check constraint" not in text:
+                raise
+            row = {
+                **row,
+                "status": "blocked",
+                "reason": (f"{row['status']} (rejected by the ledger schema; "
+                           f"run supabase/migrations/0006): {row['reason']}"),
+            }
+            body = insert(row)
+        if body:
             return CLAIM_INSERTED
 
         # Nothing inserted: the row already exists. Decide duplicate vs conflict

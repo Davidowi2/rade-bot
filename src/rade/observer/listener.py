@@ -197,7 +197,7 @@ class MirrorListener:
 
         result = process_once(
             envelope, ledger=self.ledger, instrument=self.instrument,
-            risk=self.risk, quote=quote,
+            risk=self.risk, quote=quote, quote_error=quote_error,
         )
 
         notification = {"notified": False, "kind": None, "reason": "notifier not configured"}
@@ -229,9 +229,19 @@ class MirrorListener:
         if execution is not None:
             payload["execution"] = execution
         self.state.advance(mid, persist=not self.defer_cursor_writes)
+        # The lag is logged because it is the number that decides whether a
+        # limit of 900 s is ever doing anything: a healthy poll delivers in
+        # ~15 s, and only a service that was not running produces minutes. The
+        # quote error is logged in full here; the ledger keeps only its type, so
+        # the reason column stays groupable.
+        lag = ""
+        if envelope.posted_at is not None:
+            lag_s = (envelope.received_at - envelope.posted_at).total_seconds()
+            lag = f" lag={lag_s:.0f}s"
         self.log(
-            f"{source} id={mid} rev={revision} -> {result.status}"
+            f"{source} id={mid} rev={revision} -> {result.status}{lag}"
             + (f" ({result.reason})" if result.status != "paper_intent" else "")
+            + (f" [quote_error: {quote_error}]" if quote_error else "")
         )
         return payload
 

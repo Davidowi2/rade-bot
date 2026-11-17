@@ -54,15 +54,29 @@ STATUS_STALE = "stale"
 
 #: How old a NOW signal may be when it reaches the pipeline, in seconds.
 #:
-#: The number is a trade-off with one side chosen deliberately. A live signal
-#: arrives in well under a second, so any limit above a few seconds catches the
-#: real case. It also has to survive a reconnect: the listener reconnects every
-#: 900 s, and a signal posted just before a drop is fetched on reconnect. Two
-#: minutes admits a short reconnect gap and refuses anything longer, on the
-#: grounds that this channel's targets are hit within minutes of the call - a
-#: signal recovered ten minutes later is not the same trade, even if the price
-#: has not moved enough to trip the slippage guard.
-DEFAULT_SIGNAL_MAX_AGE_S = 120.0
+#: In normal operation this limit is inert: the listener polls every 15 s, so a
+#: signal reaches the pipeline 15-20 s after it was posted. The limit only
+#: decides anything after the service was *not running* - a spin-down on a free
+#: plan, a dropped connection - and there the alternative to a generous limit is
+#: losing the signal entirely. 900 s is what the deployment has always used; the
+#: code default now matches it so a missing environment variable cannot silently
+#: tighten the window back to two minutes.
+#:
+#: This is not the guard that makes a late signal safe. The slippage guard
+#: (``max_slippage``, measured from the *published* entry) and the per-trade
+#: risk ceiling are what refuse a call the market has already left behind. The
+#: age limit only rejects an instruction that is old in absolute terms.
+DEFAULT_SIGNAL_MAX_AGE_S = 900.0
+
+#: How long the *read* of a quote may take before the price is unusable.
+#:
+#: This is a latency budget, not a freshness budget, and the two were confused:
+#: a quote is stamped when it is fetched, which is *after* the message arrived,
+#: so the read duration is what a negative age actually measures. Refusing on
+#: that number is what produced "quote timestamp is in the future beyond
+#: tolerance" for an ordinary 2.5 s broker round-trip. A read this slow means the
+#: connection is broken, not that the price is wrong.
+HUNG_QUOTE_READ_S = 15.0
 
 #: How far a posted timestamp may sit ahead of receipt before it stops being a
 #: clock disagreement and becomes an unusable timestamp.
@@ -361,9 +375,12 @@ def stale_reason(message: MessageEnvelope, risk: RiskConfig, *,
     price current"; this answers "is the instruction current". A fresh quote
     says nothing about a signal that was recovered twenty minutes after it was
     posted, and that is exactly the case a restart or a reconnect produces.
-    
-    For catchup/reconnect scenarios (where the service was down), a more lenient
-    age limit is applied to handle signals posted during downtime.
+
+    One limit applies to every source. There used to be a lenient branch for
+    catch-up, on the theory that a signal recovered after a spin-down deserved
+    more slack; it was a no-op at the deployed value and it made the rule depend
+    on which internal string the listener happened to pass. The limit itself is
+    the allowance for a service that was not running.
     """
     if message.posted_at is None:
         return ("the signal carries no posted timestamp, so its age cannot be "
@@ -378,22 +395,6 @@ def stale_reason(message: MessageEnvelope, risk: RiskConfig, *,
                 "is not a clock disagreement; its timestamp cannot be trusted")
 
     limit = float(risk.signal_max_age_seconds)
-    
-    # FIX: For catchup/reconnect scenarios (service restart), use lenient limit
-    # to handle signals posted while service was down. Free-tier services can
-    # spin down for 15+ minutes, and signals from that window are still valid.
-    if message.source in ("telegram_catchup", "telegram_fetch", "catchup"):
-        # Use at least 15 minutes for catchup tolerance, or the configured limit
-        # if it's already higher
-        catchup_limit = max(900.0, limit)  # 900s = 15 minutes
-        if limit > 0 and age > catchup_limit:
-            return (f"the signal is stale: it was posted {format_age(age)} before it "
-                    f"reached the pipeline during catchup, beyond the "
-                    f"{format_age(catchup_limit)} catchup tolerance; a signal this "
-                    f"old is not the trade that was published")
-        return None  # Within catchup tolerance
-    
-    # For live signals, use the standard limit
     if limit > 0 and age > limit:
         return (f"the signal is stale: it was posted {format_age(age)} before it "
                 f"reached the pipeline, beyond the {format_age(limit)} limit "
@@ -472,6 +473,7 @@ def evaluate_message(
     instrument: InstrumentSpec,
     risk: RiskConfig,
     quote: MarketQuote | None = None,
+    quote_error: str | None = None,
     now: datetime | None = None,
 ) -> PipelineResult:
     """Parse and validate one message, returning a paper intent or a no-trade.
@@ -604,8 +606,19 @@ def evaluate_message(
     quote_block: dict[str, Any] | None = None
     if parsed["entry_type"] == "market":
         if quote is None:
+            # Name the cause when the provider said why. Only the exception
+            # *type* goes into the reason, so the column stays groupable; the
+            # full text is logged by the listener, which is where the detail
+            # belongs. Before this, "no provider configured" and "the session
+            # expired" were recorded as the same sentence.
+            cause = ""
+            if quote_error:
+                kind = str(quote_error).split(":", 1)[0].strip()
+                if kind:
+                    cause = f" ({kind})"
             return _result(key, STATUS_BLOCKED,
-                           "market signal needs a fresh broker quote", signal=parsed)
+                           f"market signal needs a fresh broker quote{cause}",
+                           signal=parsed)
         if not (math.isfinite(quote.bid) and math.isfinite(quote.ask)
                 and quote.bid > 0 and quote.ask > 0 and quote.ask >= quote.bid):
             # The numbers are in the reason on purpose: "invalid quote" with no
@@ -616,14 +629,28 @@ def evaluate_message(
                 f"broker quote is invalid (bid={quote.bid!r}, ask={quote.ask!r})",
                 signal=parsed)
 
-        # A quote is stale when it is older than the budget *before* the
-        # message arrived. The listener fetches the quote after receipt, so a
-        # negative age is normal and must not be read as a stale price.
+        # Two different questions, deliberately separated.
+        #
+        # ``read_s`` is how long the broker took to answer. The quote is stamped
+        # when it is fetched, which happens *after* the message arrived, so this
+        # is normally a small positive number. A slow read is latency: it says
+        # nothing about whether the price is any good, and refusing on it used to
+        # be reported as "the timestamp is in the future" - a clock fault that
+        # did not exist. Only a read long enough to mean a broken connection is
+        # refused here.
+        #
+        # ``age`` is how old the price was when the message arrived. That is the
+        # freshness question, and it still refuses: a provider handing back a
+        # cached tick is caught by it.
         max_age = float(risk.quote_max_age_seconds)
+        read_s = (as_utc(quote.quoted_at) - as_utc(message.received_at)).total_seconds()
+        if read_s > HUNG_QUOTE_READ_S:
+            return _result(
+                key, STATUS_BLOCKED,
+                f"reading the broker quote took {format_age(read_s)}, beyond the "
+                f"{format_age(HUNG_QUOTE_READ_S)} ceiling; the connection is not "
+                "answering, so no price can be trusted", signal=parsed)
         age = (as_utc(message.received_at) - as_utc(quote.quoted_at)).total_seconds()
-        if age < -max_age:
-            return _result(key, STATUS_BLOCKED,
-                           "quote timestamp is in the future beyond tolerance", signal=parsed)
         if age > max_age:
             return _result(key, STATUS_BLOCKED, "broker quote is stale", signal=parsed)
 
@@ -1369,11 +1396,12 @@ def process_once(
     instrument: InstrumentSpec,
     risk: RiskConfig,
     quote: MarketQuote | None = None,
+    quote_error: str | None = None,
     now: datetime | None = None,
 ) -> PipelineResult:
     """Evaluate a message and record it exactly once."""
     result = evaluate_message(message, instrument=instrument, risk=risk,
-                              quote=quote, now=now)
+                              quote=quote, quote_error=quote_error, now=now)
     outcome = ledger.claim(message, result)
 
     if outcome == CLAIM_INSERTED:
