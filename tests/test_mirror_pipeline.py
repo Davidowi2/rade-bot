@@ -1,6 +1,8 @@
 """Safety checks for the Telegram-to-paper-intent pipeline."""
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from rade.observer.mirror_pipeline import (
     InstrumentSpec,
     MarketQuote,
@@ -524,22 +526,25 @@ def test_the_fixed_lot_mode_does_not_validate_an_unused_risk_fraction():
     assert result.order_intent["size_lots"] == 0.03
 
 
-def test_an_entry_past_the_first_target_is_refused():
-    """TP1 is not an exit, but passing it before entry still ruins the trade.
+def test_an_entry_past_the_first_target_copies_anyway():
+    """An entry through TP1 is the trader's problem, not the copier's.
 
-    The bot holds through TP1 - it only moves the stop there - so this used to
-    read as "still tradeable". That answers the *exit* question and not the
-    *entry* one. At 3909 the stop is 16 points away and the final target only 9,
-    so the copy risks nearly twice what it can still make, while the trader is
-    already through the first target and the copier is starting behind it.
+    This used to be refused on the argument that the move the signal existed
+    for had already happened. Measured over the archive that population wins
+    64.7% of the time and still loses - but the operator's instruction is that
+    this bot follows the trader rather than judging which part of the trader's
+    move is worth having. The budget is what bounds such an entry: with this
+    module's $50 ceiling the 16-point stop costs $48 at 0.03 lots, inside the
+    budget, so the size is unchanged.
     """
     result = evaluate_message(
         message(), instrument=INSTRUMENT, risk=fixed_risk(),
         quote=MarketQuote(3909, 3909, NOW),
     )
-    assert result.status == "blocked"
-    assert "first target" in result.reason
-    assert result.order_intent is None
+    assert result.status == "paper_intent"
+    assert result.order_intent is not None
+    assert result.order_intent["size_lots"] == pytest.approx(0.03)
+    assert result.order_intent["estimated_stop_risk_before_slippage_and_fees"] == pytest.approx(48.0)
 
 
 def test_an_entry_already_past_the_final_target_is_sent_to_review():
@@ -603,30 +608,39 @@ def test_a_stop_too_wide_for_the_minimum_lot_is_still_refused():
     assert result.order_intent is None
 
 
-def test_a_sell_already_through_its_first_target_is_refused():
-    """3860.62 is below TP1 3863: the move already happened, do not chase it."""
+def test_a_sell_already_through_its_first_target_copies_smaller():
+    """3860.62 is 2.4 points past TP1 3863, so the stop is 19.4 points wide.
+
+    The first-target gate is gone (2026-11-17). What protects the account now
+    is the arithmetic: 0.02 lots would risk $38.80, above the $30 ceiling, so
+    the size is fitted down to 0.01 and the copy happens at $19.38 of risk.
+    """
     result = evaluate_message(
         message(SELL_LADDER), instrument=INSTRUMENT,
         risk=fixed_risk(lots=0.02, ceiling=30.0),
         quote=MarketQuote(3860.62, 3860.85, NOW),
     )
 
-    assert result.status == "blocked"
-    assert "first target" in result.reason
-    assert "3863" in result.reason
-    assert result.order_intent is None
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == pytest.approx(0.01)
+    assert result.order_intent["estimated_stop_risk_before_slippage_and_fees"] == pytest.approx(19.38)
 
 
-def test_a_buy_already_through_its_first_target_is_refused():
+def test_a_buy_already_through_its_first_target_copies_anyway():
+    """3875.4 is 0.4 points past TP1 3875 - barely late, and it still trades.
+
+    A buy past TP1 has the same rule as a sell: the gate is gone, the budget
+    decides. Here the stop is 15.4 points, so 0.02 lots risks $30.80 - a hair
+    over the ceiling - and the size is fitted down to 0.01.
+    """
     result = evaluate_message(
         message(BUY_LADDER), instrument=INSTRUMENT,
         risk=fixed_risk(lots=0.02, ceiling=30.0),
         quote=MarketQuote(3875.3, 3875.5, NOW),
     )
 
-    assert result.status == "blocked"
-    assert "first target" in result.reason
-    assert "3875" in result.reason
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == pytest.approx(0.01)
 
 
 def test_a_buy_short_of_its_first_target_still_trades():
@@ -692,30 +706,39 @@ def test_a_stop_too_wide_for_the_minimum_lot_is_still_refused():
     assert result.order_intent is None
 
 
-def test_a_sell_already_through_its_first_target_is_refused():
-    """3860.62 is below TP1 3863: the move already happened, do not chase it."""
+def test_a_sell_already_through_its_first_target_copies_smaller():
+    """3860.62 is 2.4 points past TP1 3863, so the stop is 19.4 points wide.
+
+    The first-target gate is gone (2026-11-17). What protects the account now
+    is the arithmetic: 0.02 lots would risk $38.80, above the $30 ceiling, so
+    the size is fitted down to 0.01 and the copy happens at $19.38 of risk.
+    """
     result = evaluate_message(
         message(SELL_LADDER), instrument=INSTRUMENT,
         risk=fixed_risk(lots=0.02, ceiling=30.0),
         quote=MarketQuote(3860.62, 3860.85, NOW),
     )
 
-    assert result.status == "blocked"
-    assert "first target" in result.reason
-    assert "3863" in result.reason
-    assert result.order_intent is None
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == pytest.approx(0.01)
+    assert result.order_intent["estimated_stop_risk_before_slippage_and_fees"] == pytest.approx(19.38)
 
 
-def test_a_buy_already_through_its_first_target_is_refused():
+def test_a_buy_already_through_its_first_target_copies_anyway():
+    """3875.4 is 0.4 points past TP1 3875 - barely late, and it still trades.
+
+    A buy past TP1 has the same rule as a sell: the gate is gone, the budget
+    decides. Here the stop is 15.4 points, so 0.02 lots risks $30.80 - a hair
+    over the ceiling - and the size is fitted down to 0.01.
+    """
     result = evaluate_message(
         message(BUY_LADDER), instrument=INSTRUMENT,
         risk=fixed_risk(lots=0.02, ceiling=30.0),
         quote=MarketQuote(3875.3, 3875.5, NOW),
     )
 
-    assert result.status == "blocked"
-    assert "first target" in result.reason
-    assert "3875" in result.reason
+    assert result.status == "paper_intent"
+    assert result.order_intent["size_lots"] == pytest.approx(0.01)
 
 
 def test_a_buy_short_of_its_first_target_still_trades():

@@ -143,9 +143,9 @@ def test_a_broker_rejection_is_not_transient():
 
 def test_a_throttled_read_is_repeated_and_still_answers():
     client = Client()
-    client.position_failures = 2
+    client.position_failures = 1
     assert gateway(client).positions() == []
-    assert client.position_calls == 3
+    assert client.position_calls == 2
 
 
 def test_a_read_that_never_answers_raises_and_says_so():
@@ -223,3 +223,65 @@ def test_a_broker_rejection_is_returned_without_a_retry():
     assert ack.accepted is False
     assert len(client.created) == 1
     assert "insufficient margin" in ack.detail
+
+
+# ---------------------------------------------------------------------------
+# the edge breaker
+# ---------------------------------------------------------------------------
+
+
+def test_a_burst_of_refusals_opens_the_breaker():
+    """One read failing twice is eight refused requests. Stop hammering.
+
+    The breaker counts attempts, not calls, because the SDK repeats every
+    request up to four times internally: two attempts here are eight HTTP
+    calls the edge has already refused. That is a firewall, not bad luck.
+    """
+    client = Client()
+    client.position_failures = 99
+    gw = gateway(client)
+    with pytest.raises(BrokerError):
+        gw.positions()
+    assert client.position_calls == 2        # READ_ATTEMPTS, then it stopped
+
+    # The next read is refused locally, without touching the broker at all.
+    with pytest.raises(BrokerError) as caught:
+        gw.positions()
+    assert client.position_calls == 2
+    assert "backing off" in str(caught.value)
+
+
+def test_a_success_closes_the_breaker_again():
+    client = Client()
+    client.position_failures = 1             # one refusal is a streak of one
+    gw = gateway(client)
+    assert gw.positions() == []              # streak reset by the success
+    client.position_failures = 1
+    assert gw.positions() == []
+    client.position_failures = 0
+    assert gw.positions() == []
+
+
+def test_a_business_rejection_does_not_trip_the_breaker():
+    """The broker saying no is an answer. Only the edge opens the breaker."""
+    client = Client()
+    client.get_account_state = lambda: {"projectedBalance": 0}   # unusable, not transient
+    gw = gateway(client)
+    assert gw.equity() == 0.0
+    # Still callable: nothing about the edge was ever refused.
+    client.get_account_state = lambda: {"projectedBalance": 5_000.0}
+    assert gw.equity() == pytest.approx(5_000.0)
+
+
+def test_an_order_is_refused_locally_while_the_breaker_is_open():
+    """A signal arriving into an open breaker is refused, not sent into noise."""
+    client = Client()
+    client.position_failures = 99
+    gw = gateway(client)
+    with pytest.raises(BrokerError):
+        gw.positions()
+    ack = gw.place_market(qty=0.02, side="buy", stop_loss=3845.0,
+                          take_profit=3870.0, strategy_id="RADE-abc")
+    assert ack.accepted is False
+    assert "backing off" in ack.detail
+    assert len(client.created) == 0

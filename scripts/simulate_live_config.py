@@ -381,13 +381,16 @@ def failure_modes(tmp: Path) -> None:
     case("quote provider raised", expect="blocked", result=result,
          outcome=outcome, expect_placed=False)
 
-    # 7. the market already passed the first target but not the last
+    # 7. the market already passed the first target but not the last. The
+    # first-target gate is gone (2026-11-17): this copy happens, and the
+    # budget is what bounds it. The stop is 18 points from the market, so
+    # 0.02 lots would risk $36 and the size is fitted down to 0.01.
     world = World(tmp / "past_tp1")
     result, outcome = world.deliver(sell_call(3866, 3876, 3860, 3855),
                                     market=quote(3858))
-    case("market already past TP1", expect="blocked", result=result,
-         outcome=outcome, expect_placed=False,
-         note="the move this signal was for has happened")
+    case("market already past TP1", expect="paper_intent", result=result,
+         outcome=outcome, expect_lots=0.01, expect_placed=True,
+         note="the gate is gone; the $30 ceiling sizes it to 0.01")
 
     # 8. the market is beyond the final target
     world = World(tmp / "past_final")

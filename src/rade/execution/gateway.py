@@ -82,10 +82,21 @@ TRANSIENT_MARKERS = (
     "504",
 )
 
-#: Attempts for a *read*. Cheap, idempotent, and a stale read is what makes a
-#: signal look untradeable.
-READ_ATTEMPTS = 4
+#: Attempts for a *read*. The SDK already repeats every request up to four
+#: times a second apart when the transport complains, so a large number here
+#: stacks on top of that: one logical read becoming sixteen HTTP calls is how
+#: a throttled edge is turned into a banned one.
+READ_ATTEMPTS = 2
 READ_BACKOFF_S = 0.8
+
+#: How many consecutive edge refusals open the breaker, and how long it stays
+#: open. This is what stops a burst of signal copies - three arrived at
+#: 13:11 today - from hammering a firewall that is refusing us anyway. Each
+#: further refusal while it is open extends the cooldown, so a persistent
+#: block backs off further without ever becoming permanent.
+EDGE_BREAKER_AFTER = 2
+EDGE_COOLDOWN_S = 60.0
+EDGE_COOLDOWN_CAP = 5
 
 
 def is_transient(exc: BaseException | str) -> bool:
@@ -198,6 +209,11 @@ class TradeLockerGateway:
             getattr(client, "account_id", 0) or 0)
         self.log = log
         self._spec: BrokerSpec | None = None
+        #: The edge breaker. A streak of consecutive refusals from the broker's
+        #: gateway, and the moment it opened. ``time.monotonic()`` because a
+        #: wall clock that jumps backwards must not extend a block.
+        self._edge_streak = 0
+        self._edge_open_until = 0.0
         #: Values that must never survive into an error message. Populated by
         #: the factory from the credentials it used; empty means the scrubber
         #: can only catch ``key=value`` shapes, not a bare secret in a URL.
@@ -211,6 +227,34 @@ class TradeLockerGateway:
     def _fail(self, exc: Exception, what: str) -> BrokerError:
         return BrokerError(f"{what} failed: {self._scrub(f'{type(exc).__name__}: {exc}')}")
 
+    # -- the edge breaker -------------------------------------------------
+
+    def _edge_guard(self) -> None:
+        """Refuse to call the broker while the breaker is open.
+
+        A firewall that is refusing us does not stop refusing because we asked
+        again. Waiting is not lost time: during a burst of signal copies it is
+        the difference between one clean refusal and a dozen more requests that
+        make the block last longer.
+        """
+        remaining = self._edge_open_until - time.monotonic()
+        if remaining > 0:
+            raise BrokerError(
+                f"the broker's gateway has refused {self._edge_streak} consecutive "
+                f"requests; backing off for {remaining:.0f}s before trying again")
+
+    def _edge_ok(self) -> None:
+        self._edge_streak = 0
+        self._edge_open_until = 0.0
+
+    def _edge_fail(self) -> None:
+        self._edge_streak += 1
+        if self._edge_streak >= EDGE_BREAKER_AFTER:
+            cooldown = EDGE_COOLDOWN_S * min(self._edge_streak - 1, EDGE_COOLDOWN_CAP)
+            self._edge_open_until = time.monotonic() + cooldown
+            self.log(f"broker gateway refused {self._edge_streak} consecutive "
+                     f"requests; backing off for {cooldown:.0f}s")
+
     def _read(self, call: Callable[[], Any], what: str) -> Any:
         """Run an idempotent read, repeating it through a throttled edge.
 
@@ -219,15 +263,22 @@ class TradeLockerGateway:
         equity that could not be read becomes a refused signal - which is
         indistinguishable, on the dashboard, from a signal that was wrong.
         """
+        self._edge_guard()
         last: Exception | None = None
         for attempt in range(1, READ_ATTEMPTS + 1):
             try:
-                return call()
+                result = call()
             except Exception as exc:
                 last = exc
-                if not is_transient(exc) or attempt == READ_ATTEMPTS:
+                if not is_transient(exc):
+                    break
+                self._edge_fail()
+                if attempt == READ_ATTEMPTS:
                     break
                 time.sleep(READ_BACKOFF_S * attempt)
+            else:
+                self._edge_ok()
+                return result
         assert last is not None
         raise self._fail(last, what) from last
 
@@ -503,6 +554,16 @@ class TradeLockerGateway:
             "takeProfitType": "absolute",
             "strategyId": strategy_id,
         }
+        # Checked after the request is built, so a blocked gateway comes back
+        # as an unanswered order rather than an exception: an order sent into a
+        # refusing edge is not refused by a risk limit and not refused by the
+        # broker's engine. It is noise, and noise is what turns a temporary
+        # block into a permanent one.
+        try:
+            self._edge_guard()
+        except BrokerError as exc:
+            return OrderAck(accepted=False, order_id=None,
+                            detail=self._scrub(str(exc)), request=request)
         try:
             order_id = self.client.create_order(
                 instrument_id=spec.instrument_id,
@@ -521,6 +582,7 @@ class TradeLockerGateway:
             if not is_transient(exc):
                 return OrderAck(accepted=False, order_id=None, detail=detail,
                                 request=request)
+            self._edge_fail()
             # The edge refused the *response*. It may or may not have refused
             # the *order*, so ask before sending again: look for our strategy
             # id on the broker. Only a definite "nothing there" permits a
@@ -561,6 +623,7 @@ class TradeLockerGateway:
         if order_id is None:
             return OrderAck(accepted=False, order_id=None,
                             detail="the broker returned no order id", request=request)
+        self._edge_ok()
         return OrderAck(accepted=True, order_id=int(order_id),
                         detail="accepted", request=request)
 
