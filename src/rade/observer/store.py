@@ -29,6 +29,7 @@ from rade.observer.mirror_pipeline import (
     MessageEnvelope,
     PipelineResult,
     SQLiteIntentLedger,
+    _summarise_revisions,
     as_utc,
     text_hash,
 )
@@ -179,7 +180,12 @@ class SupabaseLedger:
         return 0
 
     def previous_revision(self, channel: str, message_id: int) -> dict[str, Any] | None:
-        """Status and parsed signal of the highest revision already stored.
+        """Every revision already stored for a message, reduced to a summary.
+
+        All of them, not just the newest. A tick mark files a revision as
+        ``duplicate``, which opened nothing; asking only the newest would report
+        "nothing is open" for a message whose first revision bought, and the
+        next edit would buy again on top of a live position.
 
         A failed read raises rather than returning ``None``. The caller has to
         tell "nothing was ever stored, so nothing is at risk" apart from "the
@@ -191,17 +197,20 @@ class SupabaseLedger:
             params={
                 "channel": f"eq.{channel}",
                 "message_id": f"eq.{message_id}",
-                "select": "status,signal_json",
+                "select": "revision,status,signal_json",
                 "order": "revision.desc",
-                "limit": "1",
+                "limit": "100",
             },
         )
         if not isinstance(body, list) or not body:
             return None
-        row = body[0] or {}
-        signal = row.get("signal_json")
-        return {"status": row.get("status"),
-                "signal": signal if isinstance(signal, dict) else {}}
+        rows = []
+        for row in body:
+            row = row or {}
+            signal = row.get("signal_json")
+            rows.append({"status": row.get("status"),
+                         "signal": signal if isinstance(signal, dict) else {}})
+        return _summarise_revisions(rows)
 
     def stored_text_hash(self, channel: str, message_id: int) -> str | None:
         _, body = self.transport.request(

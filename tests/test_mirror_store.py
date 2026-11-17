@@ -84,6 +84,21 @@ class FakePostgrest:
                 revs = [r["revision"] for r in self.events.values()
                         if r["channel"] == channel and r["message_id"] == mid]
                 return 200, [{"revision": max(revs)}] if revs else []
+            if params.get("select") == "revision,status,signal_json":
+                # Every revision of one message, newest first. Without this the
+                # call fell through to the unfiltered branch below and answered
+                # with unrelated events, which would make a passing test mean
+                # nothing.
+                channel = params["channel"].split("eq.", 1)[1]
+                mid = int(params["message_id"].split("eq.", 1)[1])
+                rows = sorted(
+                    (r for r in self.events.values()
+                     if r["channel"] == channel and r["message_id"] == mid),
+                    key=lambda r: r["revision"], reverse=True)
+                limit = int(params.get("limit", 50))
+                return 200, [{"revision": r["revision"], "status": r["status"],
+                              "signal_json": r.get("signal_json")}
+                             for r in rows[:limit]]
             if params.get("select") == "text_sha256":
                 channel = params["channel"].split("eq.", 1)[1]
                 mid = int(params["message_id"].split("eq.", 1)[1])
@@ -209,6 +224,65 @@ def test_supabase_claim_detects_a_changed_body_as_conflict():
     assert ledger.claim(envelope(VALID.replace("Sl : 3925", "Sl : 3920")), tampered) == CLAIM_CONFLICT
     # the stored body is untouched
     assert "3925" in next(iter(fake.events.values()))["raw_text"]
+
+
+# --------------------------------------------------------------------------
+# the ledger read the edit rule depends on
+# --------------------------------------------------------------------------
+
+def test_supabase_previous_revision_is_none_before_anything_is_stored():
+    ledger = SupabaseLedger(FakePostgrest())
+    assert ledger.previous_revision("@source", 100) is None
+
+
+def store_revision(fake, *, revision, status, mid=100, signal=None):
+    """Put one revision straight into the fake, with the status under test."""
+    fake.events[f"k{mid}-{revision}"] = {
+        "event_key": f"k{mid}-{revision}",
+        "channel": "@source",
+        "message_id": mid,
+        "revision": revision,
+        "status": status,
+        "signal_json": signal or {"side": "sell", "published_entry": 3915},
+        "received_at": f"2026-11-12T12:00:{revision:02d}+00:00",
+        "text_sha256": "x",
+    }
+
+
+def test_supabase_previous_revision_sees_a_position_opened_by_an_earlier_revision():
+    """rev 0 bought, rev 1 is a tick mark filed as duplicate.
+
+    The newest revision opened nothing. Reading only it would report "nothing is
+    open" and let rev 2 buy on top of a live position, so the summary has to
+    report the earlier intent and compare against it.
+    """
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    store_revision(fake, revision=0, status="paper_intent")
+    store_revision(fake, revision=1, status="duplicate")
+
+    previous = ledger.previous_revision("@source", 100)
+
+    assert previous["status"] == "duplicate"      # the newest revision
+    assert previous["opened"] is True             # but an earlier one bought
+    assert previous["revisions"] == 2
+    assert previous["signal"]["published_entry"] == 3915
+
+
+def test_supabase_previous_revision_reports_nothing_open_when_all_were_declined():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    store_revision(fake, revision=0, status="blocked")
+
+    assert ledger.previous_revision("@source", 100)["opened"] is False
+
+
+def test_supabase_previous_revision_ignores_another_message():
+    fake = FakePostgrest()
+    ledger = SupabaseLedger(fake)
+    store_revision(fake, revision=0, status="paper_intent", mid=100)
+
+    assert ledger.previous_revision("@source", 200) is None
 
 
 def test_supabase_revision_and_counts():

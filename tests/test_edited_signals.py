@@ -254,3 +254,37 @@ def test_previous_revision_returns_the_status_and_the_parsed_signal(tmp_path):
     assert previous["signal"]["side"] == "sell"
     assert previous["signal"]["published_entry"] == 3915
     assert previous["signal"]["stop_loss"] == 3925
+
+
+# --------------------------------------------------------------------------
+# a third revision must not lose sight of the first one
+# --------------------------------------------------------------------------
+
+
+def test_a_second_cosmetic_edit_cannot_place_a_second_order(tmp_path):
+    """rev 1 is `duplicate`, which did not open anything - but rev 0 did.
+
+    Asking only the highest revision "did this open a position?" answers about
+    rev 1 and forgets rev 0, so rev 2 reads as a fresh signal and buys again.
+    """
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    accepted(ledger)
+    assert run(ledger, SELL_TICKED, revision=1).status == "duplicate"
+
+    second = run(ledger, SELL_TICKED + "\n\nnow live", revision=2)
+
+    assert second.status == "duplicate"
+    assert second.order_intent is None
+
+
+def test_an_edit_after_a_reviewed_amendment_cannot_open_a_second_position(tmp_path):
+    """The amendment went to review, so it opened nothing - rev 0 still did."""
+    ledger = SQLiteIntentLedger(tmp_path / "l.sqlite")
+    accepted(ledger)
+    amended = SELL.replace("Sl : 3925", "Sl : 3930")
+    assert run(ledger, amended, revision=1).status == "manual_review"
+
+    later = run(ledger, amended + "\n", revision=2)
+
+    assert later.status == "manual_review"
+    assert later.order_intent is None

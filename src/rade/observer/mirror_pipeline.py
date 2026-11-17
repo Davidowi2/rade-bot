@@ -468,8 +468,32 @@ def _result(key: str, status: str, reason: str,
 TRADE_DEFINING_FIELDS = ("direction", "entry_price", "stop_loss", "take_profits")
 
 
+def _summarise_revisions(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Reduce every stored revision of one message to what the rule needs.
+
+    The question is "is there a position open for this message", and it is not
+    answered by the highest revision alone. A tick mark files revision 1 as
+    ``duplicate``, which opened nothing - so a third revision that looked only
+    at revision 1 would conclude nothing was ever opened and buy again, on top
+    of a live position. One revision can open a position and the next can
+    decline to; the answer has to be "any of them", not "the last one".
+
+    ``rows`` must be ordered newest first.
+    """
+    if not rows:
+        return None
+    opening = [r for r in rows if r.get("status") == STATUS_PAPER_INTENT]
+    # Compare against what is actually live: the newest intent. Falls back to
+    # the newest revision when nothing opened, purely so the caller can log it.
+    reference = opening[0] if opening else rows[0]
+    return {"status": rows[0].get("status"),
+            "signal": reference.get("signal") or {},
+            "opened": bool(opening),
+            "revisions": len(rows)}
+
+
 def earlier_revision_opened_a_position(previous: dict[str, Any] | None) -> bool | None:
-    """Did the earlier revision put money at risk? ``None`` means unknown.
+    """Did any earlier revision put money at risk? ``None`` means unknown.
 
     Only an intent can have opened a position. Every other disposition -
     blocked, stale, ignored, duplicate, review - means the pipeline declined to
@@ -477,14 +501,15 @@ def earlier_revision_opened_a_position(previous: dict[str, Any] | None) -> bool 
 
     ``None`` is a third answer on purpose. "I could not read the earlier
     revision" is not "there is nothing to protect", and collapsing the two is
-    how a fail-open guard gets written by accident.
+    how a fail-open guard gets written by accident. A summary that does not say
+    is treated the same as one that could not be read.
     """
     if not previous:
         return None
-    status = previous.get("status")
-    if not status:
+    opened = previous.get("opened")
+    if opened is None:
         return None
-    return status == STATUS_PAPER_INTENT
+    return bool(opened)
 
 
 def _same_price(a: Any, b: Any) -> bool:
@@ -948,7 +973,13 @@ class Ledger(Protocol):
         ...
 
     def previous_revision(self, channel: str, message_id: int) -> dict[str, Any] | None:
-        """Status and parsed signal of the highest revision already stored.
+        """Summary of every revision already stored for a message.
+
+        Returns ``{"status", "signal", "opened", "revisions"}``: the newest
+        status, the signal of the newest revision that opened a position (or the
+        newest revision if none did), and whether *any* revision opened one.
+        ``opened`` is the field the rule reads - a later revision must not be
+        able to erase the fact that an earlier one bought.
 
         ``None`` means there is no earlier revision. A read that fails must
         raise rather than return ``None``: the caller needs to tell "nothing to
@@ -1176,18 +1207,20 @@ class SQLiteIntentLedger:
 
     def previous_revision(self, channel: str, message_id: int) -> dict[str, Any] | None:
         with self._connect() as con:
-            row = con.execute(
-                "SELECT status, signal_json FROM mirror_events"
-                " WHERE channel=? AND message_id=? ORDER BY revision DESC LIMIT 1",
+            rows = con.execute(
+                "SELECT revision, status, signal_json FROM mirror_events"
+                " WHERE channel=? AND message_id=? ORDER BY revision DESC LIMIT 100",
                 (channel, message_id),
-            ).fetchone()
-        if row is None:
-            return None
-        try:
-            signal = json.loads(row[1]) if row[1] else {}
-        except (TypeError, ValueError):
-            signal = {}
-        return {"status": row[0], "signal": signal if isinstance(signal, dict) else {}}
+            ).fetchall()
+        parsed = []
+        for _revision, status, signal_json in rows:
+            try:
+                signal = json.loads(signal_json) if signal_json else {}
+            except (TypeError, ValueError):
+                signal = {}
+            parsed.append({"status": status,
+                           "signal": signal if isinstance(signal, dict) else {}})
+        return _summarise_revisions(parsed)
 
     def stored_text_hash(self, channel: str, message_id: int) -> str | None:
         with self._connect() as con:
