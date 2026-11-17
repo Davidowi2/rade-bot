@@ -29,7 +29,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -1011,6 +1011,21 @@ class Ledger(Protocol):
         """
         ...
 
+    def hash_seen_recently(self, channel: str, digest: str, window_s: float,
+                           now: datetime) -> dict[str, Any] | None:
+        """The most recent event with identical text, inside ``window_s``.
+
+        The channel posts one call two or three times under different message
+        ids. Each copy was costing a full set of broker reads - quote, equity,
+        sometimes more - before anything noticed the text was the same, and a
+        burst of copies is exactly the shape of traffic that gets an edge to
+        start refusing. Answering this from storage is cheap; answering it
+        with broker calls is not.
+
+        Returns ``{"message_id", "status", "received_at"}`` or ``None``.
+        """
+        ...
+
     def counts(self) -> dict[str, int]:
         ...
 
@@ -1245,6 +1260,23 @@ class SQLiteIntentLedger:
                 (channel, message_id),
             ).fetchone()
         return row[0] if row and row[0] else None
+
+    def hash_seen_recently(self, channel: str, digest: str, window_s: float,
+                           now: datetime) -> dict[str, Any] | None:
+        if window_s <= 0 or not digest:
+            return None
+        cutoff = (as_utc(now) - timedelta(seconds=window_s)).isoformat()
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT message_id, status, received_at FROM mirror_events"
+                " WHERE channel=? AND text_sha256=? AND revision=0 AND received_at >= ?"
+                " ORDER BY received_at DESC LIMIT 1",
+                (channel, digest, cutoff),
+            ).fetchone()
+        if not row:
+            return None
+        return {"message_id": int(row[0]), "status": str(row[1]),
+                "received_at": row[2]}
 
     def last_message_id(self) -> int:
         """Highest message id ever stored. The restart cursor, from the store."""
@@ -1615,6 +1647,7 @@ def process_once(
     quote: MarketQuote | None = None,
     quote_error: str | None = None,
     now: datetime | None = None,
+    duplicate_window_s: float = 900.0,
 ) -> PipelineResult:
     """Evaluate a message and record it exactly once."""
     # Only a later revision needs the earlier one. Reading it on every message
@@ -1628,9 +1661,43 @@ def process_once(
             # Unknown is not absent. Leaving it None sends the edit to a human
             # rather than assuming the earlier revision opened nothing.
             previous = None
-    result = evaluate_message(message, instrument=instrument, risk=risk,
-                              quote=quote, quote_error=quote_error, now=now,
-                              previous=previous)
+
+    # A repeated call is answered from storage before the broker is asked for
+    # anything. The channel posts one idea two or three times under different
+    # message ids, and every copy used to buy a fresh quote and a fresh equity
+    # before anything noticed the text was the same - a burst of copies was a
+    # burst of requests, which is the shape of traffic that gets an edge to
+    # refuse us. The event is still claimed below, so the dashboard shows it
+    # and the cursor advances; only the broker round-trips are skipped.
+    repeated: dict[str, Any] | None = None
+    if message.revision == 0:
+        try:
+            repeated = ledger.hash_seen_recently(
+                message.channel, text_hash(message.text),
+                duplicate_window_s, now or datetime.now(timezone.utc))
+        except Exception:
+            # An unreadable store must not become a silent full evaluation;
+            # but it must not block the signal either. Fall through and let
+            # the normal path (and the engine's own duplicate check) decide.
+            repeated = None
+
+    if repeated is not None:
+        age = (as_utc(now or datetime.now(timezone.utc))
+               - as_utc(datetime.fromisoformat(repeated["received_at"]))
+               ).total_seconds()
+        result = PipelineResult(
+            event_key(message), STATUS_DUPLICATE,
+            (f"identical to message {repeated['message_id']} recorded "
+             f"{format_age(age)} ago; not re-evaluated, so no broker reads "
+             "were spent on it"),
+            None, None,
+            f"Repeated call, identical to message {repeated['message_id']}.",
+            duplicate=True,
+        )
+    else:
+        result = evaluate_message(message, instrument=instrument, risk=risk,
+                                  quote=quote, quote_error=quote_error, now=now,
+                                  previous=previous)
     outcome = ledger.claim(message, result)
 
     if outcome == CLAIM_INSERTED:

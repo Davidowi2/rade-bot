@@ -627,6 +627,9 @@ class _FakeClient:
     def get_trade_accounts(self):
         return self._accounts
 
+    def get_quotes(self, instrument_id):
+        return {"bp": 3915.0, "ap": 3915.2}
+
     def get_latest_bid_price(self, instrument_id):
         return 3915.0
 

@@ -16,7 +16,7 @@ browser. The transport's ``repr`` deliberately omits headers so that a stray
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import requests
@@ -225,6 +225,36 @@ class SupabaseLedger:
         )
         if isinstance(body, list) and body:
             return body[0].get("text_sha256")
+        return None
+
+    def hash_seen_recently(self, channel: str, digest: str, window_s: float,
+                           now: datetime) -> dict | None:
+        """The most recent event with identical text, inside the window.
+
+        Storage answers this; the broker does not have to. See the ledger
+        protocol for why the repeated copies of one call must never each buy
+        their own quote and equity.
+        """
+        if window_s <= 0 or not digest:
+            return None
+        cutoff = (as_utc(now) - timedelta(seconds=window_s)).isoformat()
+        _, body = self.transport.request(
+            "GET", TABLE,
+            params={
+                "channel": f"eq.{channel}",
+                "text_sha256": f"eq.{digest}",
+                "revision": "eq.0",
+                "received_at": f"gte.{cutoff}",
+                "select": "message_id,status,received_at",
+                "order": "received_at.desc",
+                "limit": "1",
+            },
+        )
+        if isinstance(body, list) and body:
+            row = body[0]
+            return {"message_id": int(row.get("message_id", 0)),
+                    "status": str(row.get("status") or ""),
+                    "received_at": str(row.get("received_at") or "")}
         return None
 
     def last_message_id(self) -> int:

@@ -37,7 +37,6 @@ from rade.execution.broker import (
     BrokerRefused,
     BrokerSpec,
     OrderAck,
-    read_book,
 )
 
 __all__ = [
@@ -449,18 +448,25 @@ class TradeLockerGateway:
         return 0.0
 
     def quote(self) -> BrokerQuote:
+        """Both sides of the book, from one response.
+
+        The SDK's ``get_latest_bid_price`` and ``get_latest_asking_price`` each
+        call the same ``/trade/quotes`` endpoint and pick a different field out
+        of the same answer. Reading them separately was two identical requests
+        for one piece of information, and worse, the market could move between
+        them - which is exactly what a crossed book (bid above ask) is, and it
+        blocked a real signal at 10:11 on 2026-11-17. One response cannot
+        disagree with itself.
+        """
         spec = self.spec()
-        # The two sides are separate requests; read_book re-reads once if the
-        # gap between them produced a crossed book that never existed. Each
-        # side is itself retried through a throttled edge, because a refused
-        # read here becomes a refused signal downstream.
-        bid, ask = self._read(
-            lambda: read_book(
-                lambda: self.client.get_latest_bid_price(spec.instrument_id),
-                lambda: self.client.get_latest_asking_price(spec.instrument_id),
-            ),
-            "reading the quote",
-        )
+        quotes = self._read(lambda: self.client.get_quotes(spec.instrument_id),
+                            "reading the quote")
+        bid = _as_float((quotes or {}).get("bp"))
+        ask = _as_float((quotes or {}).get("ap"))
+        if bid is None or ask is None or bid <= 0 or ask <= 0:
+            raise BrokerError(
+                f"the broker's quote came back without both sides "
+                f"(bid {bid!r}, ask {ask!r}); no price can be trusted from it")
         return BrokerQuote(bid=bid, ask=ask, quoted_at=datetime.now(timezone.utc))
 
     def positions(self) -> list[BrokerPosition]:

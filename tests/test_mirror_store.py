@@ -107,6 +107,19 @@ class FakePostgrest:
                      if r["channel"] == channel and r["message_id"] == mid),
                     key=lambda r: r["revision"], reverse=True)
                 return 200, [{"text_sha256": rows[0]["text_sha256"]}] if rows else []
+            if params.get("select") == "message_id,status,received_at":
+                # The repeated-call lookup: same channel, same text hash, same
+                # revision, received inside the window. The fake answers from
+                # what it holds, applying each filter the adapter sent.
+                channel = params["channel"].split("eq.", 1)[1]
+                digest = params["text_sha256"].split("eq.", 1)[1]
+                cutoff = params["received_at"].split("gte.", 1)[1]
+                rows = [r for r in self.events.values()
+                        if r["channel"] == channel and r.get("text_sha256") == digest
+                        and r.get("revision") == 0 and r.get("received_at", "") >= cutoff]
+                rows.sort(key=lambda r: r["received_at"], reverse=True)
+                return 200, [{"message_id": r["message_id"], "status": r["status"],
+                              "received_at": r["received_at"]} for r in rows[:1]]
             if params.get("select") == "status":
                 return 200, [{"status": r["status"]} for r in self.events.values()]
             rows = sorted(self.events.values(), key=lambda r: r["received_at"], reverse=True)

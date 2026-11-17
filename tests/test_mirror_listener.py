@@ -28,6 +28,8 @@ NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
 INSTRUMENT = InstrumentSpec("XAUUSD", 100, 0.01, 0.01, 50, units_confirmed=True)
 RISK = RiskConfig(10_000, 0.005, 2.0)
 SELL = "XAUUSD SELL NOW 3915\nSl : 3925\nTp : 3910\nTp : 3905\nTp : 3900"
+BUY = "XAUUSD BUY NOW 3915\nSl : 3905\nTp : 3920\nTp : 3925\nTp : 3930"
+SELL2 = "XAUUSD SELL NOW 3916\nSl : 3926\nTp : 3911\nTp : 3906\nTp : 3901"
 
 
 def msg(mid=100, text=SELL, *, at=None, edited=None):
@@ -298,7 +300,7 @@ def test_a_failing_poll_does_not_stop_the_listener(tmp_path):
 
 
 def test_gap_fill_processes_every_message_after_the_cursor(tmp_path):
-    runtime = _runtime(tmp_path, [msg(1), msg(2), msg(3)])
+    runtime = _runtime(tmp_path, [msg(1, text=SELL), msg(2, text=BUY), msg(3, text=SELL2)])
     seen = asyncio.run(runtime.gap_fill())
     assert seen == [1, 2, 3]
     assert runtime.events == 3
@@ -339,7 +341,7 @@ def test_a_message_that_fails_mid_batch_is_retried_not_dropped(tmp_path):
         log=lambda *_: None,
     )
     state_path = tmp_path / "state.json"
-    runtime = Runtime(client=ReverseClient([msg(1), msg(2), msg(3)]),
+    runtime = Runtime(client=ReverseClient([msg(1, text=SELL), msg(2, text=BUY), msg(3, text=SELL2)]),
                       listener=listener, channel="@source",
                       heartbeat_path=tmp_path / "beat.json", log=lambda *_: None)
 
@@ -377,10 +379,10 @@ def test_gap_fill_starts_from_the_persisted_cursor(tmp_path):
 
 
 def test_reconnect_fills_the_gap_it_could_have_missed(tmp_path):
-    runtime = _runtime(tmp_path, [msg(1)])
+    runtime = _runtime(tmp_path, [msg(1, text=SELL)])
     asyncio.run(runtime.connect())
     asyncio.run(runtime.gap_fill())
-    runtime.client.messages.append(msg(2))       # arrives while disconnected
+    runtime.client.messages.append(msg(2, text=BUY))   # arrives while disconnected
     asyncio.run(runtime.reconnect())
     assert runtime.reconnects == 1
     assert runtime.listener.ledger.counts() == {"paper_intent": 2}
