@@ -226,11 +226,15 @@ services:
       # rather than a filter that fires on noise.
       - key: MIRROR_MAX_SPREAD
         value: "1.0"
-      # Slippage: price units from the published entry, over the 15 s catch-up
-      # poll. Updated 2026-11-16 from 2.0 to 3.0 to account for 15s polling
-      # plus 3s channel edit window. Measured p95=1.87, p99=2.54 points.
-      - key: MIRROR_MAX_SLIPPAGE          # price units from the published entry
-        value: "3.0"
+      # Slippage is OFF. It compared the market to the published entry and
+      # refused the signal when the two had drifted apart - but the order is now
+      # sized from the price it will actually get, so a drifted entry produces a
+      # smaller position at the same dollar risk rather than a false risk
+      # figure. Keeping it meant refusing trades the budget could afford. The
+      # one case it caught, an entry past the first target, is refused directly
+      # by the pipeline's own rule. Set a positive value here to bring it back.
+      - key: MIRROR_MAX_SLIPPAGE          # price units; 0 = off
+        value: "0"
       # The channel re-posts the same call as a second message with its own id,
       # and the id-based uniqueness constraint cannot see that they are one
       # idea. An identical text inside this window is copied once. 0 disables

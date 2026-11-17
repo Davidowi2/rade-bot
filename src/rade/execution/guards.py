@@ -39,13 +39,32 @@ class RiskLimits:
 
     # These defaults are deliberately the *tight* values, not permissive ones.
     # An unset environment variable must not silently widen a limit: the
-    # measured values are spread 1.0 (the broker quotes 0.31), slippage 2.0,
-    # drawdown 3.35% (the challenge's 6% floor) and one position at a time.
+    # measured values are spread 1.0 (the broker quotes 0.31), drawdown 3.35%
+    # (the challenge's 6% floor) and one position at a time.
+    #
+    # ``max_slippage`` is OFF, and that is a decision rather than an oversight.
+    #
+    # The guard compared the market to the *published* entry and refused the
+    # signal when the two had drifted apart, on the grounds that "the published
+    # risk geometry no longer applies". That premise is no longer true: the
+    # order is sized from the price it will actually get, so a drifted entry
+    # produces a smaller position with the same dollar risk. The geometry does
+    # still apply - at a size that fits it. Keeping the guard meant refusing
+    # trades the budget could easily afford, which is the complaint that led
+    # here.
+    #
+    # The one thing it used to catch - an entry past the first target, where the
+    # move has already happened - is now refused directly in the pipeline by a
+    # rule about the trade rather than a distance in price units. That rule also
+    # survives a change of instrument, which a fixed 3.0 never could.
+    #
+    # Set MIRROR_MAX_SLIPPAGE to a positive number to bring it back; the code
+    # path is intact and tested.
     max_open_positions: int = 1
     daily_loss_fraction: float = 0.01
     max_drawdown_fraction: float = 0.0335
     max_spread: float = 1.0
-    max_slippage: float = 2.0
+    max_slippage: float = 0.0
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "RiskLimits":

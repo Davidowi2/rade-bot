@@ -77,7 +77,10 @@ DESIRED: dict[str, str] = {
     "MIRROR_DAILY_LOSS_FRACTION": "0.01",
     "MIRROR_MAX_DRAWDOWN_FRACTION": "0.0335",
     "MIRROR_MAX_SPREAD": "1.0",
-    "MIRROR_MAX_SLIPPAGE": "3.0",
+    # Off: the order is sized from the price it will actually get, so a drifted
+    # entry gives a smaller position at the same dollar risk instead of a
+    # refusal. The "entry past the first target" case is refused in the pipeline.
+    "MIRROR_MAX_SLIPPAGE": "0",
 }
 
 

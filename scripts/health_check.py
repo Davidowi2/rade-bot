@@ -97,10 +97,12 @@ if health_ok and status_ok:
         guards = status_data.get('guards', {})
         slippage = guards.get('max_slippage')
         if slippage:
-            if slippage >= 3.0:
-                print(f"  ✅ max_slippage: {slippage} (expected 3.0)")
-            else:
-                print(f"  ⚠️  max_slippage: {slippage} (expected 3.0)")
+            print(f"  ✅ max_slippage: {slippage}")
+        else:
+            # Off is the shipped setting, not a missing value. Printing nothing
+            # would leave the report silently one control short.
+            print("  ⚪ max_slippage: DISABLED (the order is sized from the "
+                  "price it will actually get)")
         
         intake_ready = status_data.get('intake_ready')
         print(f"  {'✅' if intake_ready else '❌'} intake_ready: {intake_ready}")

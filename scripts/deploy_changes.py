@@ -100,7 +100,7 @@ def main():
        Visit: https://rade-bot.onrender.com/api/status
        Check: max_stop_distance = 15.0 (was 12.5)
               max_trade_risk_usd = 30 (was 25)
-              max_slippage = 3.0 (was 2.0)
+              max_slippage = 0 / DISABLED (the size is fitted to the real entry)
     
     📖 Full docs: QUICK_DEPLOYMENT_GUIDE.md
     """)

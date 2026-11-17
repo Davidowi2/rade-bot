@@ -59,10 +59,27 @@ def sell(entry: float, *, stop: float | None = None,
 def test_a_clean_account_passes_every_check():
     verdict = evaluate(RiskLimits(), snapshot())
     assert verdict.allowed is True
-    assert {check["check"] for check in verdict.checks} >= {
+    reported = {check["check"] for check in verdict.checks}
+    assert reported >= {
         "pause", "equity", "max_drawdown", "daily_loss",
-        "max_open_positions", "max_spread", "max_slippage",
+        "max_open_positions", "max_spread",
     }
+
+
+def test_a_disabled_control_is_not_reported_as_a_passed_check():
+    # A check that is switched off has not been evaluated, so claiming it
+    # passed would be a lie the log then repeats every trade.
+    limits = RiskLimits()
+    assert limits.max_slippage == 0.0
+    reported = {check["check"] for check in evaluate(limits, snapshot()).checks}
+    assert "max_slippage" not in reported
+    assert "max_slippage" in limits.describe()["disabled"]
+
+    # Switch it back on and it reappears, so the absence above is the setting
+    # and not a check that was quietly deleted.
+    rearmed = {check["check"] for check in
+               evaluate(RiskLimits(max_slippage=3.0), snapshot()).checks}
+    assert "max_slippage" in rearmed
 
 
 def test_the_daily_loss_breaker_blocks_at_the_limit_and_names_the_floor():
@@ -159,13 +176,24 @@ def test_an_unset_limit_falls_back_to_the_tight_value_not_a_permissive_one():
 
     The defaults are the measured values, so a deployment that forgets to set
     ``MIRROR_MAX_SPREAD`` gets a 1.0 tripwire rather than a 5.0 hole.
+
+    Slippage is the one control that is off by default, and it has to say so:
+    ``describe()["disabled"]`` names it rather than letting a switched-off
+    control read as a passing one.
     """
     limits = RiskLimits.from_env({})
     assert limits.max_open_positions == 1
     assert limits.daily_loss_fraction == pytest.approx(0.01)
     assert limits.max_drawdown_fraction == pytest.approx(0.0335)
     assert limits.max_spread == pytest.approx(1.0)
-    assert limits.max_slippage == pytest.approx(2.0)
+    assert limits.max_slippage == pytest.approx(0.0)
+    assert limits.describe()["disabled"] == ["max_slippage"]
+
+
+def test_slippage_can_be_switched_back_on_without_a_code_change():
+    """Off by default is not removed: the path is intact and configurable."""
+    limits = RiskLimits.from_env({"MIRROR_MAX_SLIPPAGE": "3.0"})
+    assert limits.max_slippage == pytest.approx(3.0)
     assert limits.describe()["disabled"] == []
 
 
@@ -384,7 +412,9 @@ def test_the_guard_state_reports_what_is_enforced(tmp_path):
     engine, ledger, _ = engine_for(tmp_path, broker)
     engine.limits = RiskLimits(max_spread=0.0)
     described = engine.guard_state()
-    assert described["limits"]["disabled"] == ["max_spread"]
+    # Slippage ships switched off, so a guard state that named only the control
+    # this test disabled would be hiding one that is off in production.
+    assert described["limits"]["disabled"] == ["max_spread", "max_slippage"]
     assert described["limits"]["max_open_positions"] == 1
 
 
@@ -466,7 +496,9 @@ def test_the_startup_read_reports_what_the_guards_can_see(tmp_path):
     # Never written: the switch is read, not reset.
     assert report["control"]["paused"] is True
     assert report["control"]["reason"] == "reviewing by hand"
-    assert report["limits"]["disabled"] == []
+    # Slippage ships switched off, so the report names it rather than implying
+    # every control is armed.
+    assert report["limits"]["disabled"] == ["max_slippage"]
     # The dashboard reads the same report through guard_state.
     assert engine.guard_state()["preflight"] is report
 
