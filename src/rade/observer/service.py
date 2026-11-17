@@ -1161,9 +1161,21 @@ def send_startup_report(service: "MirrorService", notifier: Any, log: Any) -> No
     spec = ex.get("broker")
     if spec:
         state = "CONFIRMED" if spec.get("verified") else "UNCONFIRMED"
+        # The number the broker reported is not always resolvable: the account
+        # list carries an id and the number is filled in at login, so a failed
+        # resolution used to print as a bare "account 0" - or, worse, as
+        # whatever placeholder the SDK happened to hold, presented as fact.
+        # Say which is which, and show the pin the operator actually set.
+        number = spec.get("account_number") or 0
+        pinned = (os.getenv("MIRROR_DESTINATION_ACCOUNT_ID") or "").strip()
+        if number:
+            account = f"account {number}"
+        elif pinned:
+            account = f"account id {pinned} (number not resolved)"
+        else:
+            account = "account unknown"
         lines.append(
-            f"destination: {spec.get('environment')} "
-            f"account {spec.get('account_number') or '?'} "
+            f"destination: {spec.get('environment')} {account} "
             f"contract {spec.get('contract_units_per_lot'):g}/lot {state}")
         if not spec.get("verified") and spec.get("unconfirmed_reason"):
             lines.append(f"  not verified: {spec['unconfirmed_reason']}")

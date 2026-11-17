@@ -10,6 +10,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
+from rade.execution.broker import BrokerSpec
 from rade.observer.mirror_pipeline import (
     InstrumentSpec,
     MarketQuote,
@@ -1030,3 +1031,60 @@ def test_the_startup_report_names_the_executing_mode(tmp_path, monkeypatch):
 
     send_startup_report(service, Recorder(), lambda _line: None)
     assert "mode: EXECUTING ORDERS" in sent[0]
+
+
+def demo_spec(**overrides) -> BrokerSpec:
+    fields = dict(
+        environment="demo", base_url="https://demo.tradelocker.test",
+        account_id=2346225, account_number=0, symbol="XAUUSD",
+        instrument_id=1, trade_route_id="route-1",
+        contract_units_per_lot=100.0, lot_step=0.01, min_lot=0.01,
+        max_lot=40.0, tick_size=0.01, symbol_status="ACTIVE",
+    )
+    fields.update(overrides)
+    return BrokerSpec(**fields)
+
+
+def test_the_startup_report_does_not_present_an_unresolved_account_as_fact(
+        tmp_path, monkeypatch):
+    """The account number is filled in at login; until then it is zero.
+
+    Printing "account 0", or whatever placeholder the SDK happens to hold, as
+    though it were the destination is how a wrong account looks confirmed. The
+    report names the pin the operator set instead and says the number is not
+    resolved.
+    """
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    monkeypatch.setenv("MIRROR_DESTINATION_ACCOUNT_ID", "2346225")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json",
+                            executor=object(), broker_spec=demo_spec())
+    sent: list[str] = []
+
+    class Recorder:
+        def send(self, text: str):
+            sent.append(text)
+            return True, "ok"
+
+    send_startup_report(service, Recorder(), lambda _line: None)
+    report = sent[0]
+    assert "account id 2346225 (number not resolved)" in report
+    assert "account 0" not in report
+
+
+def test_the_startup_report_names_a_resolved_account_by_its_number(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRROR_EXECUTE", "1")
+    service = MirrorService(SQLiteIntentLedger(tmp_path / "l.sqlite"), token=TOKEN,
+                            heartbeat_path=tmp_path / "hb.json",
+                            executor=object(),
+                            broker_spec=demo_spec(account_number=2346225))
+    sent: list[str] = []
+
+    class Recorder:
+        def send(self, text: str):
+            sent.append(text)
+            return True, "ok"
+
+    send_startup_report(service, Recorder(), lambda _line: None)
+    assert "account 2346225" in sent[0]
