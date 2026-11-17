@@ -24,6 +24,7 @@ no "cancel everything", and no way to reach a live account.
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -55,6 +56,44 @@ _SECRET_RE = re.compile(
     r"(?i)\b(authorization|access_token|refresh_token|password|api[-_]?key)\b"
     r"\s*[:=]\s*\S+"
 )
+
+#: How the broker's edge refuses us when it is throttling or down, as opposed
+#: to answering. These are the responses that mean "nothing was decided": an
+#: HTML page where JSON belongs, or a gateway status code. The same call a
+#: second later usually succeeds, so it is worth repeating - and on 2026-11-17
+#: at 13:11 a single "Access denied" page cost a trade that the bot had already
+#: validated and sized.
+TRANSIENT_MARKERS = (
+    "<!doctype html",
+    "<html",
+    "access denied",
+    "too many requests",
+    "request failed",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "connection reset",
+    "connection aborted",
+    "timed out",
+    "timeout",
+    "429",
+    "502",
+    "503",
+    "504",
+)
+
+#: Attempts for a *read*. Cheap, idempotent, and a stale read is what makes a
+#: signal look untradeable.
+READ_ATTEMPTS = 4
+READ_BACKOFF_S = 0.8
+
+
+def is_transient(exc: BaseException | str) -> bool:
+    """True when the failure is the broker's edge, not the broker's answer."""
+    text = exc if isinstance(exc, str) else f"{type(exc).__name__}: {exc}"
+    lowered = text.lower()
+    return any(marker in lowered for marker in TRANSIENT_MARKERS)
+
 
 
 def _scrub(text: str, *secrets: str | None) -> str:
@@ -171,6 +210,47 @@ class TradeLockerGateway:
 
     def _fail(self, exc: Exception, what: str) -> BrokerError:
         return BrokerError(f"{what} failed: {self._scrub(f'{type(exc).__name__}: {exc}')}")
+
+    def _read(self, call: Callable[[], Any], what: str) -> Any:
+        """Run an idempotent read, repeating it through a throttled edge.
+
+        A read is safe to repeat; the only cost of doing it twice is time. What
+        is not safe is accepting the first failure, because a quote or an
+        equity that could not be read becomes a refused signal - which is
+        indistinguishable, on the dashboard, from a signal that was wrong.
+        """
+        last: Exception | None = None
+        for attempt in range(1, READ_ATTEMPTS + 1):
+            try:
+                return call()
+            except Exception as exc:
+                last = exc
+                if not is_transient(exc) or attempt == READ_ATTEMPTS:
+                    break
+                time.sleep(READ_BACKOFF_S * attempt)
+        assert last is not None
+        raise self._fail(last, what) from last
+
+    def _order_by_strategy(self, strategy_id: str) -> tuple[str, int | None]:
+        """Did anything for this strategy already land at the broker?
+
+        Returns ``(state, order_id)`` where state is one of ``found_order``,
+        ``found_position``, ``absent`` or ``unreadable``. The last two must not
+        be confused: "absent" permits a retry, "unreadable" does not, because
+        sending a second order on the strength of an unreadable feed is how one
+        signal becomes two positions.
+        """
+        try:
+            for order in self.orders(history=True):
+                if order.strategy_id == strategy_id:
+                    return "found_order", int(order.id)
+            for position in self.positions():
+                if position.strategy_id == strategy_id:
+                    return "found_position", None
+        except Exception:
+            return "unreadable", None
+        return "absent", None
+
 
     # -- reads ------------------------------------------------------------
 
@@ -300,10 +380,8 @@ class TradeLockerGateway:
 
     def account_state(self) -> dict:
         """The account's balances, as the broker reports them."""
-        try:
-            return dict(self.client.get_account_state() or {})
-        except Exception as exc:
-            raise self._fail(exc, "reading the account state") from exc
+        return dict(self._read(lambda: self.client.get_account_state() or {},
+                               "reading the account state"))
 
     def equity(self) -> float:
         """The equity used for sizing, from the broker rather than from config.
@@ -321,22 +399,22 @@ class TradeLockerGateway:
 
     def quote(self) -> BrokerQuote:
         spec = self.spec()
-        try:
-            # The two sides are separate requests; read_book re-reads once if
-            # the gap between them produced a crossed book that never existed.
-            bid, ask = read_book(
+        # The two sides are separate requests; read_book re-reads once if the
+        # gap between them produced a crossed book that never existed. Each
+        # side is itself retried through a throttled edge, because a refused
+        # read here becomes a refused signal downstream.
+        bid, ask = self._read(
+            lambda: read_book(
                 lambda: self.client.get_latest_bid_price(spec.instrument_id),
                 lambda: self.client.get_latest_asking_price(spec.instrument_id),
-            )
-        except Exception as exc:
-            raise self._fail(exc, "reading the quote") from exc
+            ),
+            "reading the quote",
+        )
         return BrokerQuote(bid=bid, ask=ask, quoted_at=datetime.now(timezone.utc))
 
     def positions(self) -> list[BrokerPosition]:
-        try:
-            frame = self.client.get_all_positions()
-        except Exception as exc:
-            raise self._fail(exc, "reading positions") from exc
+        frame = self._read(lambda: self.client.get_all_positions(),
+                           "reading positions")
         out: list[BrokerPosition] = []
         rows = _iter_rows(frame)
         if rows is None:
@@ -361,10 +439,8 @@ class TradeLockerGateway:
         return out
 
     def orders(self, *, history: bool = False) -> list[BrokerOrder]:
-        try:
-            frame = self.client.get_all_orders(history=history)
-        except Exception as exc:
-            raise self._fail(exc, "reading orders") from exc
+        frame = self._read(lambda: self.client.get_all_orders(history=history),
+                           "reading orders")
         out: list[BrokerOrder] = []
         rows = _iter_rows(frame)
         if rows is None:
@@ -441,9 +517,47 @@ class TradeLockerGateway:
                 strategy_id=strategy_id,
             )
         except Exception as exc:
-            return OrderAck(accepted=False, order_id=None,
-                            detail=self._scrub(f"{type(exc).__name__}: {exc}"),
-                            request=request)
+            detail = self._scrub(f"{type(exc).__name__}: {exc}")
+            if not is_transient(exc):
+                return OrderAck(accepted=False, order_id=None, detail=detail,
+                                request=request)
+            # The edge refused the *response*. It may or may not have refused
+            # the *order*, so ask before sending again: look for our strategy
+            # id on the broker. Only a definite "nothing there" permits a
+            # second send, because a duplicate is a second position on one
+            # signal, which is worse than a missed one.
+            landed, landed_id = self._order_by_strategy(strategy_id)
+            if landed == "unreadable":
+                return OrderAck(
+                    accepted=False, order_id=None,
+                    detail=(f"{detail}; the broker could not be read afterwards, so "
+                            "the order is not being resent - a duplicate would be a "
+                            "second position on one signal"),
+                    request=request)
+            if landed != "absent":
+                return OrderAck(accepted=True, order_id=landed_id,
+                                detail="accepted (found on the broker after a "
+                                       "refused response)",
+                                request=request)
+            time.sleep(READ_BACKOFF_S * 2)
+            try:
+                order_id = self.client.create_order(
+                    instrument_id=spec.instrument_id,
+                    quantity=qty,
+                    side=side,
+                    type_="market",
+                    validity="IOC",
+                    stop_loss=stop_loss,
+                    stop_loss_type="absolute",
+                    take_profit=take_profit,
+                    take_profit_type="absolute",
+                    strategy_id=strategy_id,
+                )
+            except Exception as second:
+                return OrderAck(accepted=False, order_id=None,
+                                detail=self._scrub(
+                                    f"{type(second).__name__}: {second}"),
+                                request=request)
         if order_id is None:
             return OrderAck(accepted=False, order_id=None,
                             detail="the broker returned no order id", request=request)
