@@ -1029,6 +1029,39 @@ class ExecutionEngine:
                 return order
         return None
 
+    def _observed_close(self, trade: ManagedTrade) -> dict | None:
+        """Read the broker's own record of what closed the position.
+
+        When the position is gone, the history shows the protective order that
+        filled: a stop or a limit carrying the position id and a fill price.
+        The first live trade closed with only "the broker's attached target or
+        stop took it" in the note - the operator could not tell a win from a
+        loss without opening the dashboard.
+
+        This is observation only. Any failure returns ``None`` and the trade
+        still finishes with the generic reason; a close is never held hostage
+        to a read.
+        """
+        if not trade.broker_position_id:
+            return None
+        try:
+            history = self.broker.orders(history=True)
+        except BrokerError as exc:
+            self.log(f"could not read the order history for the close: {exc}")
+            return None
+        candidates = [order for order in history
+                      if order.position_id == trade.broker_position_id
+                      and order.type in ("stop", "limit")
+                      and (order.avg_price or 0) > 0
+                      and (order.filled_qty or 0) > 0]
+        if not candidates:
+            return None
+        epoch = datetime.min.replace(tzinfo=timezone.utc)
+        candidates.sort(key=lambda o: (o.created_at or epoch, o.id))
+        last = candidates[-1]
+        return {"price": float(last.avg_price),
+                "kind": "stop" if last.type == "stop" else "target"}
+
     def _position_for(self, trade_id: str):
         """The broker's position for this trade, or ``POSITIONS_UNREADABLE``.
 
@@ -1266,6 +1299,7 @@ class ExecutionEngine:
             # that closed before any step ran was taken out by the broker's
             # own attached target or stop, not by this manager, and the
             # record must say so rather than implying the ladder completed.
+            close = self._observed_close(trade)
             if trade.legs_done == 0:
                 reason = ("the position closed at the broker before any ladder "
                           "step ran; the broker's attached target or stop took it")
@@ -1274,7 +1308,7 @@ class ExecutionEngine:
                           f"{trade.legs_done} ladder step(s); the remainder was "
                           "taken by the stop or target attached at the broker, "
                           "not by this manager")
-            return self._finish(trade, reason=reason)
+            return self._finish(trade, reason=reason, close=close)
 
         # The broker's quantity is the truth about what has already closed. A
         # close whose confirming read failed leaves the ledger behind, and
@@ -1707,16 +1741,21 @@ class ExecutionEngine:
         return {"stopped": True, "state": STATE_REVIEW, "trade_id": trade.trade_id,
                 "reason": reason}
 
-    def _finish(self, trade: ManagedTrade, *, reason: str) -> dict:
+    def _finish(self, trade: ManagedTrade, *, reason: str,
+                close: dict | None = None) -> dict:
         trade.state = STATE_CLOSED
         trade.management_stopped = True
+        if close:
+            reason = (f"{reason} Close price {close['price']:g} "
+                      f"via the attached {close['kind']}.")
         trade.note = reason
-        self._transition(trade, "close", STATE_CLOSED, reason)
+        self._transition(trade, "close", STATE_CLOSED, reason,
+                         payload={"close": close} if close else None)
         self._save(trade)
         self._notify(trade.trade_id, "closed",
                      f"[CLOSED] {trade.side.upper()} {trade.symbol} is closed: {reason}.")
         return {"closed": True, "state": STATE_CLOSED, "trade_id": trade.trade_id,
-                "reason": reason}
+                "reason": reason, "close": close}
 
     # -- reconciliation ----------------------------------------------------
 

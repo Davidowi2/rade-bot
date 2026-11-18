@@ -1002,6 +1002,75 @@ def test_confirm_fill_twice_records_the_fill_once(tmp_path):
     assert ledger.transitions(trade_id) == transitions_after_first
 
 
+def test_a_broker_close_records_what_took_the_position_out(tmp_path):
+    """A position closed by the broker records the price and the level.
+
+    The first live trade ended with only "the broker's attached target or
+    stop took it" in the note - no price, no reason - and the operator could
+    not tell a win from a loss without opening the dashboard. The order
+    history shows the protective order that filled, so the close transition
+    and the [CLOSED] alert carry it.
+    """
+    broker = FakeBroker()
+    notifier = RecordingNotifier()
+    engine, ledger, _ = engine_for(tmp_path, broker, notifier=notifier)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
+    assert engine.confirm_fill(trade).get("filled") is True
+    position_id = trade.broker_position_id
+
+    # The broker's attached final target fills and takes the position with it.
+    broker.position_book = [p for p in broker.position_book if p.id != position_id]
+    broker.open_book = [o for o in broker.open_book if o.position_id != position_id]
+    broker.order_book.append(BrokerOrder(
+        id=990001, instrument_id=1808, side="sell", qty=0.02,
+        status="Filled", type="limit", filled_qty=0.02,
+        avg_price=3920.0, position_id=position_id))
+
+    outcome = engine.manage_trade(
+        ManagedTrade.from_row(ledger.get_trade(trade_id)))
+
+    assert outcome.get("closed") is True
+    row = ledger.get_trade(trade_id)
+    assert "3920" in row["note"]
+    close_rows = [t for t in ledger.transitions(trade_id) if t["stage"] == "close"]
+    assert close_rows
+    payload = close_rows[-1].get("payload") or {}
+    assert payload["close"]["price"] == pytest.approx(3920.0)
+    assert payload["close"]["kind"] == "target"
+    assert any("3920" in message for message in notifier.sent)
+
+
+def test_a_close_whose_history_cannot_be_read_still_closes(tmp_path):
+    """An unreadable order history must not hold the close hostage.
+
+    Reading the close price is observation. If the broker refuses the history
+    read, the trade still finishes, with the generic reason it always had.
+    """
+    broker = FakeBroker()
+    broker.fail_orders = True
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
+    engine.confirm_fill(trade)
+    position_id = trade.broker_position_id
+    broker.position_book = [p for p in broker.position_book if p.id != position_id]
+
+    outcome = engine.manage_trade(
+        ManagedTrade.from_row(ledger.get_trade(trade_id)))
+
+    assert outcome.get("closed") is True
+    row = ledger.get_trade(trade_id)
+    assert "attached target or stop took it" in row["note"]
+    close_rows = [t for t in ledger.transitions(trade_id) if t["stage"] == "close"]
+    assert close_rows
+    assert "close" not in (close_rows[-1].get("payload") or {})
+
+
 def test_the_deployed_configuration_copies_the_channels_own_call(tmp_path):
     """The numbers actually deployed must admit the channel's real stop width.
 

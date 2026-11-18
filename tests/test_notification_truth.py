@@ -27,6 +27,7 @@ def result(status: str = "paper_intent", reason: str = "validated; simulation on
 
 def test_a_process_with_no_executor_says_it_is_paper():
     text = build_notification(result(), execution=None)
+    assert text.startswith("[PAPER INTENT]")
     assert "paper mode" in text
     assert "no broker order was sent" in text
 
@@ -35,6 +36,10 @@ def test_a_placed_order_says_it_was_placed():
     text = build_notification(result(), execution={
         "executed": True, "trade_id": "abc123", "order_id": 98765,
     })
+    # The header describes what happened, not the pipeline's disposition.
+    # The first live trade was announced as "[PAPER INTENT]" while its body
+    # said an order was placed - the one word the operator reads first lied.
+    assert text.startswith("[ORDER PLACED]")
     assert "ORDER PLACED" in text
     assert "abc123" in text
     assert "98765" in text
@@ -47,6 +52,7 @@ def test_a_refused_order_says_why():
         "executed": False,
         "reason": "1 positions are already open and the limit is 1",
     })
+    assert text.startswith("[PAPER INTENT]")
     assert "no broker order was sent" in text
     assert "limit is 1" in text
 

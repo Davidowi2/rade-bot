@@ -149,8 +149,14 @@ def build_notification(result: PipelineResult,
 
     signal = result.signal or {}
     intent = result.order_intent or {}
+    # The header must agree with the execution lines below it. The first live
+    # trade was announced as "[PAPER INTENT]" while its body said "ORDER
+    # PLACED on the destination account" - the header described the pipeline's
+    # disposition, not what actually happened, and on a live account the
+    # header is the one word the operator reads first.
+    executed = bool(execution and execution.get("executed"))
     header = {
-        "accepted": "PAPER INTENT",
+        "accepted": "ORDER PLACED" if executed else "PAPER INTENT",
         "review": "MANUAL REVIEW",
         "blocked": "BLOCKED",
         "stale": "STALE",
