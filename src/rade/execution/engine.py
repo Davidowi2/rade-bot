@@ -1054,6 +1054,12 @@ class ExecutionEngine:
         The position, not the order, is the proof: an accepted order that
         never filled is not a trade.
         """
+        if trade.state == STATE_OPEN and trade.broker_position_id:
+            # Already confirmed on an earlier pass. Re-running would write a
+            # duplicate fill transition and resend the [FILLED] notification
+            # every management cycle; the first confirmation is the record.
+            return {"filled": True, "trade_id": trade.trade_id,
+                    "position_id": trade.broker_position_id}
         position = self._position_for(trade.trade_id)
         if position is POSITIONS_UNREADABLE or position is None:
             # An unreadable position list still leaves the order feed as
@@ -1157,13 +1163,22 @@ class ExecutionEngine:
                     # process has not confirmed.
                     outcome = self.reconcile_trade(trade)
                 else:
-                    outcome = self._confirm_or_wait(trade)
-                    if outcome is None:
-                        trade = ManagedTrade.from_row(
-                            self.ledger.get_trade(trade.trade_id)) or trade
+                    if trade.state in (STATE_OPEN, STATE_PARTIAL):
+                        # The fill is already confirmed. Routing an open trade
+                        # through _confirm_or_wait re-recorded the fill and
+                        # re-sent the [FILLED] notification on every pass -
+                        # forty-odd duplicate alerts on the first live trade -
+                        # because confirm_fill had no memory of having run.
+                        # An open trade goes straight to management.
                         outcome = self.manage_trade(trade)
-                    elif outcome.get("waiting"):
-                        summary["pending_fill"] += 1
+                    else:
+                        outcome = self._confirm_or_wait(trade)
+                        if outcome is None:
+                            trade = ManagedTrade.from_row(
+                                self.ledger.get_trade(trade.trade_id)) or trade
+                            outcome = self.manage_trade(trade)
+                        elif outcome.get("waiting"):
+                            summary["pending_fill"] += 1
             except Exception as exc:
                 summary["errors"] += 1
                 self.log(f"management error for {trade.trade_id}: "

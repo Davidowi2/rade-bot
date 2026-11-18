@@ -952,6 +952,56 @@ def test_a_submitted_trade_is_reconciled_rather_than_ignored(tmp_path):
     assert ManagedTrade.from_row(ledger.get_trade(trade_id)).state == STATE_OPEN
 
 
+def test_an_open_trade_is_not_re_confirmed_by_the_management_pass(tmp_path):
+    """An open trade goes straight to management, not through fill confirmation.
+
+    The first live trade produced ~44 duplicate 'fill' transitions and ~44
+    duplicate [FILLED] alerts in 7 minutes, because the management pass routed
+    already-open trades through confirm_fill, which had no memory of having
+    run. Confirming a fill is a once-per-trade event.
+    """
+    broker = FakeBroker()
+    notifier = RecordingNotifier()
+    engine, ledger, _ = engine_for(tmp_path, broker, notifier=notifier)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    trade = ManagedTrade.from_row(ledger.get_trade(trade_id))
+    assert engine.confirm_fill(trade).get("filled") is True
+    assert len([t for t in ledger.transitions(trade_id) if t["stage"] == "fill"]) == 1
+
+    for _ in range(3):
+        engine.manage()
+
+    fills = [t for t in ledger.transitions(trade_id) if t["stage"] == "fill"]
+    assert len(fills) == 1, "the fill was recorded exactly once"
+    assert len([m for m in notifier.sent if "[FILLED]" in m]) == 1
+
+
+def test_confirm_fill_twice_records_the_fill_once(tmp_path):
+    """A second confirm_fill on an already-open trade changes nothing.
+
+    Whatever path calls it - the management pass, a reconcile, a restart -
+    the first confirmation is the record. A repeat returns the same fill
+    without writing another transition or touching the broker again.
+    """
+    broker = FakeBroker()
+    engine, ledger, _ = engine_for(tmp_path, broker)
+    result = evaluated()
+    engine.execute(result, envelope())
+    trade_id = trade_id_for(result.event_key)
+    first = engine.confirm_fill(ManagedTrade.from_row(ledger.get_trade(trade_id)))
+    assert first.get("filled") is True
+    transitions_after_first = ledger.transitions(trade_id)
+
+    second = engine.confirm_fill(
+        ManagedTrade.from_row(ledger.get_trade(trade_id)))
+
+    assert second.get("filled") is True
+    assert second["position_id"] == first["position_id"]
+    assert ledger.transitions(trade_id) == transitions_after_first
+
+
 def test_the_deployed_configuration_copies_the_channels_own_call(tmp_path):
     """The numbers actually deployed must admit the channel's real stop width.
 
